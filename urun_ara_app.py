@@ -23,6 +23,29 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# PWA Meta Tag'leri ve Service Worker
+st.markdown("""
+<link rel="manifest" href="/app/static/manifest.json">
+<meta name="theme-color" content="#1e3a5f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Urun Ara">
+<link rel="apple-touch-icon" href="/app/static/icon-192.png">
+<script>
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/app/static/sw.js')
+            .then(function(registration) {
+                console.log('SW registered: ', registration);
+            })
+            .catch(function(error) {
+                console.log('SW registration failed: ', error);
+            });
+    });
+}
+</script>
+""", unsafe_allow_html=True)
+
 # CSS - Stok seviyeleri icin renkler
 st.markdown("""
 <style>
