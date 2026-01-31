@@ -164,20 +164,37 @@ def get_cache_date() -> str:
 def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
     """
     Tum stok verisini yukle ve cache'le.
-    cache_key her gun saat 12'de degisir, boylece veri yenilenir.
+    cache_key her gun saat 11'de degisir, boylece veri yenilenir.
+    Pagination ile tum veriyi ceker.
     """
     client = get_supabase_client()
     if not client:
         return None
 
     try:
-        # Tum veriyi cek (sadece gerekli sutunlar)
-        result = client.table('stok_gunluk')\
-            .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-            .execute()
+        all_data = []
+        batch_size = 10000  # Her seferde 10K kayit
+        offset = 0
 
-        if result.data:
-            df = pd.DataFrame(result.data)
+        while True:
+            result = client.table('stok_gunluk')\
+                .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
+                .range(offset, offset + batch_size - 1)\
+                .execute()
+
+            if not result.data:
+                break
+
+            all_data.extend(result.data)
+
+            # Eger gelen veri batch_size'dan azsa, son sayfa demektir
+            if len(result.data) < batch_size:
+                break
+
+            offset += batch_size
+
+        if all_data:
+            df = pd.DataFrame(all_data)
             # Arama icin normalize edilmis sutunlar ekle
             df['urun_kod_upper'] = df['urun_kod'].fillna('').str.upper()
             df['urun_ad_upper'] = df['urun_ad'].fillna('').apply(turkce_upper)
