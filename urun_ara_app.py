@@ -308,76 +308,80 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
     st.success(f"**{len(urunler)}** urun bulundu")
 
+    # Durum renkleri
+    durum_renk = {
+        'Kritik': ('#ff4444', '#fff'),
+        'Dusuk': ('#ff9800', '#fff'),
+        'Normal': ('#4caf50', '#fff'),
+        'Yuksek': ('#2196f3', '#fff')
+    }
+
     # Her urun icin kompakt liste
     for _, urun in urunler.iterrows():
         urun_kod = urun['urun_kod']
         urun_ad = urun['urun_ad'] or urun_kod
         nitelik = urun['nitelik'] or ''
-        stoklu_magaza = urun['stoklu_magaza']
+        stoklu_magaza = int(urun['stoklu_magaza'])
 
         # Bu urune ait magazalar
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].copy()
 
-        # Expander basligi: Urun kodu + magaza sayisi
+        # Expander basligi: Urun kodu | Urun adi | Magaza sayisi
         if stoklu_magaza > 0:
-            baslik = f"🔹 **{urun_kod}** — {stoklu_magaza} magaza"
+            baslik = f"📦 {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} magaza"
         else:
-            baslik = f"❌ **{urun_kod}** — Stok yok"
+            baslik = f"❌ {urun_kod}  •  {urun_ad[:40]}  •  Stok yok"
 
         with st.expander(baslik, expanded=False):
-            # Urun bilgisi
-            st.caption(f"📦 {urun_ad[:60]}")
-            if nitelik:
-                st.caption(f"📏 {nitelik}")
-
             if urun_df_stoklu.empty:
                 st.error("Bu urun hicbir magazada stokta yok!")
             else:
                 # Stok seviyesine gore sirala
                 urun_df_stoklu = urun_df_stoklu.sort_values('stok_adet', ascending=False)
 
-                # Tablo olustur
-                tablo_data = []
+                # Kart seklinde goster
                 for _, row in urun_df_stoklu.iterrows():
                     seviye, _ = get_stok_seviye(row['stok_adet'])
                     adet = int(row['stok_adet'])
-                    tablo_data.append({
-                        'Magaza': row.get('magaza_ad', row['magaza_kod']) or row['magaza_kod'],
-                        'Kod': row['magaza_kod'],
-                        'SM': row.get('sm_kod', '-') or '-',
-                        'BS': row.get('bs_kod', '-') or '-',
-                        'Adet': adet,
-                        'Durum': seviye
-                    })
+                    magaza_ad = row.get('magaza_ad', row['magaza_kod']) or row['magaza_kod']
+                    sm = row.get('sm_kod', '-') or '-'
+                    bs = row.get('bs_kod', '-') or '-'
+                    bg_renk, text_renk = durum_renk.get(seviye, ('#9e9e9e', '#fff'))
 
-                tablo_df = pd.DataFrame(tablo_data)
-
-                # Renklendirme
-                def renklendir(row):
-                    durum = row['Durum']
-                    renk_map = {
-                        'Kritik': '#ffcdd2',
-                        'Dusuk': '#ffe0b2',
-                        'Normal': '#c8e6c9',
-                        'Yuksek': '#bbdefb'
-                    }
-                    renk = renk_map.get(durum, '')
-                    return [f'background-color: {renk}' if renk else ''] * len(row)
-
-                st.dataframe(
-                    tablo_df.style.apply(renklendir, axis=1),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        'Magaza': st.column_config.TextColumn('Magaza', width='medium'),
-                        'Kod': st.column_config.TextColumn('Kod', width='small'),
-                        'SM': st.column_config.TextColumn('SM', width='small'),
-                        'BS': st.column_config.TextColumn('BS', width='small'),
-                        'Adet': st.column_config.NumberColumn('Adet', width='small'),
-                        'Durum': st.column_config.TextColumn('Durum', width='small')
-                    }
-                )
+                    # Kart HTML
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, {bg_renk}22 0%, {bg_renk}11 100%);
+                        border-left: 4px solid {bg_renk};
+                        border-radius: 8px;
+                        padding: 12px 16px;
+                        margin-bottom: 8px;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        flex-wrap: wrap;
+                        gap: 8px;
+                    ">
+                        <div style="flex: 1; min-width: 200px;">
+                            <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f;">{magaza_ad}</div>
+                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
+                                SM: {sm}  •  BS: {bs}
+                            </div>
+                        </div>
+                        <div style="
+                            background: {bg_renk};
+                            color: {text_renk};
+                            padding: 6px 14px;
+                            border-radius: 20px;
+                            font-weight: 600;
+                            font-size: 0.9rem;
+                            white-space: nowrap;
+                        ">
+                            {seviye} ({adet})
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
 
 # ============================================================================
