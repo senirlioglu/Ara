@@ -14,7 +14,17 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime, time
-from typing import Optional
+from typing import Optional, List
+from io import BytesIO
+
+# Goruntu tanima icin (opsiyonel - yuklenmezse devre disi)
+try:
+    import easyocr
+    from PIL import Image
+    from rapidfuzz import fuzz, process
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 
 # Sayfa ayarlari
 st.set_page_config(
@@ -295,6 +305,88 @@ def format_stok_badge(adet: int) -> str:
 
 
 # ============================================================================
+# GORUNTU TANIMA (OCR)
+# ============================================================================
+
+@st.cache_resource
+def get_ocr_reader():
+    """EasyOCR reader olustur (bir kez yukle)"""
+    if not OCR_AVAILABLE:
+        return None
+    try:
+        return easyocr.Reader(['tr', 'en'], gpu=False)
+    except Exception as e:
+        st.error(f"OCR yuklenemedi: {e}")
+        return None
+
+
+def extract_text_from_image(image_bytes: bytes) -> List[str]:
+    """Goruntuden metin cikar"""
+    if not OCR_AVAILABLE:
+        return []
+
+    reader = get_ocr_reader()
+    if not reader:
+        return []
+
+    try:
+        # Goruntuyu oku
+        image = Image.open(BytesIO(image_bytes))
+
+        # OCR uygula
+        results = reader.readtext(image, detail=0)
+
+        # Sonuclari temizle
+        texts = []
+        for text in results:
+            cleaned = text.strip()
+            # Cok kisa veya sadece rakam olanlari atla
+            if len(cleaned) >= 3 and not cleaned.replace('.', '').replace(',', '').isdigit():
+                texts.append(cleaned)
+
+        return texts
+    except Exception as e:
+        st.error(f"OCR hatasi: {e}")
+        return []
+
+
+def fuzzy_search_products(ocr_texts: List[str], df_all: pd.DataFrame, threshold: int = 60) -> List[dict]:
+    """OCR metinleriyle urun eslesir (fuzzy matching)"""
+    if not OCR_AVAILABLE or df_all is None or df_all.empty:
+        return []
+
+    # Benzersiz urun adlarini al
+    unique_products = df_all[['urun_kod', 'urun_ad']].drop_duplicates()
+    product_names = unique_products['urun_ad'].fillna('').tolist()
+    product_codes = unique_products['urun_kod'].fillna('').tolist()
+
+    matched_products = []
+    seen_codes = set()
+
+    for ocr_text in ocr_texts:
+        ocr_upper = turkce_upper(ocr_text)
+
+        # Urun adinda ara
+        matches = process.extract(ocr_upper, product_names, scorer=fuzz.partial_ratio, limit=3)
+
+        for match_text, score, idx in matches:
+            if score >= threshold:
+                urun_kod = product_codes[idx]
+                if urun_kod not in seen_codes:
+                    seen_codes.add(urun_kod)
+                    matched_products.append({
+                        'ocr_text': ocr_text,
+                        'urun_kod': urun_kod,
+                        'urun_ad': match_text,
+                        'score': score
+                    })
+
+    # Skora gore sirala
+    matched_products.sort(key=lambda x: x['score'], reverse=True)
+    return matched_products
+
+
+# ============================================================================
 # URUN ARAMA
 # ============================================================================
 
@@ -466,28 +558,113 @@ def main():
     # Veri bilgisi
     st.caption(f"📊 {len(df_all):,} kayit | Son guncelleme: {cache_key}")
 
-    # Arama kutusu
-    st.markdown("### Urun Kodu veya Adi")
+    # Arama yontemi secimi
+    tab_text, tab_photo = st.tabs(["✏️ Metin Ara", "📸 Fotoğraftan Ara"])
 
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        arama_text = st.text_input(
-            "Arama",
-            placeholder="Ornek: 123456 veya KOLTUK",
-            label_visibility="collapsed",
-            key="arama_input"
-        )
-    with col2:
-        ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
+    with tab_text:
+        # Metin arama
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            arama_text = st.text_input(
+                "Arama",
+                placeholder="Ornek: 123456 veya KOLTUK",
+                label_visibility="collapsed",
+                key="arama_input"
+            )
+        with col2:
+            ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
+        # Metin arama yap
+        if arama_text and len(arama_text) >= 2:
+            with st.spinner("Araniyor..."):
+                df = ara_urun(arama_text)
+                goster_sonuclar(df, arama_text)
+        elif arama_text and len(arama_text) < 2:
+            st.info("En az 2 karakter girin.")
 
-    # Arama yap
-    if arama_text and len(arama_text) >= 2:
-        with st.spinner("Araniyor..."):
-            df = ara_urun(arama_text)
-            goster_sonuclar(df, arama_text)
-    elif arama_text and len(arama_text) < 2:
-        st.info("En az 2 karakter girin.")
+    with tab_photo:
+        if not OCR_AVAILABLE:
+            st.warning("📷 Fotoğraf tanıma özelliği için gerekli paketler yüklü değil.")
+            st.code("pip install easyocr Pillow rapidfuzz")
+        else:
+            st.info("📸 Afişten veya etiketten fotoğraf çekin, ürünleri otomatik bulalım!")
+
+            # Kamera veya dosya yukleme
+            photo_source = st.radio(
+                "Kaynak",
+                ["📷 Kamera", "📁 Dosya Yükle"],
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+
+            image_data = None
+
+            if photo_source == "📷 Kamera":
+                camera_image = st.camera_input("Fotoğraf çek", label_visibility="collapsed")
+                if camera_image:
+                    image_data = camera_image.getvalue()
+            else:
+                uploaded_file = st.file_uploader(
+                    "Görsel yükle",
+                    type=['png', 'jpg', 'jpeg'],
+                    label_visibility="collapsed"
+                )
+                if uploaded_file:
+                    image_data = uploaded_file.getvalue()
+
+            # Goruntu isleme
+            if image_data:
+                # Gorseli goster
+                st.image(image_data, caption="Yüklenen görsel", use_container_width=True)
+
+                if st.button("🔍 Ürünleri Bul", type="primary", use_container_width=True):
+                    with st.spinner("Görüntü analiz ediliyor..."):
+                        # OCR ile metin cikar
+                        ocr_texts = extract_text_from_image(image_data)
+
+                        if not ocr_texts:
+                            st.warning("Görselde okunabilir metin bulunamadı.")
+                        else:
+                            st.success(f"**{len(ocr_texts)}** metin bulundu")
+
+                            # Bulunan metinleri goster
+                            with st.expander("📝 Okunan metinler", expanded=False):
+                                for txt in ocr_texts:
+                                    st.write(f"• {txt}")
+
+                            # Fuzzy matching ile urun ara
+                            with st.spinner("Ürünler eşleştiriliyor..."):
+                                matches = fuzzy_search_products(ocr_texts, df_all, threshold=65)
+
+                            if not matches:
+                                st.warning("Eşleşen ürün bulunamadı.")
+                            else:
+                                st.success(f"**{len(matches)}** ürün eşleşti!")
+
+                                # Her eslesen urun icin
+                                for match in matches[:10]:  # Max 10 urun goster
+                                    score_color = "#4caf50" if match['score'] >= 80 else "#ff9800"
+                                    st.markdown(f"""
+                                    <div style="
+                                        background: #f5f5f5;
+                                        border-left: 4px solid {score_color};
+                                        padding: 10px 15px;
+                                        margin: 5px 0;
+                                        border-radius: 5px;
+                                    ">
+                                        <div style="font-weight: 600;">{match['urun_kod']}</div>
+                                        <div style="font-size: 0.9rem; color: #666;">{match['urun_ad'][:50]}</div>
+                                        <div style="font-size: 0.8rem; color: #999;">
+                                            Eşleşme: %{match['score']} | Kaynak: "{match['ocr_text'][:30]}"
+                                        </div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                                    # Urun detayini goster
+                                    with st.expander(f"🏪 Mağaza detayları - {match['urun_kod']}", expanded=False):
+                                        df_match = ara_urun(match['urun_kod'])
+                                        if df_match is not None and not df_match.empty:
+                                            goster_sonuclar(df_match, match['urun_kod'])
 
 
 if __name__ == "__main__":

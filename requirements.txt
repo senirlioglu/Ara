@@ -12,3 +12,10 @@ pandas>=2.0.0
 
 # HTTP istekleri (supabase icin gerekli)
 httpx>=0.25.0
+
+# Goruntu tanima (OCR)
+easyocr>=1.7.0
+Pillow>=10.0.0
+
+# Fuzzy matching (benzer urun eslestirme)
+rapidfuzz>=3.0.0
