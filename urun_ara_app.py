@@ -271,21 +271,14 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             if result3.data:
                 all_results.extend(result3.data)
 
-        # Sonuclari birlestir
-        df_kod = pd.DataFrame()
-        df_ad = pd.DataFrame(all_results) if all_results else pd.DataFrame()
-
-        # Birles ve tekrarlari kaldir
-        if not df_kod.empty and not df_ad.empty:
-            df = pd.concat([df_kod, df_ad]).drop_duplicates(subset=['magaza_kod', 'urun_kod'])
-        elif not df_kod.empty:
-            df = df_kod
-        elif not df_ad.empty:
-            df = df_ad
+        # Sonuclari birlestir ve tekrarlari kaldir
+        if all_results:
+            df = pd.DataFrame(all_results)
+            # magaza_kod ve urun_kod kombinasyonuna gore tekrarlari kaldir
+            df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
+            return df
         else:
             return pd.DataFrame()
-
-        return df
 
     except Exception as e:
         st.error(f"Arama hatasi: {e}")
