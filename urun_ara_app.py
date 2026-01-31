@@ -510,17 +510,9 @@ def main():
     # Bilgi kartı
     st.markdown(f"""
     <div class="info-card">
-        📊 <strong>{len(df_all):,}</strong> kayıt yüklendi &nbsp;|&nbsp; 🕐 {cache_key}
-        &nbsp;&nbsp;
+        📊 <strong>{len(df_all):,}</strong> kayıt &nbsp;|&nbsp; 🕐 Güncelleme: {cache_key} 11:00
     </div>
     """, unsafe_allow_html=True)
-
-    # Yenile butonu (sağ üst)
-    col_space, col_refresh = st.columns([8, 1])
-    with col_refresh:
-        if st.button("🔄", help="Veriyi yenile", use_container_width=True):
-            load_all_stok.clear()
-            st.rerun()
 
     # Arama kutusu
     col1, col2 = st.columns([5, 1])
