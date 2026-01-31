@@ -298,79 +298,86 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         st.warning(f"'{arama_text}' icin sonuc bulunamadi.")
         return
 
-    # Benzersiz urunleri bul
+    # Benzersiz urunleri bul ve stok bilgilerini hesapla
     urunler = df.groupby('urun_kod').agg({
         'urun_ad': 'first',
-        'nitelik': 'first'
+        'nitelik': 'first',
+        'stok_adet': lambda x: (x > 0).sum()  # Stoklu magaza sayisi
     }).reset_index()
+    urunler.columns = ['urun_kod', 'urun_ad', 'nitelik', 'stoklu_magaza']
 
     st.success(f"**{len(urunler)}** urun bulundu")
 
-    # Her urun icin
+    # Her urun icin kompakt liste
     for _, urun in urunler.iterrows():
         urun_kod = urun['urun_kod']
         urun_ad = urun['urun_ad'] or urun_kod
         nitelik = urun['nitelik'] or ''
+        stoklu_magaza = urun['stoklu_magaza']
 
         # Bu urune ait magazalar
         urun_df = df[df['urun_kod'] == urun_kod].copy()
-
-        # Stok > 0 olanlari filtrele
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].copy()
 
-        with st.expander(f"📦 **{urun_kod}** - {urun_ad[:50]} ({nitelik})", expanded=True):
+        # Expander basligi: Urun kodu + magaza sayisi
+        if stoklu_magaza > 0:
+            baslik = f"🔹 **{urun_kod}** — {stoklu_magaza} magaza"
+        else:
+            baslik = f"❌ **{urun_kod}** — Stok yok"
+
+        with st.expander(baslik, expanded=False):
+            # Urun bilgisi
+            st.caption(f"📦 {urun_ad[:60]}")
+            if nitelik:
+                st.caption(f"📏 {nitelik}")
 
             if urun_df_stoklu.empty:
-                st.error("❌ Bu urun hicbir magazada stokta yok!")
+                st.error("Bu urun hicbir magazada stokta yok!")
             else:
-                # Stok seviyesine gore sirala (yuksekten dusuge)
+                # Stok seviyesine gore sirala
                 urun_df_stoklu = urun_df_stoklu.sort_values('stok_adet', ascending=False)
 
                 # Tablo olustur
                 tablo_data = []
                 for _, row in urun_df_stoklu.iterrows():
                     seviye, _ = get_stok_seviye(row['stok_adet'])
+                    adet = int(row['stok_adet'])
                     tablo_data.append({
-                        'SM': row.get('sm_kod', '-') or '-',
-                        'BS': row.get('bs_kod', '-') or '-',
                         'Magaza': row.get('magaza_ad', row['magaza_kod']) or row['magaza_kod'],
                         'Kod': row['magaza_kod'],
-                        'Seviye': seviye
+                        'SM': row.get('sm_kod', '-') or '-',
+                        'BS': row.get('bs_kod', '-') or '-',
+                        'Adet': adet,
+                        'Durum': seviye
                     })
 
                 tablo_df = pd.DataFrame(tablo_data)
 
-                # Renklendirme fonksiyonu
+                # Renklendirme
                 def renklendir(row):
-                    seviye = row['Seviye']
-                    if seviye == 'Kritik':
-                        return ['background-color: #ffcdd2'] * len(row)
-                    elif seviye == 'Dusuk':
-                        return ['background-color: #ffe0b2'] * len(row)
-                    elif seviye == 'Normal':
-                        return ['background-color: #c8e6c9'] * len(row)
-                    elif seviye == 'Yuksek':
-                        return ['background-color: #bbdefb'] * len(row)
-                    else:
-                        return [''] * len(row)
+                    durum = row['Durum']
+                    renk_map = {
+                        'Kritik': '#ffcdd2',
+                        'Dusuk': '#ffe0b2',
+                        'Normal': '#c8e6c9',
+                        'Yuksek': '#bbdefb'
+                    }
+                    renk = renk_map.get(durum, '')
+                    return [f'background-color: {renk}' if renk else ''] * len(row)
 
-                # Tabloyu goster
                 st.dataframe(
                     tablo_df.style.apply(renklendir, axis=1),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        'SM': st.column_config.TextColumn('SM', width='small'),
-                        'BS': st.column_config.TextColumn('BS', width='small'),
                         'Magaza': st.column_config.TextColumn('Magaza', width='medium'),
                         'Kod': st.column_config.TextColumn('Kod', width='small'),
-                        'Seviye': st.column_config.TextColumn('Seviye', width='small')
+                        'SM': st.column_config.TextColumn('SM', width='small'),
+                        'BS': st.column_config.TextColumn('BS', width='small'),
+                        'Adet': st.column_config.NumberColumn('Adet', width='small'),
+                        'Durum': st.column_config.TextColumn('Durum', width='small')
                     }
                 )
-
-                # Ozet
-                magaza_sayisi = len(urun_df_stoklu)
-                st.caption(f"📊 {magaza_sayisi} magazada mevcut")
 
 
 # ============================================================================
