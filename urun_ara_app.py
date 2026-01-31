@@ -173,8 +173,11 @@ def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
 
     try:
         all_data = []
-        batch_size = 10000  # Her seferde 10K kayit
+        batch_size = 50000  # Her seferde 50K kayit (daha hizli)
         offset = 0
+        expected_total = 650000  # Tahmini toplam kayit
+
+        progress_bar = st.progress(0, text="Stok verisi yukleniyor...")
 
         while True:
             result = client.table('stok_gunluk')\
@@ -187,11 +190,18 @@ def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
 
             all_data.extend(result.data)
 
+            # Progress guncelle
+            progress = min(len(all_data) / expected_total, 0.99)
+            progress_bar.progress(progress, text=f"Yukleniyor... {len(all_data):,} kayit")
+
             # Eger gelen veri batch_size'dan azsa, son sayfa demektir
             if len(result.data) < batch_size:
                 break
 
             offset += batch_size
+
+        progress_bar.progress(1.0, text="Tamamlandi!")
+        progress_bar.empty()
 
         if all_data:
             df = pd.DataFrame(all_data)
