@@ -18,16 +18,15 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# PWA Meta Tag'leri - Ana ekran ikonu icin base64 encoded
-ICON_BASE64 = "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"
-
-st.markdown(f"""
+# PWA Meta Tag'leri
+st.markdown("""
 <meta name="theme-color" content="#667eea">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ürün Ara">
-<link rel="apple-touch-icon" href="data:image/png;base64,{ICON_BASE64}">
-<link rel="icon" type="image/png" href="data:image/png;base64,{ICON_BASE64}">
+<link rel="manifest" href="app/static/manifest.json">
+<link rel="apple-touch-icon" href="app/static/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="app/static/icon-192.png">
 """, unsafe_allow_html=True)
 
 # Modern CSS Tasarımı
