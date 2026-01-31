@@ -7,6 +7,7 @@ Müşteriye hangi mağazada ürün olduğunu göstermek için arama uygulaması.
 import streamlit as st
 import pandas as pd
 import os
+import base64
 from datetime import datetime, time
 from typing import Optional
 
@@ -18,15 +19,27 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Ikonlari yukle
+def get_img_as_base64(file_path):
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except:
+        return None
+
+apple_icon_base64 = get_img_as_base64("static/apple-touch-icon.png")
+apple_icon_link = f'<link rel="apple-touch-icon" href="data:image/png;base64,{apple_icon_base64}">' if apple_icon_base64 else '<link rel="apple-touch-icon" href="app/static/apple-touch-icon.png?v=2">'
+
 # PWA Meta Tag'leri
-st.markdown("""
+st.markdown(f"""
 <meta name="theme-color" content="#667eea">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ürün Ara">
-<link rel="manifest" href="app/static/manifest.json">
-<link rel="apple-touch-icon" href="app/static/apple-touch-icon.png">
-<link rel="icon" type="image/png" href="app/static/icon-192.png">
+<link rel="manifest" href="app/static/manifest.json?v=2">
+{apple_icon_link}
+<link rel="icon" type="image/png" href="app/static/icon-192.png?v=2">
 """, unsafe_allow_html=True)
 
 # Modern CSS Tasarımı
