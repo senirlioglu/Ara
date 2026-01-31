@@ -160,6 +160,44 @@ def normalize_turkish(text: str) -> str:
     return text
 
 
+def turkce_upper(text: str) -> str:
+    """Turkce karakterleri dogru sekilde buyuk harfe cevir"""
+    if not text:
+        return ""
+    text = str(text)
+    # Turkce ozel buyuk harf donusumu
+    tr_upper_map = {
+        'ı': 'I', 'i': 'İ',
+        'ğ': 'Ğ', 'ü': 'Ü', 'ş': 'Ş', 'ö': 'Ö', 'ç': 'Ç'
+    }
+    result = ""
+    for char in text:
+        if char in tr_upper_map:
+            result += tr_upper_map[char]
+        else:
+            result += char.upper()
+    return result
+
+
+def turkce_lower(text: str) -> str:
+    """Turkce karakterleri dogru sekilde kucuk harfe cevir"""
+    if not text:
+        return ""
+    text = str(text)
+    # Turkce ozel kucuk harf donusumu
+    tr_lower_map = {
+        'I': 'ı', 'İ': 'i',
+        'Ğ': 'ğ', 'Ü': 'ü', 'Ş': 'ş', 'Ö': 'ö', 'Ç': 'ç'
+    }
+    result = ""
+    for char in text:
+        if char in tr_lower_map:
+            result += tr_lower_map[char]
+        else:
+            result += char.lower()
+    return result
+
+
 def get_stok_seviye(adet: int) -> tuple:
     """Stok seviyesi ve renk sinifi dondur"""
     if adet is None or adet <= 0:
@@ -200,26 +238,42 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         return None
 
     try:
-        # Normalize arama metni
-        arama_normalized = normalize_turkish(arama_text.strip())
-        arama_upper = arama_text.strip().upper()
+        # Turkce buyuk/kucuk harf varyasyonlari olustur
+        arama_original = arama_text.strip()
+        arama_upper = turkce_upper(arama_original)
+        arama_lower = turkce_lower(arama_original)
+
+        all_results = []
 
         # Supabase'den son yuklemedeki verileri cek
-        # Oncelikle urun_kod ile tam eslesme dene
+        # Urun kodu ile ara (genellikle buyuk harf)
         result = client.table('stok_gunluk')\
             .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
             .ilike('urun_kod', f'%{arama_upper}%')\
             .execute()
+        if result.data:
+            all_results.extend(result.data)
 
-        df_kod = pd.DataFrame(result.data) if result.data else pd.DataFrame()
-
-        # Urun adi ile de ara
+        # Urun adi ile ara - BUYUK HARF
         result2 = client.table('stok_gunluk')\
             .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-            .ilike('urun_ad', f'%{arama_text}%')\
+            .ilike('urun_ad', f'%{arama_upper}%')\
             .execute()
+        if result2.data:
+            all_results.extend(result2.data)
 
-        df_ad = pd.DataFrame(result2.data) if result2.data else pd.DataFrame()
+        # Urun adi ile ara - kucuk harf (farkli sonuc varsa)
+        if arama_lower != arama_upper:
+            result3 = client.table('stok_gunluk')\
+                .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
+                .ilike('urun_ad', f'%{arama_lower}%')\
+                .execute()
+            if result3.data:
+                all_results.extend(result3.data)
+
+        # Sonuclari birlestir
+        df_kod = pd.DataFrame()
+        df_ad = pd.DataFrame(all_results) if all_results else pd.DataFrame()
 
         # Birles ve tekrarlari kaldir
         if not df_kod.empty and not df_ad.empty:
