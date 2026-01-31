@@ -10,11 +10,18 @@ import os
 import base64
 from datetime import datetime, time
 from typing import Optional
+from PIL import Image
+
+# Ikonu yukle (Favicon icin)
+try:
+    img_icon = Image.open("static/icon-192.png")
+except:
+    img_icon = "🔍"
 
 # Sayfa ayarları
 st.set_page_config(
     page_title="Ürün Ara",
-    page_icon="🔍",
+    page_icon=img_icon,
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -29,17 +36,58 @@ def get_img_as_base64(file_path):
         return None
 
 apple_icon_base64 = get_img_as_base64("static/apple-touch-icon.png")
-apple_icon_link = f'<link rel="apple-touch-icon" href="data:image/png;base64,{apple_icon_base64}">' if apple_icon_base64 else '<link rel="apple-touch-icon" href="app/static/apple-touch-icon.png?v=2">'
+icon_192_base64 = get_img_as_base64("static/icon-192.png")
 
-# PWA Meta Tag'leri
+# Base64 stringler (JavaScript icin)
+apple_href = f"data:image/png;base64,{apple_icon_base64}" if apple_icon_base64 else "app/static/apple-touch-icon.png?v=3"
+icon_href = f"data:image/png;base64,{icon_192_base64}" if icon_192_base64 else "app/static/icon-192.png?v=3"
+
+# JavaScript ile Head manipülasyonu (En garantili yöntem)
 st.markdown(f"""
+<script>
+    (function() {{
+        // Mevcut ikonlari temizle
+        var links = document.querySelectorAll("link[rel*='icon']");
+        links.forEach(e => e.remove());
+
+        // Yeni ikon elementlerini olustur
+        var head = document.head;
+
+        // Apple Touch Icon
+        var linkApple = document.createElement('link');
+        linkApple.rel = 'apple-touch-icon';
+        linkApple.href = '{apple_href}';
+        head.appendChild(linkApple);
+
+        // Standard Icon
+        var linkIcon = document.createElement('link');
+        linkIcon.rel = 'icon';
+        linkIcon.type = 'image/png';
+        linkIcon.href = '{icon_href}';
+        head.appendChild(linkIcon);
+
+        // Shortcut Icon (Eski tarayicilar icin)
+        var linkShortcut = document.createElement('link');
+        linkShortcut.rel = 'shortcut icon';
+        linkShortcut.type = 'image/png';
+        linkShortcut.href = '{icon_href}';
+        head.appendChild(linkShortcut);
+
+        // Manifest
+        var linkManifest = document.querySelector("link[rel='manifest']");
+        if (linkManifest) linkManifest.remove();
+        var newManifest = document.createElement('link');
+        newManifest.rel = 'manifest';
+        newManifest.href = 'app/static/manifest.json?v=3';
+        head.appendChild(newManifest);
+    }})();
+</script>
+
+<!-- Yedek olarak statik HTML -->
 <meta name="theme-color" content="#667eea">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ürün Ara">
-<link rel="manifest" href="app/static/manifest.json?v=2">
-{apple_icon_link}
-<link rel="icon" type="image/png" href="app/static/icon-192.png?v=2">
 """, unsafe_allow_html=True)
 
 # Modern CSS Tasarımı
