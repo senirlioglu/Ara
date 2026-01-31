@@ -1,13 +1,7 @@
 """
-URUN ARAMA UYGULAMASI
+ÜRÜN ARAMA UYGULAMASI
 =====================
-Musteriye hangi magazada urun oldugunu gostermek icin basit arama uygulamasi.
-
-Stok Seviyeleri:
-- 1: Kritik (kirmizi)
-- 2-5: Dusuk (turuncu)
-- 6-10: Normal (yesil)
-- 11+: Yuksek (mavi)
+Müşteriye hangi mağazada ürün olduğunu göstermek için arama uygulaması.
 """
 
 import streamlit as st
@@ -16,9 +10,9 @@ import os
 from datetime import datetime, time
 from typing import Optional
 
-# Sayfa ayarlari
+# Sayfa ayarları
 st.set_page_config(
-    page_title="Urun Ara",
+    page_title="Ürün Ara",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -27,10 +21,10 @@ st.set_page_config(
 # PWA Meta Tag'leri ve Service Worker
 st.markdown("""
 <link rel="manifest" href="/app/static/manifest.json">
-<meta name="theme-color" content="#1e3a5f">
+<meta name="theme-color" content="#667eea">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Urun Ara">
+<meta name="apple-mobile-web-app-title" content="Ürün Ara">
 <link rel="apple-touch-icon" href="/app/static/icon-192.png">
 <script>
 if ('serviceWorker' in navigator) {
@@ -47,54 +41,107 @@ if ('serviceWorker' in navigator) {
 </script>
 """, unsafe_allow_html=True)
 
-# CSS - Stok seviyeleri icin renkler
+# Modern CSS Tasarımı
 st.markdown("""
 <style>
-    .stok-kritik {
-        background-color: #ff4444 !important;
-        color: white !important;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-weight: bold;
-    }
-    .stok-dusuk {
-        background-color: #ff9800 !important;
-        color: white !important;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-weight: bold;
-    }
-    .stok-normal {
-        background-color: #4caf50 !important;
-        color: white !important;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-weight: bold;
-    }
-    .stok-yuksek {
-        background-color: #2196f3 !important;
-        color: white !important;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-weight: bold;
-    }
-    .stok-yok {
-        background-color: #9e9e9e !important;
-        color: white !important;
-        padding: 4px 8px;
-        border-radius: 4px;
+    /* Genel stil */
+    .stApp {
+        background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
     }
 
-    /* Buyuk arama kutusu */
-    .stSearchInput > div > div > input {
-        font-size: 1.2rem !important;
-        padding: 12px !important;
+    /* Header gizle */
+    header[data-testid="stHeader"] {
+        background: transparent;
     }
 
-    /* Tablo baslik */
-    .dataframe th {
-        background-color: #1e3a5f !important;
+    /* Ana başlık */
+    .main-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem 1rem;
+        border-radius: 0 0 20px 20px;
+        margin: -1rem -1rem 1.5rem -1rem;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+    }
+
+    .main-header h1 {
         color: white !important;
+        font-size: 1.8rem !important;
+        font-weight: 700 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    .main-header p {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.9rem;
+        margin: 0.5rem 0 0 0;
+    }
+
+    /* Arama kutusu container */
+    .search-container {
+        background: white;
+        padding: 1rem;
+        border-radius: 16px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        margin-bottom: 1rem;
+    }
+
+    /* Input stili */
+    .stTextInput > div > div > input {
+        border-radius: 12px !important;
+        border: 2px solid #e0e0e0 !important;
+        padding: 0.75rem 1rem !important;
+        font-size: 1rem !important;
+        transition: all 0.3s ease !important;
+    }
+
+    .stTextInput > div > div > input:focus {
+        border-color: #667eea !important;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important;
+    }
+
+    /* Buton stili */
+    .stButton > button {
+        border-radius: 12px !important;
+        padding: 0.75rem 1.5rem !important;
+        font-weight: 600 !important;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        border: none !important;
+        transition: all 0.3s ease !important;
+    }
+
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
+    }
+
+    /* Bilgi kartı */
+    .info-card {
+        background: white;
+        padding: 0.75rem 1rem;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        color: #666;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+
+    /* Expander stili */
+    .streamlit-expanderHeader {
+        background: white !important;
+        border-radius: 12px !important;
+        border: none !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
+        padding: 0.75rem 1rem !important;
+        font-weight: 500 !important;
+    }
+
+    .streamlit-expanderContent {
+        background: white !important;
+        border-radius: 0 0 12px 12px !important;
+        border: none !important;
+        padding: 0.5rem !important;
     }
 
     /* Mobil uyumluluk */
@@ -274,17 +321,17 @@ def turkce_lower(text: str) -> str:
 
 
 def get_stok_seviye(adet: int) -> tuple:
-    """Stok seviyesi ve renk sinifi dondur"""
+    """Stok seviyesi ve renk sınıfı döndür"""
     if adet is None or adet <= 0:
         return "Yok", "stok-yok"
     elif adet == 1:
         return "Kritik", "stok-kritik"
     elif adet <= 5:
-        return "Dusuk", "stok-dusuk"
+        return "Düşük", "stok-dusuk"
     elif adet <= 10:
         return "Normal", "stok-normal"
     else:
-        return "Yuksek", "stok-yuksek"
+        return "Yüksek", "stok-yuksek"
 
 
 def format_stok_badge(adet: int) -> str:
@@ -340,20 +387,20 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
 
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
-    """Arama sonuclarini goster"""
+    """Arama sonuçlarını göster"""
     if df is None or df.empty:
-        st.warning(f"'{arama_text}' icin sonuc bulunamadi.")
+        st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
-    # Benzersiz urunleri bul ve stok bilgilerini hesapla
+    # Benzersiz ürünleri bul ve stok bilgilerini hesapla
     urunler = df.groupby('urun_kod').agg({
         'urun_ad': 'first',
         'nitelik': 'first',
-        'stok_adet': lambda x: (x > 0).sum()  # Stoklu magaza sayisi
+        'stok_adet': lambda x: (x > 0).sum()
     }).reset_index()
     urunler.columns = ['urun_kod', 'urun_ad', 'nitelik', 'stoklu_magaza']
 
-    st.success(f"**{len(urunler)}** urun bulundu")
+    st.success(f"**{len(urunler)}** ürün bulundu")
 
     # Durum renkleri
     durum_renk = {
@@ -374,15 +421,15 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].copy()
 
-        # Expander basligi: Urun kodu | Urun adi | Magaza sayisi
+        # Expander başlığı: Ürün kodu | Ürün adı | Mağaza sayısı
         if stoklu_magaza > 0:
-            baslik = f"📦 {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} magaza"
+            baslik = f"📦 {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza"
         else:
             baslik = f"❌ {urun_kod}  •  {urun_ad[:40]}  •  Stok yok"
 
         with st.expander(baslik, expanded=False):
             if urun_df_stoklu.empty:
-                st.error("Bu urun hicbir magazada stokta yok!")
+                st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
                 # Stok seviyesine gore sirala
                 urun_df_stoklu = urun_df_stoklu.sort_values('stok_adet', ascending=False)
@@ -436,42 +483,51 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 # ============================================================================
 
 def main():
-    # Baslik
-    col_title, col_refresh = st.columns([6, 1])
-    with col_title:
-        st.title("🔍 Urun Ara")
-    with col_refresh:
-        if st.button("🔄", help="Veriyi yenile"):
-            load_all_stok.clear()
-            st.rerun()
+    # Modern Header
+    st.markdown("""
+    <div class="main-header">
+        <h1>🔍 Ürün Ara</h1>
+        <p>Hangi mağazada ürün var? Hızlıca öğren!</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.caption("Musteriye hangi magazada urun oldugunu bulmak icin")
-
-    # Supabase baglanti kontrolu
+    # Supabase bağlantı kontrolü
     client = get_supabase_client()
     if not client:
-        st.error("⚠️ Veritabani baglantisi kurulamadi. Lutfen ayarlari kontrol edin.")
-        st.info("SUPABASE_URL ve SUPABASE_KEY environment variable'lari veya secrets tanimli olmali.")
+        st.error("⚠️ Veritabanı bağlantısı kurulamadı.")
+        st.info("Lütfen ayarları kontrol edin.")
         return
 
-    # Veri yukle (ilk acilista)
+    # Veri yükle (ilk açılışta)
     cache_key = get_cache_date()
-    with st.spinner("Stok verisi yukleniyor..."):
+    with st.spinner("Stok verisi yükleniyor..."):
         df_all = load_all_stok(cache_key)
 
     if df_all is None or df_all.empty:
-        st.error("⚠️ Stok verisi yuklenemedi.")
+        st.error("⚠️ Stok verisi yüklenemedi.")
         return
 
-    # Veri bilgisi
-    st.caption(f"📊 {len(df_all):,} kayit | Son guncelleme: {cache_key}")
+    # Bilgi kartı
+    st.markdown(f"""
+    <div class="info-card">
+        📊 <strong>{len(df_all):,}</strong> kayıt yüklendi &nbsp;|&nbsp; 🕐 {cache_key}
+        &nbsp;&nbsp;
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Yenile butonu (sağ üst)
+    col_space, col_refresh = st.columns([8, 1])
+    with col_refresh:
+        if st.button("🔄", help="Veriyi yenile", use_container_width=True):
+            load_all_stok.clear()
+            st.rerun()
 
     # Arama kutusu
-    col1, col2 = st.columns([4, 1])
+    col1, col2 = st.columns([5, 1])
     with col1:
         arama_text = st.text_input(
             "Arama",
-            placeholder="Ornek: 123456 veya KOLTUK",
+            placeholder="Ürün kodu veya adı yazın...",
             label_visibility="collapsed",
             key="arama_input"
         )
