@@ -378,7 +378,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             font-size: 0.9rem;
                             white-space: nowrap;
                         ">
-                            {seviye} ({adet})
+                            {seviye}
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
