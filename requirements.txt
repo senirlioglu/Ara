@@ -1,0 +1,14 @@
+# Streamlit Urun Arama Uygulamasi - Gerekli Paketler
+# Python 3.8+ gerekli
+
+# Web framework
+streamlit>=1.28.0
+
+# Veritabani
+supabase>=2.0.0
+
+# Data islemleri
+pandas>=2.0.0
+
+# HTTP istekleri (supabase icin gerekli)
+httpx>=0.25.0
