@@ -480,19 +480,6 @@ def main():
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
-    # Bilgilendirme
-    with st.expander("ℹ️ Stok Seviyeleri", expanded=False):
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown('<span class="stok-kritik">Kritik (1)</span>', unsafe_allow_html=True)
-        with col2:
-            st.markdown('<span class="stok-dusuk">Dusuk (2-5)</span>', unsafe_allow_html=True)
-        with col3:
-            st.markdown('<span class="stok-normal">Normal (6-10)</span>', unsafe_allow_html=True)
-        with col4:
-            st.markdown('<span class="stok-yuksek">Yuksek (11+)</span>', unsafe_allow_html=True)
-
-    st.divider()
 
     # Arama yap
     if arama_text and len(arama_text) >= 2:
