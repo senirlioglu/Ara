@@ -13,6 +13,7 @@ Stok Seviyeleri:
 import streamlit as st
 import pandas as pd
 import os
+from datetime import datetime, time
 from typing import Optional
 
 # Sayfa ayarlari
@@ -141,6 +142,53 @@ def get_supabase_client():
         return None
 
 
+def get_cache_date() -> str:
+    """
+    Cache icin tarih key'i dondur.
+    Saat 11'den once: onceki gunun tarihini kullan
+    Saat 11'den sonra: bugunun tarihini kullan
+    Boylece her gun saat 11'de cache yenilenir (stok 10'da yukleniyor).
+    """
+    now = datetime.now()
+    if now.time() < time(11, 0):
+        # Saat 11'den once, onceki gunun verisini kullan
+        cache_date = (now.replace(hour=0, minute=0, second=0, microsecond=0)
+                      - pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+    else:
+        # Saat 11'den sonra, bugunun verisini kullan
+        cache_date = now.strftime('%Y-%m-%d')
+    return cache_date
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
+    """
+    Tum stok verisini yukle ve cache'le.
+    cache_key her gun saat 12'de degisir, boylece veri yenilenir.
+    """
+    client = get_supabase_client()
+    if not client:
+        return None
+
+    try:
+        # Tum veriyi cek (sadece gerekli sutunlar)
+        result = client.table('stok_gunluk')\
+            .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
+            .execute()
+
+        if result.data:
+            df = pd.DataFrame(result.data)
+            # Arama icin normalize edilmis sutunlar ekle
+            df['urun_kod_upper'] = df['urun_kod'].fillna('').str.upper()
+            df['urun_ad_upper'] = df['urun_ad'].fillna('').apply(turkce_upper)
+            df['urun_ad_lower'] = df['urun_ad'].fillna('').apply(turkce_lower)
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Veri yukleme hatasi: {e}")
+        return None
+
+
 # ============================================================================
 # YARDIMCI FONKSIYONLAR
 # ============================================================================
@@ -223,18 +271,20 @@ def format_stok_badge(adet: int) -> str:
 # URUN ARAMA
 # ============================================================================
 
-@st.cache_data(ttl=300, show_spinner=False)
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
-    Supabase'den urun ara
+    Cache'den urun ara (hizli arama)
     - urun_kod veya urun_ad icinde arama yapar
     - Case-insensitive ve Turkce karakter duyarsiz
     """
-    client = get_supabase_client()
-    if not client:
+    if not arama_text or len(arama_text) < 2:
         return None
 
-    if not arama_text or len(arama_text) < 2:
+    # Cache'den veri al
+    cache_key = get_cache_date()
+    df_all = load_all_stok(cache_key)
+
+    if df_all is None or df_all.empty:
         return None
 
     try:
@@ -243,42 +293,19 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         arama_upper = turkce_upper(arama_original)
         arama_lower = turkce_lower(arama_original)
 
-        all_results = []
+        # Cache'de arama yap (cok hizli - bellekte)
+        mask_kod = df_all['urun_kod_upper'].str.contains(arama_upper, na=False, regex=False)
+        mask_ad_upper = df_all['urun_ad_upper'].str.contains(arama_upper, na=False, regex=False)
+        mask_ad_lower = df_all['urun_ad_lower'].str.contains(arama_lower, na=False, regex=False)
 
-        # Supabase'den son yuklemedeki verileri cek
-        # Urun kodu ile ara (genellikle buyuk harf)
-        result = client.table('stok_gunluk')\
-            .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-            .ilike('urun_kod', f'%{arama_upper}%')\
-            .execute()
-        if result.data:
-            all_results.extend(result.data)
+        # Tum sonuclari birlestir
+        mask = mask_kod | mask_ad_upper | mask_ad_lower
+        df = df_all[mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
 
-        # Urun adi ile ara - BUYUK HARF
-        result2 = client.table('stok_gunluk')\
-            .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-            .ilike('urun_ad', f'%{arama_upper}%')\
-            .execute()
-        if result2.data:
-            all_results.extend(result2.data)
+        # Tekrarlari kaldir
+        df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
 
-        # Urun adi ile ara - kucuk harf (farkli sonuc varsa)
-        if arama_lower != arama_upper:
-            result3 = client.table('stok_gunluk')\
-                .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-                .ilike('urun_ad', f'%{arama_lower}%')\
-                .execute()
-            if result3.data:
-                all_results.extend(result3.data)
-
-        # Sonuclari birlestir ve tekrarlari kaldir
-        if all_results:
-            df = pd.DataFrame(all_results)
-            # magaza_kod ve urun_kod kombinasyonuna gore tekrarlari kaldir
-            df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
-            return df
-        else:
-            return pd.DataFrame()
+        return df
 
     except Exception as e:
         st.error(f"Arama hatasi: {e}")
@@ -383,7 +410,14 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
 def main():
     # Baslik
-    st.title("🔍 Urun Ara")
+    col_title, col_refresh = st.columns([6, 1])
+    with col_title:
+        st.title("🔍 Urun Ara")
+    with col_refresh:
+        if st.button("🔄", help="Veriyi yenile"):
+            load_all_stok.clear()
+            st.rerun()
+
     st.caption("Musteriye hangi magazada urun oldugunu bulmak icin")
 
     # Supabase baglanti kontrolu
@@ -392,6 +426,18 @@ def main():
         st.error("⚠️ Veritabani baglantisi kurulamadi. Lutfen ayarlari kontrol edin.")
         st.info("SUPABASE_URL ve SUPABASE_KEY environment variable'lari veya secrets tanimli olmali.")
         return
+
+    # Veri yukle (ilk acilista)
+    cache_key = get_cache_date()
+    with st.spinner("Stok verisi yukleniyor..."):
+        df_all = load_all_stok(cache_key)
+
+    if df_all is None or df_all.empty:
+        st.error("⚠️ Stok verisi yuklenemedi.")
+        return
+
+    # Veri bilgisi
+    st.caption(f"📊 {len(df_all):,} kayit | Son guncelleme: {cache_key}")
 
     # Arama kutusu
     st.markdown("### Urun Kodu veya Adi")
