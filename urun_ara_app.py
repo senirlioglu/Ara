@@ -411,7 +411,7 @@ def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.
         mask = pd.Series([False] * len(df_all))
 
         for terim in tum_aramalar:
-            terim_upper = terim.upper()
+            terim_upper = turkce_upper(terim)
             terim_normalized = normalize_turkish(terim)
 
             # Kısa terimler için (2-3 karakter) kelime sınırı kullan
