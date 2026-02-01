@@ -367,6 +367,22 @@ def format_stok_badge(adet: int) -> str:
 # URUN ARAMA
 # ============================================================================
 
+def get_es_anlamlilar(kelime: str) -> list:
+    """Kelimenin eş anlamlılarını getir"""
+    try:
+        client = get_supabase_client()
+        if client:
+            result = client.table('es_anlamlilar')\
+                .select('es_anlam')\
+                .eq('kelime', kelime.lower().strip())\
+                .execute()
+            if result.data:
+                return [r['es_anlam'] for r in result.data]
+    except:
+        pass
+    return []
+
+
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
     Cache'den urun ara (hizli arama)
@@ -388,15 +404,25 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         arama_upper = arama_text.strip().upper()
         arama_normalized = normalize_turkish(arama_text.strip())
 
-        # Cache'de arama yap (cok hizli - bellekte)
-        mask_kod = df_all['urun_kod_upper'].str.contains(arama_upper, na=False, regex=False)
-        mask_ad = df_all['urun_ad_upper'].str.contains(arama_upper, na=False, regex=False)
-        # ASCII normalized arama (ü->u, ş->s ile eslesme)
-        mask_kod_normalized = df_all['urun_kod_normalized'].str.contains(arama_normalized, na=False, regex=False)
-        mask_ad_normalized = df_all['urun_ad_normalized'].str.contains(arama_normalized, na=False, regex=False)
+        # Eş anlamlıları bul
+        es_anlamlar = get_es_anlamlilar(arama_text)
+        tum_aramalar = [arama_text.strip()] + es_anlamlar
 
-        # Tum sonuclari birlestir
-        mask = mask_kod | mask_ad | mask_kod_normalized | mask_ad_normalized
+        # Her arama terimi için mask oluştur
+        mask = pd.Series([False] * len(df_all))
+
+        for terim in tum_aramalar:
+            terim_upper = terim.upper()
+            terim_normalized = normalize_turkish(terim)
+
+            # Cache'de arama yap
+            mask_kod = df_all['urun_kod_upper'].str.contains(terim_upper, na=False, regex=False)
+            mask_ad = df_all['urun_ad_upper'].str.contains(terim_upper, na=False, regex=False)
+            mask_kod_norm = df_all['urun_kod_normalized'].str.contains(terim_normalized, na=False, regex=False)
+            mask_ad_norm = df_all['urun_ad_normalized'].str.contains(terim_normalized, na=False, regex=False)
+
+            mask = mask | mask_kod | mask_ad | mask_kod_norm | mask_ad_norm
+
         df = df_all[mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
 
         # Tekrarlari kaldir
