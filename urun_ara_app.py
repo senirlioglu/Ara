@@ -409,8 +409,49 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         return None
 
 
+def log_arama(arama_terimi: str, sonuc_sayisi: int):
+    """Arama terimini Supabase'e logla (gunluk bazda)"""
+    try:
+        client = get_supabase_client()
+        if client and arama_terimi:
+            terim = arama_terimi.strip().lower()[:100]
+            bugun = datetime.now().strftime('%Y-%m-%d')
+
+            # Bugunku kayit var mi kontrol et
+            result = client.table('arama_log')\
+                .select('id, arama_sayisi')\
+                .eq('tarih', bugun)\
+                .eq('arama_terimi', terim)\
+                .execute()
+
+            if result.data:
+                # Varsa sayiyi artir
+                kayit = result.data[0]
+                client.table('arama_log')\
+                    .update({
+                        'arama_sayisi': kayit['arama_sayisi'] + 1,
+                        'sonuc_sayisi': sonuc_sayisi
+                    })\
+                    .eq('id', kayit['id'])\
+                    .execute()
+            else:
+                # Yoksa yeni kayit ekle
+                client.table('arama_log').insert({
+                    'tarih': bugun,
+                    'arama_terimi': terim,
+                    'arama_sayisi': 1,
+                    'sonuc_sayisi': sonuc_sayisi
+                }).execute()
+    except:
+        pass  # Log hatasi kullaniciyi etkilemesin
+
+
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Arama sonuçlarını göster"""
+    # Arama logla
+    sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
+    log_arama(arama_text, sonuc_sayisi)
+
     if df is None or df.empty:
         st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
@@ -558,5 +599,92 @@ def main():
         st.info("En az 2 karakter girin.")
 
 
+def admin_panel():
+    """Admin paneli - arama analitikleri"""
+    from datetime import timedelta
+
+    # Şifre kontrolü
+    if 'admin_auth' not in st.session_state:
+        st.session_state.admin_auth = False
+
+    if not st.session_state.admin_auth:
+        st.title("🔐 Admin Girişi")
+        password = st.text_input("Şifre:", type="password")
+        if st.button("Giriş"):
+            admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
+            if password == admin_pass:
+                st.session_state.admin_auth = True
+                st.rerun()
+            else:
+                st.error("Yanlış şifre!")
+        return
+
+    st.title("📊 Arama Analitikleri")
+
+    # Veri yükle
+    client = get_supabase_client()
+    if not client:
+        st.error("Veritabanı bağlantısı yok")
+        return
+
+    gun_sayisi = st.selectbox("Dönem:", [7, 14, 30], format_func=lambda x: f"Son {x} gün")
+
+    try:
+        baslangic = (datetime.now() - timedelta(days=gun_sayisi)).strftime('%Y-%m-%d')
+        result = client.table('arama_log')\
+            .select('*')\
+            .gte('tarih', baslangic)\
+            .order('tarih', desc=True)\
+            .order('arama_sayisi', desc=True)\
+            .execute()
+
+        if not result.data:
+            st.warning("Henüz veri yok")
+            return
+
+        df = pd.DataFrame(result.data)
+
+        # Metrikler
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Toplam Arama", f"{df['arama_sayisi'].sum():,}")
+        with col2:
+            st.metric("Benzersiz Terim", f"{len(df['arama_terimi'].unique()):,}")
+        with col3:
+            sonucsuz = df[df['sonuc_sayisi'] == 0]['arama_sayisi'].sum()
+            st.metric("Sonuçsuz", f"{sonucsuz:,}")
+
+        st.markdown("---")
+
+        # En çok arananlar
+        st.subheader("🔥 En Çok Arananlar")
+        top_df = df.groupby('arama_terimi').agg({'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}).reset_index()
+        top_df = top_df.sort_values('arama_sayisi', ascending=False).head(20)
+        top_df.columns = ['Terim', 'Arama', 'Sonuç']
+        st.dataframe(top_df, use_container_width=True, hide_index=True)
+
+        # Sonuçsuzlar
+        st.subheader("❌ Sonuç Bulunamayanlar")
+        sonucsuz_df = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi')['arama_sayisi'].sum().reset_index()
+        sonucsuz_df = sonucsuz_df.sort_values('arama_sayisi', ascending=False).head(20)
+        sonucsuz_df.columns = ['Terim', 'Arama']
+        if sonucsuz_df.empty:
+            st.success("Tüm aramalarda sonuç bulunmuş!")
+        else:
+            st.dataframe(sonucsuz_df, use_container_width=True, hide_index=True)
+
+    except Exception as e:
+        st.error(f"Hata: {e}")
+
+    if st.button("🚪 Çıkış"):
+        st.session_state.admin_auth = False
+        st.rerun()
+
+
 if __name__ == "__main__":
-    main()
+    # URL parametresi kontrolü
+    params = st.query_params
+    if params.get("admin") == "true":
+        admin_panel()
+    else:
+        main()
