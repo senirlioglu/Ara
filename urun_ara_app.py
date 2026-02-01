@@ -432,92 +432,33 @@ def fuzzy_ara(arama_text: str) -> Optional[pd.DataFrame]:
     return None
 
 
-def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.DataFrame], bool]:
+def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
-    Cache'den urun ara (hizli arama)
-    - Arama terimini kelimelere boler, HER kelime eslesme(olmali (AND mantigi)
-    - Case-insensitive ve Turkce karakter duyarsiz
-    - Kısa terimler için kelime sınırı kontrolü yapar
-    - Sonuç bulunamazsa fuzzy search dener
-    Returns: (DataFrame, is_fuzzy) tuple
+    SERVER-SIDE SEARCH: Veritabanında arama yapar, RAM'e yüklemez.
+    Supabase'deki hizli_urun_ara fonksiyonunu kullanır.
     """
     if not arama_text or len(arama_text) < 2:
-        return None, False
+        return None
 
     try:
-        # Cache'den veri al
-        cache_key = get_cache_date()
-        df_all = load_all_stok(cache_key)
+        client = get_supabase_client()
+        if not client:
+            return None
 
-        if df_all is None or df_all.empty:
-            return None, False
+        # Supabase RPC fonksiyonunu çağır
+        result = client.rpc('hizli_urun_ara', {'arama_terimi': arama_text.strip()}).execute()
 
-        # Arama terimini kelimelere bol
-        kelimeler = arama_text.strip().split()
+        if result.data:
+            df = pd.DataFrame(result.data)
+            # Tekrarları kaldır
+            df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
+            return df
 
-        # Her kelime icin es anlamlilar ve kok formlarini ekle
-        tum_kelime_gruplari = []
-        for kelime in kelimeler:
-            # Kok formlarini bul (mamasi -> mama, tavuklu -> tavuk)
-            kokler = temizle_turkce_ek(kelime)
-            # Es anlamlilar
-            es_anlamlar = get_es_anlamlilar(kelime)
-            # Hepsini birlestir
-            tum_formlar = list(set(kokler + es_anlamlar + [kelime]))
-            tum_kelime_gruplari.append(tum_formlar)
-
-        # Her kelime grubu icin mask olustur (AND mantigi)
-        final_mask = pd.Series([True] * len(df_all))
-
-        for kelime_grubu in tum_kelime_gruplari:
-            # Bu kelime grubu icindeki herhangi biri eslesmeli (OR)
-            grup_mask = pd.Series([False] * len(df_all))
-
-            for terim in kelime_grubu:
-                terim_upper = turkce_upper(terim)
-                terim_normalized = normalize_turkish(terim)
-
-                # Kısa terimler için (2-3 karakter) kelime sınırı kullan
-                if len(terim.strip()) <= 3:
-                    pattern_upper = r'(^|[\s])' + re.escape(terim_upper) + r'($|[\s\d])'
-                    pattern_norm = r'(^|[\s])' + re.escape(terim_normalized) + r'($|[\s\d])'
-
-                    mask_kod = df_all['urun_kod_upper'].str.contains(pattern_upper, na=False, regex=True)
-                    mask_ad = df_all['urun_ad_upper'].str.contains(pattern_upper, na=False, regex=True)
-                    mask_kod_norm = df_all['urun_kod_normalized'].str.contains(pattern_norm, na=False, regex=True)
-                    mask_ad_norm = df_all['urun_ad_normalized'].str.contains(pattern_norm, na=False, regex=True)
-                else:
-                    # Uzun terimler icin normal contains
-                    mask_kod = df_all['urun_kod_upper'].str.contains(terim_upper, na=False, regex=False)
-                    mask_ad = df_all['urun_ad_upper'].str.contains(terim_upper, na=False, regex=False)
-                    mask_kod_norm = df_all['urun_kod_normalized'].str.contains(terim_normalized, na=False, regex=False)
-                    mask_ad_norm = df_all['urun_ad_normalized'].str.contains(terim_normalized, na=False, regex=False)
-
-                grup_mask = grup_mask | mask_kod | mask_ad | mask_kod_norm | mask_ad_norm
-
-            # Her kelime grubu eslesme(olmali (AND)
-            final_mask = final_mask & grup_mask
-
-        df = df_all[final_mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
-
-        # Tekrarlari kaldir
-        df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
-
-        # Sonuç varsa döndür
-        if not df.empty:
-            return df, False
-
-        # Sonuç yoksa ve fuzzy aktifse, fuzzy dene
-        if fuzzy_fallback and len(arama_text.strip()) >= 3:
-            df_fuzzy = fuzzy_ara(arama_text)
-            if df_fuzzy is not None and not df_fuzzy.empty:
-                return df_fuzzy, True
-
-        return df, False
+        return pd.DataFrame()
 
     except Exception as e:
         st.error(f"Arama hatasi: {e}")
-        return None, False
+        return None
 
 
 def log_arama(arama_terimi: str, sonuc_sayisi: int):
@@ -557,7 +498,7 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
         pass  # Log hatasi kullaniciyi etkilemesin
 
 
-def goster_sonuclar(df: pd.DataFrame, arama_text: str, is_fuzzy: bool = False):
+def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Arama sonuçlarını göster"""
     # Arama logla
     sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
@@ -574,9 +515,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str, is_fuzzy: bool = False):
         'stok_adet': lambda x: (x > 0).sum()
     }).reset_index()
     urunler.columns = ['urun_kod', 'urun_ad', 'nitelik', 'stoklu_magaza']
-
-    if is_fuzzy:
-        st.info(f"🔮 Benzer sonuçlar gösteriliyor ('{arama_text}' için tam eşleşme bulunamadı)")
 
     st.success(f"**{len(urunler)}** ürün bulundu")
 
@@ -676,24 +614,10 @@ def main():
         st.info("Lütfen ayarları kontrol edin.")
         return
 
-    # Veri yükle (ilk açılışta)
-    cache_key = get_cache_date()
-    try:
-        with st.spinner("Stok verisi yükleniyor..."):
-            df_all = load_all_stok(cache_key)
-    except Exception as e:
-        st.error(f"⚠️ Veri yüklenirken hata: {e}")
-        st.info("Lütfen sayfayı yenileyin veya daha sonra tekrar deneyin.")
-        return
-
-    if df_all is None or df_all.empty:
-        st.error("⚠️ Stok verisi yüklenemedi.")
-        return
-
-    # Bilgi kartı
-    st.markdown(f"""
+    # Bilgi kartı - artık veri yükleme YOK, anında açılır
+    st.markdown("""
     <div class="info-card">
-        📊 <strong>{len(df_all):,}</strong> kayıt &nbsp;|&nbsp; 🕐 Güncelleme: {cache_key} 11:00
+        ⚡ <strong>Canlı Arama</strong> &nbsp;|&nbsp; Sonuçlar anlık veritabanından gelir
     </div>
     """, unsafe_allow_html=True)
 
@@ -712,8 +636,8 @@ def main():
     # Arama yap
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
-            df, is_fuzzy = ara_urun(arama_text)
-            goster_sonuclar(df, arama_text, is_fuzzy)
+            df = ara_urun(arama_text)
+            goster_sonuclar(df, arama_text)
     elif arama_text and len(arama_text) < 2:
         st.info("En az 2 karakter girin.")
 
