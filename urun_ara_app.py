@@ -195,30 +195,43 @@ def get_cache_date() -> str:
     return cache_date
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=14400, show_spinner=False)  # 4 saat cache (daha uzun)
 def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
     """
     Tum stok verisini yukle ve cache'le.
     cache_key her gun saat 11'de degisir, boylece veri yenilenir.
     Pagination ile tum veriyi ceker.
     """
+    import time as time_module
+
     client = get_supabase_client()
     if not client:
         return None
 
     try:
         all_data = []
-        batch_size = 50000  # Her seferde 50K kayit (daha hizli)
+        batch_size = 20000  # Daha kucuk batch (daha guvenli)
         offset = 0
-        expected_total = 650000  # Tahmini toplam kayit
+        expected_total = 650000
+        max_retries = 3
 
         progress_bar = st.progress(0, text="Stok verisi yukleniyor...")
 
         while True:
-            result = client.table('stok_gunluk')\
-                .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-                .range(offset, offset + batch_size - 1)\
-                .execute()
+            # Retry mekanizmasi
+            for attempt in range(max_retries):
+                try:
+                    result = client.table('stok_gunluk')\
+                        .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
+                        .range(offset, offset + batch_size - 1)\
+                        .execute()
+                    break  # Basarili, donguden cik
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time_module.sleep(2)  # 2 saniye bekle ve tekrar dene
+                        continue
+                    else:
+                        raise e  # Son deneme de basarisiz
 
             if not result.data:
                 break
@@ -234,6 +247,9 @@ def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
                 break
 
             offset += batch_size
+
+            # Her batch arasinda kisa bekleme (rate limit icin)
+            time_module.sleep(0.1)
 
         progress_bar.progress(1.0, text="Tamamlandi!")
         progress_bar.empty()
