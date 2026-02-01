@@ -602,18 +602,30 @@ def main():
 def admin_panel():
     """Admin paneli - arama analitikleri"""
     from datetime import timedelta
+    import hashlib
+
+    # Basit token oluştur (şifre + tarih)
+    admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
+    today = datetime.now().strftime('%Y-%m-%d')
+    valid_token = hashlib.md5(f"{admin_pass}{today}".encode()).hexdigest()[:16]
+
+    params = st.query_params
+    url_token = params.get("token", "")
+
+    # Token varsa ve geçerliyse direkt giriş
+    if url_token == valid_token:
+        st.session_state.admin_auth = True
 
     # Şifre kontrolü
-    if 'admin_auth' not in st.session_state:
-        st.session_state.admin_auth = False
-
-    if not st.session_state.admin_auth:
+    if not st.session_state.get('admin_auth', False):
         st.title("🔐 Admin Girişi")
         password = st.text_input("Şifre:", type="password")
         if st.button("Giriş"):
-            admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
             if password == admin_pass:
                 st.session_state.admin_auth = True
+                # Token'ı URL'e ekle (yenileme için)
+                st.query_params["admin"] = "true"
+                st.query_params["token"] = valid_token
                 st.rerun()
             else:
                 st.error("Yanlış şifre!")
