@@ -306,19 +306,17 @@ def main():
         st.info("Lütfen ayarları kontrol edin.")
         return
 
-    st.markdown("""
-    <div class="info-card">
-        ⚡ <strong>Canlı Arama</strong> &nbsp;|&nbsp; Sonuçlar anlık veritabanından gelir
-    </div>
-    """, unsafe_allow_html=True)
-
     # Arama kutusu
-    arama_text = st.text_input(
-        "Arama",
-        placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
-        label_visibility="collapsed",
-        key="arama_input"
-    )
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        arama_text = st.text_input(
+            "Arama",
+            placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
+            label_visibility="collapsed",
+            key="arama_input"
+        )
+    with col2:
+        ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
