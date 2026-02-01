@@ -368,31 +368,32 @@ def format_stok_badge(adet: int) -> str:
 
 def temizle_turkce_ek(kelime: str) -> list:
     """Turkce ekleri temizleyip kokleri dondur (mamasi -> mama, tavuklu -> tavuk)"""
-    kelime = kelime.strip().lower()
-    kokler = [kelime]  # Orijinali de dahil et
+    # Normalize et (Turkce karakterleri ASCII'ye cevir)
+    kelime_norm = normalize_turkish(kelime.strip())
+    kokler = [kelime.strip().lower(), kelime_norm]  # Hem orijinal hem normalize
 
-    # Turkce yaygın ekler (uzundan kısaya sıralı)
+    # Turkce yaygın ekler (ASCII normalized, uzundan kısaya sıralı)
     ekler = [
-        'ları', 'leri', 'ler', 'lar',
-        'lık', 'lik', 'luk', 'lük',
-        'sı', 'si', 'su', 'sü',
-        'lu', 'lü', 'lı', 'li',
-        'cı', 'ci', 'cu', 'cü',
+        'lari', 'leri', 'ler', 'lar',
+        'lik', 'luk',
+        'si', 'su',
+        'lu', 'li',
+        'ci', 'cu',
         'ca', 'ce',
-        'ın', 'in', 'un', 'ün',
-        'nı', 'ni', 'nu', 'nü',
+        'in', 'un',
+        'ni', 'nu',
         'da', 'de', 'ta', 'te',
         'dan', 'den', 'tan', 'ten',
         'yla', 'yle',
     ]
 
     for ek in ekler:
-        if kelime.endswith(ek) and len(kelime) > len(ek) + 2:
-            kok = kelime[:-len(ek)]
+        if kelime_norm.endswith(ek) and len(kelime_norm) > len(ek) + 2:
+            kok = kelime_norm[:-len(ek)]
             if kok not in kokler:
                 kokler.append(kok)
 
-    return kokler
+    return list(set(kokler))
 
 
 def get_es_anlamlilar(kelime: str) -> list:
