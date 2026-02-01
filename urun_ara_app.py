@@ -245,18 +245,39 @@ def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
     # Veri isleme
     df['urun_kod'] = df['urun_kod'].fillna('')
     df['urun_ad'] = df['urun_ad'].fillna('')
-    df['urun_kod_upper'] = df['urun_kod'].str.upper()
-    df['urun_ad_upper'] = df['urun_ad'].str.upper()
-    df['urun_ad_normalized'] = df['urun_ad'].str.lower()
-    df['urun_kod_normalized'] = df['urun_kod'].str.lower()
 
+    # Turkce buyuk harf donusumu (i -> İ, ı -> I)
+    def tr_upper(s):
+        if not s:
+            return ''
+        s = str(s)
+        for old, new in [('i', 'İ'), ('ı', 'I'), ('ğ', 'Ğ'), ('ü', 'Ü'), ('ş', 'Ş'), ('ö', 'Ö'), ('ç', 'Ç')]:
+            s = s.replace(old, new)
+        return s.upper()
+
+    df['urun_kod_upper'] = df['urun_kod'].apply(tr_upper)
+    df['urun_ad_upper'] = df['urun_ad'].apply(tr_upper)
+
+    # Normalize: ONCE Turkce karakterleri degistir, SONRA lower
+    # Boylece İ -> i donusumu dogru calısır
     tr_replacements = [
-        ('ı', 'i'), ('ğ', 'g'), ('ü', 'u'), ('ş', 's'), ('ö', 'o'), ('ç', 'c'),
-        ('İ', 'i'), ('Ğ', 'g'), ('Ü', 'u'), ('Ş', 's'), ('Ö', 'o'), ('Ç', 'c')
+        ('İ', 'i'), ('I', 'i'), ('ı', 'i'),
+        ('Ğ', 'g'), ('ğ', 'g'),
+        ('Ü', 'u'), ('ü', 'u'),
+        ('Ş', 's'), ('ş', 's'),
+        ('Ö', 'o'), ('ö', 'o'),
+        ('Ç', 'c'), ('ç', 'c'),
     ]
+
+    df['urun_ad_normalized'] = df['urun_ad']
+    df['urun_kod_normalized'] = df['urun_kod']
+
     for tr_char, ascii_char in tr_replacements:
         df['urun_ad_normalized'] = df['urun_ad_normalized'].str.replace(tr_char, ascii_char, regex=False)
         df['urun_kod_normalized'] = df['urun_kod_normalized'].str.replace(tr_char, ascii_char, regex=False)
+
+    df['urun_ad_normalized'] = df['urun_ad_normalized'].str.lower()
+    df['urun_kod_normalized'] = df['urun_kod_normalized'].str.lower()
 
     return df
 
@@ -269,15 +290,18 @@ def normalize_turkish(text: str) -> str:
     """Turkce karakterleri normalize et (arama icin)"""
     if not text:
         return ""
-    text = str(text).lower()
-    # Turkce -> ASCII mapping
+    text = str(text)
+    # ONCE Turkce karakterleri degistir, SONRA lower() yap
+    # Cunku Python'un lower() fonksiyonu İ -> i donusumunu dogru yapmiyor
     tr_map = {
-        'ı': 'i', 'ğ': 'g', 'ü': 'u', 'ş': 's', 'ö': 'o', 'ç': 'c',
-        'İ': 'i', 'Ğ': 'g', 'Ü': 'u', 'Ş': 's', 'Ö': 'o', 'Ç': 'c'
+        'İ': 'i', 'I': 'i',  # Her iki buyuk I da kucuk i olsun
+        'Ğ': 'g', 'Ü': 'u', 'Ş': 's', 'Ö': 'o', 'Ç': 'c',
+        'ğ': 'g', 'ü': 'u', 'ş': 's', 'ö': 'o', 'ç': 'c',
+        'ı': 'i',  # noktasiz i de i olsun
     }
     for tr_char, ascii_char in tr_map.items():
         text = text.replace(tr_char, ascii_char)
-    return text
+    return text.lower()
 
 
 def turkce_upper(text: str) -> str:
