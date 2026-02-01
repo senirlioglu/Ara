@@ -7,6 +7,7 @@ Müşteriye hangi mağazada ürün olduğunu göstermek için arama uygulaması.
 import streamlit as st
 import pandas as pd
 import os
+import re
 from datetime import datetime, time
 from typing import Optional
 from PIL import Image
@@ -383,6 +384,7 @@ def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.
     Cache'den urun ara (hizli arama)
     - urun_kod veya urun_ad icinde arama yapar
     - Case-insensitive ve Turkce karakter duyarsiz
+    - Kısa terimler için kelime sınırı kontrolü yapar
     - Sonuç bulunamazsa fuzzy search dener
     Returns: (DataFrame, is_fuzzy) tuple
     """
@@ -412,11 +414,22 @@ def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.
             terim_upper = terim.upper()
             terim_normalized = normalize_turkish(terim)
 
-            # Cache'de arama yap
-            mask_kod = df_all['urun_kod_upper'].str.contains(terim_upper, na=False, regex=False)
-            mask_ad = df_all['urun_ad_upper'].str.contains(terim_upper, na=False, regex=False)
-            mask_kod_norm = df_all['urun_kod_normalized'].str.contains(terim_normalized, na=False, regex=False)
-            mask_ad_norm = df_all['urun_ad_normalized'].str.contains(terim_normalized, na=False, regex=False)
+            # Kısa terimler için (2-3 karakter) kelime sınırı kullan
+            if len(terim.strip()) <= 3:
+                # Regex: başta veya boşluktan sonra, sonda veya boşluk/rakamdan önce
+                pattern_upper = r'(^|[\s])' + re.escape(terim_upper) + r'($|[\s\d])'
+                pattern_norm = r'(^|[\s])' + re.escape(terim_normalized) + r'($|[\s\d])'
+
+                mask_kod = df_all['urun_kod_upper'].str.contains(pattern_upper, na=False, regex=True)
+                mask_ad = df_all['urun_ad_upper'].str.contains(pattern_upper, na=False, regex=True)
+                mask_kod_norm = df_all['urun_kod_normalized'].str.contains(pattern_norm, na=False, regex=True)
+                mask_ad_norm = df_all['urun_ad_normalized'].str.contains(pattern_norm, na=False, regex=True)
+            else:
+                # Uzun terimler için normal contains
+                mask_kod = df_all['urun_kod_upper'].str.contains(terim_upper, na=False, regex=False)
+                mask_ad = df_all['urun_ad_upper'].str.contains(terim_upper, na=False, regex=False)
+                mask_kod_norm = df_all['urun_kod_normalized'].str.contains(terim_normalized, na=False, regex=False)
+                mask_ad_norm = df_all['urun_ad_normalized'].str.contains(terim_normalized, na=False, regex=False)
 
             mask = mask | mask_kod | mask_ad | mask_kod_norm | mask_ad_norm
 
