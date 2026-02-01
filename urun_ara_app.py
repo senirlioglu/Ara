@@ -251,7 +251,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             else:
                 for _, row in urun_df_stoklu.iterrows():
                     seviye, _, renk = get_stok_seviye(row['stok_adet'])
-                    adet = int(row['stok_adet'])
                     magaza_ad = row.get('magaza_ad', row['magaza_kod']) or row['magaza_kod']
                     sm = row.get('sm_kod', '-') or '-'
                     bs = row.get('bs_kod', '-') or '-'
@@ -282,7 +281,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             font-size: 0.9rem;
                             white-space: nowrap;
                         ">
-                            {adet} Adet ({seviye})
+                            {seviye}
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
