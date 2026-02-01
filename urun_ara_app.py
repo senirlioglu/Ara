@@ -306,12 +306,6 @@ def main():
         st.info("Lütfen ayarları kontrol edin.")
         return
 
-    st.markdown("""
-    <div class="info-card">
-        ⚡ <strong>Canlı Arama</strong> &nbsp;|&nbsp; Sonuçlar anlık veritabanından gelir
-    </div>
-    """, unsafe_allow_html=True)
-
     # Arama kutusu
     arama_text = st.text_input(
         "Arama",
