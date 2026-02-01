@@ -251,6 +251,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             else:
                 for _, row in urun_df_stoklu.iterrows():
                     seviye, _, renk = get_stok_seviye(row['stok_adet'])
+                    adet = int(row['stok_adet'])
                     magaza_ad = row.get('magaza_ad', row['magaza_kod']) or row['magaza_kod']
                     sm = row.get('sm_kod', '-') or '-'
                     bs = row.get('bs_kod', '-') or '-'
@@ -281,7 +282,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             font-size: 0.9rem;
                             white-space: nowrap;
                         ">
-                            {seviye}
+                            {adet} Adet ({seviye})
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -405,6 +406,17 @@ def admin_panel():
             st.success("Tüm aramalarda sonuç bulunmuş!")
         else:
             st.dataframe(sonucsuz_df, use_container_width=True, hide_index=True)
+
+        # Bugün arananlar
+        st.subheader("🕐 Bugün Arananlar")
+        bugun = datetime.now().strftime('%Y-%m-%d')
+        bugun_df = df[df['tarih'] == bugun].sort_values('arama_sayisi', ascending=False)
+        if bugun_df.empty:
+            st.info("Bugün henüz arama yapılmamış")
+        else:
+            bugun_df = bugun_df[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].head(30)
+            bugun_df.columns = ['Terim', 'Arama', 'Sonuç']
+            st.dataframe(bugun_df, use_container_width=True, hide_index=True)
 
     except Exception as e:
         st.error(f"Hata: {e}")
