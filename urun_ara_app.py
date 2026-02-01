@@ -409,8 +409,25 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         return None
 
 
+def log_arama(arama_terimi: str, sonuc_sayisi: int):
+    """Arama terimini Supabase'e logla"""
+    try:
+        client = get_supabase_client()
+        if client and arama_terimi:
+            client.table('arama_log').insert({
+                'arama_terimi': arama_terimi.strip()[:100],  # Max 100 karakter
+                'sonuc_sayisi': sonuc_sayisi
+            }).execute()
+    except:
+        pass  # Log hatasi kullaniciyi etkilemesin
+
+
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Arama sonuçlarını göster"""
+    # Arama logla
+    sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
+    log_arama(arama_text, sonuc_sayisi)
+
     if df is None or df.empty:
         st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
