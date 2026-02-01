@@ -256,13 +256,28 @@ def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
 
         if all_data:
             df = pd.DataFrame(all_data)
-            # Arama icin normalize edilmis sutunlar ekle
-            df['urun_kod_upper'] = df['urun_kod'].fillna('').str.upper()
-            df['urun_ad_upper'] = df['urun_ad'].fillna('').apply(turkce_upper)
-            df['urun_ad_lower'] = df['urun_ad'].fillna('').apply(turkce_lower)
-            # ASCII normalized (ü->u, ş->s, vs.) - Turkce karaktersiz arama icin
-            df['urun_ad_normalized'] = df['urun_ad'].fillna('').apply(normalize_turkish)
-            df['urun_kod_normalized'] = df['urun_kod'].fillna('').apply(normalize_turkish)
+
+            # Sadece gerekli sutunlari isle (bellek tasarrufu)
+            df['urun_kod'] = df['urun_kod'].fillna('')
+            df['urun_ad'] = df['urun_ad'].fillna('')
+
+            # Vectorized upper (daha hizli)
+            df['urun_kod_upper'] = df['urun_kod'].str.upper()
+            df['urun_ad_upper'] = df['urun_ad'].str.upper()
+
+            # Turkce karakter normalizasyonu (vectorized)
+            df['urun_ad_normalized'] = df['urun_ad'].str.lower()
+            df['urun_kod_normalized'] = df['urun_kod'].str.lower()
+
+            # Turkce karakterleri replace et (vectorized - cok daha hizli)
+            tr_replacements = [
+                ('ı', 'i'), ('ğ', 'g'), ('ü', 'u'), ('ş', 's'), ('ö', 'o'), ('ç', 'c'),
+                ('İ', 'i'), ('Ğ', 'g'), ('Ü', 'u'), ('Ş', 's'), ('Ö', 'o'), ('Ç', 'c')
+            ]
+            for tr_char, ascii_char in tr_replacements:
+                df['urun_ad_normalized'] = df['urun_ad_normalized'].str.replace(tr_char, ascii_char, regex=False)
+                df['urun_kod_normalized'] = df['urun_kod_normalized'].str.replace(tr_char, ascii_char, regex=False)
+
             return df
         return pd.DataFrame()
     except Exception as e:
@@ -369,22 +384,19 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         return None
 
     try:
-        # Turkce buyuk/kucuk harf varyasyonlari olustur
-        arama_original = arama_text.strip()
-        arama_upper = turkce_upper(arama_original)
-        arama_lower = turkce_lower(arama_original)
-        arama_normalized = normalize_turkish(arama_original)  # ASCII normalized (zuber, biçak -> bicak)
+        # Arama terimini normalize et
+        arama_upper = arama_text.strip().upper()
+        arama_normalized = normalize_turkish(arama_text.strip())
 
         # Cache'de arama yap (cok hizli - bellekte)
         mask_kod = df_all['urun_kod_upper'].str.contains(arama_upper, na=False, regex=False)
-        mask_ad_upper = df_all['urun_ad_upper'].str.contains(arama_upper, na=False, regex=False)
-        mask_ad_lower = df_all['urun_ad_lower'].str.contains(arama_lower, na=False, regex=False)
+        mask_ad = df_all['urun_ad_upper'].str.contains(arama_upper, na=False, regex=False)
         # ASCII normalized arama (ü->u, ş->s ile eslesme)
         mask_kod_normalized = df_all['urun_kod_normalized'].str.contains(arama_normalized, na=False, regex=False)
         mask_ad_normalized = df_all['urun_ad_normalized'].str.contains(arama_normalized, na=False, regex=False)
 
         # Tum sonuclari birlestir
-        mask = mask_kod | mask_ad_upper | mask_ad_lower | mask_kod_normalized | mask_ad_normalized
+        mask = mask_kod | mask_ad | mask_kod_normalized | mask_ad_normalized
         df = df_all[mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
 
         # Tekrarlari kaldir
