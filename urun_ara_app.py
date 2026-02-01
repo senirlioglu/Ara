@@ -195,30 +195,43 @@ def get_cache_date() -> str:
     return cache_date
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=14400, show_spinner=False)  # 4 saat cache (daha uzun)
 def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
     """
     Tum stok verisini yukle ve cache'le.
     cache_key her gun saat 11'de degisir, boylece veri yenilenir.
     Pagination ile tum veriyi ceker.
     """
+    import time as time_module
+
     client = get_supabase_client()
     if not client:
         return None
 
     try:
         all_data = []
-        batch_size = 50000  # Her seferde 50K kayit (daha hizli)
+        batch_size = 20000  # Daha kucuk batch (daha guvenli)
         offset = 0
-        expected_total = 650000  # Tahmini toplam kayit
+        expected_total = 650000
+        max_retries = 3
 
         progress_bar = st.progress(0, text="Stok verisi yukleniyor...")
 
         while True:
-            result = client.table('stok_gunluk')\
-                .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-                .range(offset, offset + batch_size - 1)\
-                .execute()
+            # Retry mekanizmasi
+            for attempt in range(max_retries):
+                try:
+                    result = client.table('stok_gunluk')\
+                        .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
+                        .range(offset, offset + batch_size - 1)\
+                        .execute()
+                    break  # Basarili, donguden cik
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time_module.sleep(2)  # 2 saniye bekle ve tekrar dene
+                        continue
+                    else:
+                        raise e  # Son deneme de basarisiz
 
             if not result.data:
                 break
@@ -235,18 +248,36 @@ def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
 
             offset += batch_size
 
+            # Her batch arasinda kisa bekleme (rate limit icin)
+            time_module.sleep(0.1)
+
         progress_bar.progress(1.0, text="Tamamlandi!")
         progress_bar.empty()
 
         if all_data:
             df = pd.DataFrame(all_data)
-            # Arama icin normalize edilmis sutunlar ekle
-            df['urun_kod_upper'] = df['urun_kod'].fillna('').str.upper()
-            df['urun_ad_upper'] = df['urun_ad'].fillna('').apply(turkce_upper)
-            df['urun_ad_lower'] = df['urun_ad'].fillna('').apply(turkce_lower)
-            # ASCII normalized (ü->u, ş->s, vs.) - Turkce karaktersiz arama icin
-            df['urun_ad_normalized'] = df['urun_ad'].fillna('').apply(normalize_turkish)
-            df['urun_kod_normalized'] = df['urun_kod'].fillna('').apply(normalize_turkish)
+
+            # Sadece gerekli sutunlari isle (bellek tasarrufu)
+            df['urun_kod'] = df['urun_kod'].fillna('')
+            df['urun_ad'] = df['urun_ad'].fillna('')
+
+            # Vectorized upper (daha hizli)
+            df['urun_kod_upper'] = df['urun_kod'].str.upper()
+            df['urun_ad_upper'] = df['urun_ad'].str.upper()
+
+            # Turkce karakter normalizasyonu (vectorized)
+            df['urun_ad_normalized'] = df['urun_ad'].str.lower()
+            df['urun_kod_normalized'] = df['urun_kod'].str.lower()
+
+            # Turkce karakterleri replace et (vectorized - cok daha hizli)
+            tr_replacements = [
+                ('ı', 'i'), ('ğ', 'g'), ('ü', 'u'), ('ş', 's'), ('ö', 'o'), ('ç', 'c'),
+                ('İ', 'i'), ('Ğ', 'g'), ('Ü', 'u'), ('Ş', 's'), ('Ö', 'o'), ('Ç', 'c')
+            ]
+            for tr_char, ascii_char in tr_replacements:
+                df['urun_ad_normalized'] = df['urun_ad_normalized'].str.replace(tr_char, ascii_char, regex=False)
+                df['urun_kod_normalized'] = df['urun_kod_normalized'].str.replace(tr_char, ascii_char, regex=False)
+
             return df
         return pd.DataFrame()
     except Exception as e:
@@ -353,22 +384,19 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         return None
 
     try:
-        # Turkce buyuk/kucuk harf varyasyonlari olustur
-        arama_original = arama_text.strip()
-        arama_upper = turkce_upper(arama_original)
-        arama_lower = turkce_lower(arama_original)
-        arama_normalized = normalize_turkish(arama_original)  # ASCII normalized (zuber, biçak -> bicak)
+        # Arama terimini normalize et
+        arama_upper = arama_text.strip().upper()
+        arama_normalized = normalize_turkish(arama_text.strip())
 
         # Cache'de arama yap (cok hizli - bellekte)
         mask_kod = df_all['urun_kod_upper'].str.contains(arama_upper, na=False, regex=False)
-        mask_ad_upper = df_all['urun_ad_upper'].str.contains(arama_upper, na=False, regex=False)
-        mask_ad_lower = df_all['urun_ad_lower'].str.contains(arama_lower, na=False, regex=False)
+        mask_ad = df_all['urun_ad_upper'].str.contains(arama_upper, na=False, regex=False)
         # ASCII normalized arama (ü->u, ş->s ile eslesme)
         mask_kod_normalized = df_all['urun_kod_normalized'].str.contains(arama_normalized, na=False, regex=False)
         mask_ad_normalized = df_all['urun_ad_normalized'].str.contains(arama_normalized, na=False, regex=False)
 
         # Tum sonuclari birlestir
-        mask = mask_kod | mask_ad_upper | mask_ad_lower | mask_kod_normalized | mask_ad_normalized
+        mask = mask_kod | mask_ad | mask_kod_normalized | mask_ad_normalized
         df = df_all[mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
 
         # Tekrarlari kaldir
