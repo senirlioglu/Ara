@@ -410,14 +410,38 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
 
 def log_arama(arama_terimi: str, sonuc_sayisi: int):
-    """Arama terimini Supabase'e logla"""
+    """Arama terimini Supabase'e logla (gunluk bazda)"""
     try:
         client = get_supabase_client()
         if client and arama_terimi:
-            client.table('arama_log').insert({
-                'arama_terimi': arama_terimi.strip()[:100],  # Max 100 karakter
-                'sonuc_sayisi': sonuc_sayisi
-            }).execute()
+            terim = arama_terimi.strip().lower()[:100]
+            bugun = datetime.now().strftime('%Y-%m-%d')
+
+            # Bugunku kayit var mi kontrol et
+            result = client.table('arama_log')\
+                .select('id, arama_sayisi')\
+                .eq('tarih', bugun)\
+                .eq('arama_terimi', terim)\
+                .execute()
+
+            if result.data:
+                # Varsa sayiyi artir
+                kayit = result.data[0]
+                client.table('arama_log')\
+                    .update({
+                        'arama_sayisi': kayit['arama_sayisi'] + 1,
+                        'sonuc_sayisi': sonuc_sayisi
+                    })\
+                    .eq('id', kayit['id'])\
+                    .execute()
+            else:
+                # Yoksa yeni kayit ekle
+                client.table('arama_log').insert({
+                    'tarih': bugun,
+                    'arama_terimi': terim,
+                    'arama_sayisi': 1,
+                    'sonuc_sayisi': sonuc_sayisi
+                }).execute()
     except:
         pass  # Log hatasi kullaniciyi etkilemesin
 
