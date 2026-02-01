@@ -246,20 +246,19 @@ def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
     df['urun_kod'] = df['urun_kod'].fillna('')
     df['urun_ad'] = df['urun_ad'].fillna('')
 
-    # Turkce buyuk harf donusumu (i -> İ, ı -> I)
-    def tr_upper(s):
-        if not s:
-            return ''
-        s = str(s)
-        for old, new in [('i', 'İ'), ('ı', 'I'), ('ğ', 'Ğ'), ('ü', 'Ü'), ('ş', 'Ş'), ('ö', 'Ö'), ('ç', 'Ç')]:
-            s = s.replace(old, new)
-        return s.upper()
+    # Turkce buyuk harf donusumu - VEKTORIZE (hizli)
+    # Once Turkce karakterleri degistir, sonra upper()
+    df['urun_kod_upper'] = df['urun_kod']
+    df['urun_ad_upper'] = df['urun_ad']
 
-    df['urun_kod_upper'] = df['urun_kod'].apply(tr_upper)
-    df['urun_ad_upper'] = df['urun_ad'].apply(tr_upper)
+    for old, new in [('i', 'İ'), ('ı', 'I'), ('ğ', 'Ğ'), ('ü', 'Ü'), ('ş', 'Ş'), ('ö', 'Ö'), ('ç', 'Ç')]:
+        df['urun_kod_upper'] = df['urun_kod_upper'].str.replace(old, new, regex=False)
+        df['urun_ad_upper'] = df['urun_ad_upper'].str.replace(old, new, regex=False)
 
-    # Normalize: ONCE Turkce karakterleri degistir, SONRA lower
-    # Boylece İ -> i donusumu dogru calısır
+    df['urun_kod_upper'] = df['urun_kod_upper'].str.upper()
+    df['urun_ad_upper'] = df['urun_ad_upper'].str.upper()
+
+    # Normalize: ONCE Turkce karakterleri degistir, SONRA lower - VEKTORIZE
     tr_replacements = [
         ('İ', 'i'), ('I', 'i'), ('ı', 'i'),
         ('Ğ', 'g'), ('ğ', 'g'),
