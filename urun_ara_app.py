@@ -367,6 +367,35 @@ def format_stok_badge(adet: int) -> str:
 # URUN ARAMA
 # ============================================================================
 
+def temizle_turkce_ek(kelime: str) -> list:
+    """Turkce ekleri temizleyip kokleri dondur (mamasi -> mama, tavuklu -> tavuk)"""
+    kelime = kelime.strip().lower()
+    kokler = [kelime]  # Orijinali de dahil et
+
+    # Turkce yaygın ekler (uzundan kısaya sıralı)
+    ekler = [
+        'ları', 'leri', 'ler', 'lar',
+        'lık', 'lik', 'luk', 'lük',
+        'sı', 'si', 'su', 'sü',
+        'lu', 'lü', 'lı', 'li',
+        'cı', 'ci', 'cu', 'cü',
+        'ca', 'ce',
+        'ın', 'in', 'un', 'ün',
+        'nı', 'ni', 'nu', 'nü',
+        'da', 'de', 'ta', 'te',
+        'dan', 'den', 'tan', 'ten',
+        'yla', 'yle',
+    ]
+
+    for ek in ekler:
+        if kelime.endswith(ek) and len(kelime) > len(ek) + 2:
+            kok = kelime[:-len(ek)]
+            if kok not in kokler:
+                kokler.append(kok)
+
+    return kokler
+
+
 def get_es_anlamlilar(kelime: str) -> list:
     """Kelimenin eş anlamlılarını getir"""
     try:
@@ -406,7 +435,7 @@ def fuzzy_ara(arama_text: str) -> Optional[pd.DataFrame]:
 def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.DataFrame], bool]:
     """
     Cache'den urun ara (hizli arama)
-    - urun_kod veya urun_ad icinde arama yapar
+    - Arama terimini kelimelere boler, HER kelime eslesme(olmali (AND mantigi)
     - Case-insensitive ve Turkce karakter duyarsiz
     - Kısa terimler için kelime sınırı kontrolü yapar
     - Sonuç bulunamazsa fuzzy search dener
@@ -423,41 +452,53 @@ def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.
         if df_all is None or df_all.empty:
             return None, False
 
-        # Arama terimini normalize et
-        arama_upper = arama_text.strip().upper()
-        arama_normalized = normalize_turkish(arama_text.strip())
+        # Arama terimini kelimelere bol
+        kelimeler = arama_text.strip().split()
 
-        # Eş anlamlıları bul
-        es_anlamlar = get_es_anlamlilar(arama_text)
-        tum_aramalar = [arama_text.strip()] + es_anlamlar
+        # Her kelime icin es anlamlilar ve kok formlarini ekle
+        tum_kelime_gruplari = []
+        for kelime in kelimeler:
+            # Kok formlarini bul (mamasi -> mama, tavuklu -> tavuk)
+            kokler = temizle_turkce_ek(kelime)
+            # Es anlamlilar
+            es_anlamlar = get_es_anlamlilar(kelime)
+            # Hepsini birlestir
+            tum_formlar = list(set(kokler + es_anlamlar + [kelime]))
+            tum_kelime_gruplari.append(tum_formlar)
 
-        # Her arama terimi için mask oluştur
-        mask = pd.Series([False] * len(df_all))
+        # Her kelime grubu icin mask olustur (AND mantigi)
+        final_mask = pd.Series([True] * len(df_all))
 
-        for terim in tum_aramalar:
-            terim_upper = turkce_upper(terim)
-            terim_normalized = normalize_turkish(terim)
+        for kelime_grubu in tum_kelime_gruplari:
+            # Bu kelime grubu icindeki herhangi biri eslesmeli (OR)
+            grup_mask = pd.Series([False] * len(df_all))
 
-            # Kısa terimler için (2-3 karakter) kelime sınırı kullan
-            if len(terim.strip()) <= 3:
-                # Regex: başta veya boşluktan sonra, sonda veya boşluk/rakamdan önce
-                pattern_upper = r'(^|[\s])' + re.escape(terim_upper) + r'($|[\s\d])'
-                pattern_norm = r'(^|[\s])' + re.escape(terim_normalized) + r'($|[\s\d])'
+            for terim in kelime_grubu:
+                terim_upper = turkce_upper(terim)
+                terim_normalized = normalize_turkish(terim)
 
-                mask_kod = df_all['urun_kod_upper'].str.contains(pattern_upper, na=False, regex=True)
-                mask_ad = df_all['urun_ad_upper'].str.contains(pattern_upper, na=False, regex=True)
-                mask_kod_norm = df_all['urun_kod_normalized'].str.contains(pattern_norm, na=False, regex=True)
-                mask_ad_norm = df_all['urun_ad_normalized'].str.contains(pattern_norm, na=False, regex=True)
-            else:
-                # Uzun terimler için normal contains
-                mask_kod = df_all['urun_kod_upper'].str.contains(terim_upper, na=False, regex=False)
-                mask_ad = df_all['urun_ad_upper'].str.contains(terim_upper, na=False, regex=False)
-                mask_kod_norm = df_all['urun_kod_normalized'].str.contains(terim_normalized, na=False, regex=False)
-                mask_ad_norm = df_all['urun_ad_normalized'].str.contains(terim_normalized, na=False, regex=False)
+                # Kısa terimler için (2-3 karakter) kelime sınırı kullan
+                if len(terim.strip()) <= 3:
+                    pattern_upper = r'(^|[\s])' + re.escape(terim_upper) + r'($|[\s\d])'
+                    pattern_norm = r'(^|[\s])' + re.escape(terim_normalized) + r'($|[\s\d])'
 
-            mask = mask | mask_kod | mask_ad | mask_kod_norm | mask_ad_norm
+                    mask_kod = df_all['urun_kod_upper'].str.contains(pattern_upper, na=False, regex=True)
+                    mask_ad = df_all['urun_ad_upper'].str.contains(pattern_upper, na=False, regex=True)
+                    mask_kod_norm = df_all['urun_kod_normalized'].str.contains(pattern_norm, na=False, regex=True)
+                    mask_ad_norm = df_all['urun_ad_normalized'].str.contains(pattern_norm, na=False, regex=True)
+                else:
+                    # Uzun terimler icin normal contains
+                    mask_kod = df_all['urun_kod_upper'].str.contains(terim_upper, na=False, regex=False)
+                    mask_ad = df_all['urun_ad_upper'].str.contains(terim_upper, na=False, regex=False)
+                    mask_kod_norm = df_all['urun_kod_normalized'].str.contains(terim_normalized, na=False, regex=False)
+                    mask_ad_norm = df_all['urun_ad_normalized'].str.contains(terim_normalized, na=False, regex=False)
 
-        df = df_all[mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
+                grup_mask = grup_mask | mask_kod | mask_ad | mask_kod_norm | mask_ad_norm
+
+            # Her kelime grubu eslesme(olmali (AND)
+            final_mask = final_mask & grup_mask
+
+        df = df_all[final_mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
 
         # Tekrarlari kaldir
         df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
