@@ -358,14 +358,36 @@ def get_es_anlamlilar(kelime: str) -> list:
     return []
 
 
-def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
+def fuzzy_ara(arama_text: str) -> Optional[pd.DataFrame]:
+    """
+    Fuzzy search - benzer yazımları bulur (yazım hatası toleransı)
+    Supabase'deki fuzzy_urun_ara fonksiyonunu kullanır
+    """
+    try:
+        client = get_supabase_client()
+        if not client:
+            return None
+
+        result = client.rpc('fuzzy_urun_ara', {'arama_text': arama_text.strip()}).execute()
+
+        if result.data:
+            df = pd.DataFrame(result.data)
+            return df
+    except:
+        pass
+    return None
+
+
+def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.DataFrame], bool]:
     """
     Cache'den urun ara (hizli arama)
     - urun_kod veya urun_ad icinde arama yapar
     - Case-insensitive ve Turkce karakter duyarsiz
+    - Sonuç bulunamazsa fuzzy search dener
+    Returns: (DataFrame, is_fuzzy) tuple
     """
     if not arama_text or len(arama_text) < 2:
-        return None
+        return None, False
 
     try:
         # Cache'den veri al
@@ -373,7 +395,8 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         df_all = load_all_stok(cache_key)
 
         if df_all is None or df_all.empty:
-            return None
+            return None, False
+
         # Arama terimini normalize et
         arama_upper = arama_text.strip().upper()
         arama_normalized = normalize_turkish(arama_text.strip())
@@ -402,11 +425,21 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         # Tekrarlari kaldir
         df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
 
-        return df
+        # Sonuç varsa döndür
+        if not df.empty:
+            return df, False
+
+        # Sonuç yoksa ve fuzzy aktifse, fuzzy dene
+        if fuzzy_fallback and len(arama_text.strip()) >= 3:
+            df_fuzzy = fuzzy_ara(arama_text)
+            if df_fuzzy is not None and not df_fuzzy.empty:
+                return df_fuzzy, True
+
+        return df, False
 
     except Exception as e:
         st.error(f"Arama hatasi: {e}")
-        return None
+        return None, False
 
 
 def log_arama(arama_terimi: str, sonuc_sayisi: int):
@@ -446,7 +479,7 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
         pass  # Log hatasi kullaniciyi etkilemesin
 
 
-def goster_sonuclar(df: pd.DataFrame, arama_text: str):
+def goster_sonuclar(df: pd.DataFrame, arama_text: str, is_fuzzy: bool = False):
     """Arama sonuçlarını göster"""
     # Arama logla
     sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
@@ -463,6 +496,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         'stok_adet': lambda x: (x > 0).sum()
     }).reset_index()
     urunler.columns = ['urun_kod', 'urun_ad', 'nitelik', 'stoklu_magaza']
+
+    if is_fuzzy:
+        st.info(f"🔮 Benzer sonuçlar gösteriliyor ('{arama_text}' için tam eşleşme bulunamadı)")
 
     st.success(f"**{len(urunler)}** ürün bulundu")
 
@@ -597,9 +633,9 @@ def main():
 
     # Arama yap
     if arama_text and len(arama_text) >= 2:
-        with st.spinner("Araniyor..."):
-            df = ara_urun(arama_text)
-            goster_sonuclar(df, arama_text)
+        with st.spinner("Aranıyor..."):
+            df, is_fuzzy = ara_urun(arama_text)
+            goster_sonuclar(df, arama_text, is_fuzzy)
     elif arama_text and len(arama_text) < 2:
         st.info("En az 2 karakter girin.")
 
