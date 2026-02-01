@@ -148,15 +148,13 @@ st.markdown("""
 
 @st.cache_resource
 def get_supabase_client():
-    """Supabase client olustur"""
+    """Supabase client olustur - UI yok, sadece client dondur"""
     try:
         from supabase import create_client
 
-        # Environment variable'dan oku
         url = os.environ.get('SUPABASE_URL')
         key = os.environ.get('SUPABASE_KEY')
 
-        # Secrets'dan oku (varsa)
         if not url:
             try:
                 url = st.secrets.get('SUPABASE_URL')
@@ -172,9 +170,8 @@ def get_supabase_client():
             return None
 
         return create_client(url, key)
-    except Exception as e:
-        st.error(f"Supabase baglanti hatasi: {e}")
-        return None
+    except:
+        return None  # UI yok, sadece None don
 
 
 def get_cache_date() -> str:
@@ -195,94 +192,72 @@ def get_cache_date() -> str:
     return cache_date
 
 
-@st.cache_data(ttl=14400, show_spinner=False)  # 4 saat cache (daha uzun)
+@st.cache_data(ttl=14400, max_entries=2, show_spinner=False)
 def load_all_stok(cache_key: str) -> Optional[pd.DataFrame]:
     """
     Tum stok verisini yukle ve cache'le.
-    cache_key her gun saat 11'de degisir, boylece veri yenilenir.
-    Pagination ile tum veriyi ceker.
+    UI yok - sadece veri dondur. Progress/error main()'de gosterilir.
+    max_entries=2: sadece 2 gunluk veri tutar, RAM sismasini onler.
     """
     import time as time_module
 
     client = get_supabase_client()
     if not client:
-        return None
+        raise Exception("Veritabani baglantisi kurulamadi")
 
-    try:
-        all_data = []
-        batch_size = 20000  # Daha kucuk batch (daha guvenli)
-        offset = 0
-        expected_total = 650000
-        max_retries = 3
+    all_data = []
+    batch_size = 20000
+    offset = 0
+    max_retries = 3
 
-        progress_bar = st.progress(0, text="Stok verisi yukleniyor...")
-
-        while True:
-            # Retry mekanizmasi
-            for attempt in range(max_retries):
-                try:
-                    result = client.table('stok_gunluk')\
-                        .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
-                        .range(offset, offset + batch_size - 1)\
-                        .execute()
-                    break  # Basarili, donguden cik
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        time_module.sleep(2)  # 2 saniye bekle ve tekrar dene
-                        continue
-                    else:
-                        raise e  # Son deneme de basarisiz
-
-            if not result.data:
+    while True:
+        for attempt in range(max_retries):
+            try:
+                result = client.table('stok_gunluk')\
+                    .select('sm_kod, bs_kod, magaza_kod, magaza_ad, urun_kod, urun_ad, stok_adet, nitelik')\
+                    .range(offset, offset + batch_size - 1)\
+                    .execute()
                 break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time_module.sleep(2)
+                    continue
+                else:
+                    raise e
 
-            all_data.extend(result.data)
+        if not result.data:
+            break
 
-            # Progress guncelle
-            progress = min(len(all_data) / expected_total, 0.99)
-            progress_bar.progress(progress, text=f"Yukleniyor... {len(all_data):,} kayit")
+        all_data.extend(result.data)
 
-            # Eger gelen veri batch_size'dan azsa, son sayfa demektir
-            if len(result.data) < batch_size:
-                break
+        if len(result.data) < batch_size:
+            break
 
-            offset += batch_size
+        offset += batch_size
+        time_module.sleep(0.1)
 
-            # Her batch arasinda kisa bekleme (rate limit icin)
-            time_module.sleep(0.1)
-
-        progress_bar.progress(1.0, text="Tamamlandi!")
-        progress_bar.empty()
-
-        if all_data:
-            df = pd.DataFrame(all_data)
-
-            # Sadece gerekli sutunlari isle (bellek tasarrufu)
-            df['urun_kod'] = df['urun_kod'].fillna('')
-            df['urun_ad'] = df['urun_ad'].fillna('')
-
-            # Vectorized upper (daha hizli)
-            df['urun_kod_upper'] = df['urun_kod'].str.upper()
-            df['urun_ad_upper'] = df['urun_ad'].str.upper()
-
-            # Turkce karakter normalizasyonu (vectorized)
-            df['urun_ad_normalized'] = df['urun_ad'].str.lower()
-            df['urun_kod_normalized'] = df['urun_kod'].str.lower()
-
-            # Turkce karakterleri replace et (vectorized - cok daha hizli)
-            tr_replacements = [
-                ('ı', 'i'), ('ğ', 'g'), ('ü', 'u'), ('ş', 's'), ('ö', 'o'), ('ç', 'c'),
-                ('İ', 'i'), ('Ğ', 'g'), ('Ü', 'u'), ('Ş', 's'), ('Ö', 'o'), ('Ç', 'c')
-            ]
-            for tr_char, ascii_char in tr_replacements:
-                df['urun_ad_normalized'] = df['urun_ad_normalized'].str.replace(tr_char, ascii_char, regex=False)
-                df['urun_kod_normalized'] = df['urun_kod_normalized'].str.replace(tr_char, ascii_char, regex=False)
-
-            return df
+    if not all_data:
         return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Veri yukleme hatasi: {e}")
-        return None
+
+    df = pd.DataFrame(all_data)
+
+    # Veri isleme
+    df['urun_kod'] = df['urun_kod'].fillna('')
+    df['urun_ad'] = df['urun_ad'].fillna('')
+    df['urun_kod_upper'] = df['urun_kod'].str.upper()
+    df['urun_ad_upper'] = df['urun_ad'].str.upper()
+    df['urun_ad_normalized'] = df['urun_ad'].str.lower()
+    df['urun_kod_normalized'] = df['urun_kod'].str.lower()
+
+    tr_replacements = [
+        ('ı', 'i'), ('ğ', 'g'), ('ü', 'u'), ('ş', 's'), ('ö', 'o'), ('ç', 'c'),
+        ('İ', 'i'), ('Ğ', 'g'), ('Ü', 'u'), ('Ş', 's'), ('Ö', 'o'), ('Ç', 'c')
+    ]
+    for tr_char, ascii_char in tr_replacements:
+        df['urun_ad_normalized'] = df['urun_ad_normalized'].str.replace(tr_char, ascii_char, regex=False)
+        df['urun_kod_normalized'] = df['urun_kod_normalized'].str.replace(tr_char, ascii_char, regex=False)
+
+    return df
 
 
 # ============================================================================
@@ -367,46 +342,104 @@ def format_stok_badge(adet: int) -> str:
 # URUN ARAMA
 # ============================================================================
 
-def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
+def get_es_anlamlilar(kelime: str) -> list:
+    """Kelimenin eş anlamlılarını getir"""
+    try:
+        client = get_supabase_client()
+        if client:
+            result = client.table('es_anlamlilar')\
+                .select('es_anlam')\
+                .eq('kelime', kelime.lower().strip())\
+                .execute()
+            if result.data:
+                return [r['es_anlam'] for r in result.data]
+    except:
+        pass
+    return []
+
+
+def fuzzy_ara(arama_text: str) -> Optional[pd.DataFrame]:
+    """
+    Fuzzy search - benzer yazımları bulur (yazım hatası toleransı)
+    Supabase'deki fuzzy_urun_ara fonksiyonunu kullanır
+    """
+    try:
+        client = get_supabase_client()
+        if not client:
+            return None
+
+        result = client.rpc('fuzzy_urun_ara', {'arama_text': arama_text.strip()}).execute()
+
+        if result.data:
+            df = pd.DataFrame(result.data)
+            return df
+    except:
+        pass
+    return None
+
+
+def ara_urun(arama_text: str, fuzzy_fallback: bool = True) -> tuple[Optional[pd.DataFrame], bool]:
     """
     Cache'den urun ara (hizli arama)
     - urun_kod veya urun_ad icinde arama yapar
     - Case-insensitive ve Turkce karakter duyarsiz
+    - Sonuç bulunamazsa fuzzy search dener
+    Returns: (DataFrame, is_fuzzy) tuple
     """
     if not arama_text or len(arama_text) < 2:
-        return None
-
-    # Cache'den veri al
-    cache_key = get_cache_date()
-    df_all = load_all_stok(cache_key)
-
-    if df_all is None or df_all.empty:
-        return None
+        return None, False
 
     try:
+        # Cache'den veri al
+        cache_key = get_cache_date()
+        df_all = load_all_stok(cache_key)
+
+        if df_all is None or df_all.empty:
+            return None, False
+
         # Arama terimini normalize et
         arama_upper = arama_text.strip().upper()
         arama_normalized = normalize_turkish(arama_text.strip())
 
-        # Cache'de arama yap (cok hizli - bellekte)
-        mask_kod = df_all['urun_kod_upper'].str.contains(arama_upper, na=False, regex=False)
-        mask_ad = df_all['urun_ad_upper'].str.contains(arama_upper, na=False, regex=False)
-        # ASCII normalized arama (ü->u, ş->s ile eslesme)
-        mask_kod_normalized = df_all['urun_kod_normalized'].str.contains(arama_normalized, na=False, regex=False)
-        mask_ad_normalized = df_all['urun_ad_normalized'].str.contains(arama_normalized, na=False, regex=False)
+        # Eş anlamlıları bul
+        es_anlamlar = get_es_anlamlilar(arama_text)
+        tum_aramalar = [arama_text.strip()] + es_anlamlar
 
-        # Tum sonuclari birlestir
-        mask = mask_kod | mask_ad | mask_kod_normalized | mask_ad_normalized
+        # Her arama terimi için mask oluştur
+        mask = pd.Series([False] * len(df_all))
+
+        for terim in tum_aramalar:
+            terim_upper = terim.upper()
+            terim_normalized = normalize_turkish(terim)
+
+            # Cache'de arama yap
+            mask_kod = df_all['urun_kod_upper'].str.contains(terim_upper, na=False, regex=False)
+            mask_ad = df_all['urun_ad_upper'].str.contains(terim_upper, na=False, regex=False)
+            mask_kod_norm = df_all['urun_kod_normalized'].str.contains(terim_normalized, na=False, regex=False)
+            mask_ad_norm = df_all['urun_ad_normalized'].str.contains(terim_normalized, na=False, regex=False)
+
+            mask = mask | mask_kod | mask_ad | mask_kod_norm | mask_ad_norm
+
         df = df_all[mask][['sm_kod', 'bs_kod', 'magaza_kod', 'magaza_ad', 'urun_kod', 'urun_ad', 'stok_adet', 'nitelik']].copy()
 
         # Tekrarlari kaldir
         df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
 
-        return df
+        # Sonuç varsa döndür
+        if not df.empty:
+            return df, False
+
+        # Sonuç yoksa ve fuzzy aktifse, fuzzy dene
+        if fuzzy_fallback and len(arama_text.strip()) >= 3:
+            df_fuzzy = fuzzy_ara(arama_text)
+            if df_fuzzy is not None and not df_fuzzy.empty:
+                return df_fuzzy, True
+
+        return df, False
 
     except Exception as e:
         st.error(f"Arama hatasi: {e}")
-        return None
+        return None, False
 
 
 def log_arama(arama_terimi: str, sonuc_sayisi: int):
@@ -446,7 +479,7 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
         pass  # Log hatasi kullaniciyi etkilemesin
 
 
-def goster_sonuclar(df: pd.DataFrame, arama_text: str):
+def goster_sonuclar(df: pd.DataFrame, arama_text: str, is_fuzzy: bool = False):
     """Arama sonuçlarını göster"""
     # Arama logla
     sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
@@ -463,6 +496,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         'stok_adet': lambda x: (x > 0).sum()
     }).reset_index()
     urunler.columns = ['urun_kod', 'urun_ad', 'nitelik', 'stoklu_magaza']
+
+    if is_fuzzy:
+        st.info(f"🔮 Benzer sonuçlar gösteriliyor ('{arama_text}' için tam eşleşme bulunamadı)")
 
     st.success(f"**{len(urunler)}** ürün bulundu")
 
@@ -564,8 +600,13 @@ def main():
 
     # Veri yükle (ilk açılışta)
     cache_key = get_cache_date()
-    with st.spinner("Stok verisi yükleniyor..."):
-        df_all = load_all_stok(cache_key)
+    try:
+        with st.spinner("Stok verisi yükleniyor..."):
+            df_all = load_all_stok(cache_key)
+    except Exception as e:
+        st.error(f"⚠️ Veri yüklenirken hata: {e}")
+        st.info("Lütfen sayfayı yenileyin veya daha sonra tekrar deneyin.")
+        return
 
     if df_all is None or df_all.empty:
         st.error("⚠️ Stok verisi yüklenemedi.")
@@ -592,9 +633,9 @@ def main():
 
     # Arama yap
     if arama_text and len(arama_text) >= 2:
-        with st.spinner("Araniyor..."):
-            df = ara_urun(arama_text)
-            goster_sonuclar(df, arama_text)
+        with st.spinner("Aranıyor..."):
+            df, is_fuzzy = ara_urun(arama_text)
+            goster_sonuclar(df, arama_text, is_fuzzy)
     elif arama_text and len(arama_text) < 2:
         st.info("En az 2 karakter girin.")
 
@@ -602,18 +643,30 @@ def main():
 def admin_panel():
     """Admin paneli - arama analitikleri"""
     from datetime import timedelta
+    import hashlib
+
+    # Basit token oluştur (şifre + tarih)
+    admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
+    today = datetime.now().strftime('%Y-%m-%d')
+    valid_token = hashlib.md5(f"{admin_pass}{today}".encode()).hexdigest()[:16]
+
+    params = st.query_params
+    url_token = params.get("token", "")
+
+    # Token varsa ve geçerliyse direkt giriş
+    if url_token == valid_token:
+        st.session_state.admin_auth = True
 
     # Şifre kontrolü
-    if 'admin_auth' not in st.session_state:
-        st.session_state.admin_auth = False
-
-    if not st.session_state.admin_auth:
+    if not st.session_state.get('admin_auth', False):
         st.title("🔐 Admin Girişi")
         password = st.text_input("Şifre:", type="password")
         if st.button("Giriş"):
-            admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
             if password == admin_pass:
                 st.session_state.admin_auth = True
+                # Token'ı URL'e ekle (yenileme için)
+                st.query_params["admin"] = "true"
+                st.query_params["token"] = valid_token
                 st.rerun()
             else:
                 st.error("Yanlış şifre!")
