@@ -151,7 +151,7 @@ def temizle_ve_kok_bul(text: str) -> str:
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
     SERVER-SIDE SEARCH
-    SQL basit getirsin, Python akıllı filtrelesin.
+    SQL hızlı getirsin, Python akıllı filtrelesin.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -163,26 +163,16 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
         optimize_sorgu = temizle_ve_kok_bul(arama_text)
 
-        # 1. SQL'den veriyi al (RPC veya doğrudan sorgu)
-        try:
-            # Önce RPC dene
-            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
-        except:
-            # RPC başarısızsa doğrudan sorgu
-            result = client.table('stok_gunluk')\
-                .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
-                .gt('stok_adet', 0)\
-                .ilike('urun_ad', f'%{optimize_sorgu}%')\
-                .limit(500)\
-                .execute()
+        # SQL RPC çağır
+        result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
 
         if result.data:
             df = pd.DataFrame(result.data)
 
-            # out_ prefix temizle (RPC'den geliyorsa)
+            # Sütun isimlerini düzelt (out_ prefix varsa temizle)
             df.columns = [col.replace('out_', '') for col in df.columns]
 
-            # 2. PYTHON İLE AKILLI FİLTRELEME
+            # PYTHON İLE ÇÖP TEMİZLİĞİ (CPU'da, DB'yi yormaz)
             arama_lower = optimize_sorgu.lower()
             if arama_lower in ['tv', 'televizyon']:
                 yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
