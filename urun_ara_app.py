@@ -217,6 +217,7 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
 
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
+
     sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
     log_arama(arama_text, sonuc_sayisi)
 
@@ -224,25 +225,22 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
-    # Ürün bazlı grupla
-    agg_dict = {
+    # Pandas Aggregation
+    urunler = df.groupby('urun_kod').agg({
         'urun_ad': 'first',
         'stok_adet': lambda x: (x > 0).sum()
-    }
-    # nitelik varsa ekle
-    if 'nitelik' in df.columns:
-        agg_dict['nitelik'] = 'first'
+    }).reset_index()
 
-    urunler = df.groupby('urun_kod').agg(agg_dict).reset_index()
-    urunler = urunler.rename(columns={'stok_adet': 'stoklu_magaza'})
+    urunler.columns = ['urun_kod', 'urun_ad', 'stoklu_magaza']
 
-    st.success(f"**{len(urunler)}** ürün bulundu")
+    st.success(f"**{len(urunler)}** farklı ürün bulundu")
 
     for _, urun in urunler.iterrows():
         urun_kod = urun['urun_kod']
-        urun_ad = urun['urun_ad'] or urun_kod
+        urun_ad = urun['urun_ad'] if urun['urun_ad'] else urun_kod
         stoklu_magaza = int(urun['stoklu_magaza'])
 
+        # Detay verisi
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].sort_values('stok_adet', ascending=False)
 
@@ -254,18 +252,41 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
                 for _, row in urun_df_stoklu.iterrows():
-                    seviye, _, renk = get_stok_seviye(row['stok_adet'])
-                    adet = int(row['stok_adet'])
-                    magaza_ad = row.get('magaza_ad') or row.get('magaza_kod') or "Bilinmiyor"
-                    sm = row.get('sm_kod', '-') or '-'
-                    bs = row.get('bs_kod', '-') or '-'
+                    try:
+                        seviye, _, renk = get_stok_seviye(row['stok_adet'])
+                    except:
+                        seviye, renk = "Normal", "#3498db"
 
-                    # Fiyat formatla
+                    adet = int(row['stok_adet'])
+                    magaza_ad = row['magaza_ad'] or row['magaza_kod']
+
+                    # Veriler boşsa "-" koyuyoruz
+                    sm = row.get('sm_kod')
+                    if sm is None: sm = "-"
+
+                    bs = row.get('bs_kod')
+                    if bs is None: bs = "-"
+
+                    # --- FİYAT KONTROLÜ (GÜVENLİ) ---
                     ham_fiyat = row.get('birim_fiyat')
-                    if ham_fiyat and ham_fiyat > 0:
-                        fiyat_str = f"₺{ham_fiyat:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    if ham_fiyat is not None and float(ham_fiyat) > 0:
+                        fiyat_str = f"{float(ham_fiyat):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
                     else:
                         fiyat_str = ""
+
+                    # --- HARİTA KONTROLÜ (GÜVENLİ) ---
+                    lat = row.get('latitude')
+                    lon = row.get('longitude')
+
+                    if lat is not None and lon is not None:
+                        map_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+                        harita_ikonu = f"""
+                            <a href="{map_link}" target="_blank" style="text-decoration:none; margin-left:8px;" title="Haritada Göster">
+                                📍
+                            </a>
+                        """
+                    else:
+                        harita_ikonu = ""
 
                     st.markdown(f"""
                     <div style="
@@ -281,22 +302,28 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                         gap: 8px;
                     ">
                         <div style="flex: 1; min-width: 200px;">
-                            <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f;">{magaza_ad}</div>
-                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">SM: {sm}  •  BS: {bs}</div>
-                        </div>
-                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                            {"<div style='font-weight: 600; color: #1e3a5f; font-size: 0.95rem;'>" + fiyat_str + "</div>" if fiyat_str else ""}
-                            <div style="
-                                background: {renk};
-                                color: white;
-                                padding: 6px 14px;
-                                border-radius: 20px;
-                                font-weight: 600;
-                                font-size: 0.9rem;
-                                white-space: nowrap;
-                            ">
-                                {adet} Adet ({seviye})
+                            <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f; display:flex; align-items:center;">
+                                {magaza_ad}
+                                {harita_ikonu}
+                                <span style="font-weight:normal; color:#2ecc71; font-size:0.9rem; margin-left:10px;">
+                                    {fiyat_str}
+                                </span>
                             </div>
+                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
+                                <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
+                            </div>
+                        </div>
+
+                        <div style="
+                            background: {renk};
+                            color: white;
+                            padding: 6px 14px;
+                            border-radius: 20px;
+                            font-weight: 600;
+                            font-size: 0.9rem;
+                            white-space: nowrap;
+                        ">
+                            {adet} Adet
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
