@@ -274,12 +274,12 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     else:
                         fiyat_str = ""
 
-                    # --- HARİTA KONTROLÜ (GÜVENLİ) ---
+                    # --- HARİTA KONTROLÜ (DÜZELTİLDİ) ---
                     lat = row.get('latitude')
                     lon = row.get('longitude')
 
                     if lat is not None and lon is not None:
-                        map_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+                        map_link = f"https://www.google.com/maps?q={lat},{lon}"
                         harita_ikonu = f"""
                             <a href="{map_link}" target="_blank" style="text-decoration:none; margin-left:8px;" title="Haritada Göster">
                                 📍
