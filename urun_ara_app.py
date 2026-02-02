@@ -260,6 +260,13 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     sm = row.get('sm_kod', '-') or '-'
                     bs = row.get('bs_kod', '-') or '-'
 
+                    # Fiyat formatla
+                    ham_fiyat = row.get('birim_fiyat')
+                    if ham_fiyat and ham_fiyat > 0:
+                        fiyat_str = f"₺{ham_fiyat:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    else:
+                        fiyat_str = ""
+
                     st.markdown(f"""
                     <div style="
                         background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%);
@@ -277,16 +284,19 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f;">{magaza_ad}</div>
                             <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">SM: {sm}  •  BS: {bs}</div>
                         </div>
-                        <div style="
-                            background: {renk};
-                            color: white;
-                            padding: 6px 14px;
-                            border-radius: 20px;
-                            font-weight: 600;
-                            font-size: 0.9rem;
-                            white-space: nowrap;
-                        ">
-                            {adet} Adet ({seviye})
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            {"<div style='font-weight: 600; color: #1e3a5f; font-size: 0.95rem;'>" + fiyat_str + "</div>" if fiyat_str else ""}
+                            <div style="
+                                background: {renk};
+                                color: white;
+                                padding: 6px 14px;
+                                border-radius: 20px;
+                                font-weight: 600;
+                                font-size: 0.9rem;
+                                white-space: nowrap;
+                            ">
+                                {adet} Adet ({seviye})
+                            </div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
