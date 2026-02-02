@@ -150,8 +150,9 @@ def temizle_ve_kok_bul(text: str) -> str:
 
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
-    SERVER-SIDE SEARCH
-    SQL hızlı getirsin, Python akıllı filtrelesin.
+    SERVER-SIDE SEARCH - Hibrit yaklaşım
+    TV → FTS (hızlı), Televizyon → Trigram (hızlı)
+    Negatif filtreler Python'da (CPU'da)
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -163,16 +164,21 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
         optimize_sorgu = temizle_ve_kok_bul(arama_text)
 
-        # SQL RPC çağır
+        # RPC Çağrısı
         result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+
+        # Hata kontrolü
+        if hasattr(result, 'error') and result.error:
+            st.error(f"Sistem Hatası: {result.error}")
+            return None
 
         if result.data:
             df = pd.DataFrame(result.data)
 
-            # Sütun isimlerini düzelt (out_ prefix varsa temizle)
+            # out_ prefix temizle (güvenlik için)
             df.columns = [col.replace('out_', '') for col in df.columns]
 
-            # PYTHON İLE ÇÖP TEMİZLİĞİ (CPU'da, DB'yi yormaz)
+            # PYTHON TARAFI NEGATİF FİLTRELEME (CPU)
             arama_lower = optimize_sorgu.lower()
             if arama_lower in ['tv', 'televizyon']:
                 yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
@@ -184,10 +190,11 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
+        # Sonuç yoksa boş DataFrame
         return pd.DataFrame()
 
     except Exception as e:
-        st.error(f"Arama hatası: {e}")
+        st.error(f"Beklenmeyen Hata: {e}")
         return None
 
 
