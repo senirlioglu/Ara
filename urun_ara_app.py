@@ -162,14 +162,19 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        optimize_sorgu = temizle_ve_kok_bul(arama_text)
+        # Sayıysa kök bulma yapma
+        arama_raw = arama_text.strip()
+        if arama_raw.isdigit():
+            optimize_sorgu = arama_raw
+        else:
+            optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
         # RPC Çağrısı
         result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
 
         # Hata kontrolü
-        if hasattr(result, 'error') and result.error:
-            st.error(f"Sistem Hatası: {result.error}")
+        if getattr(result, 'error', None):
+            st.error(f"Arama hatası (RPC): {result.error}")
             return None
 
         if result.data:
@@ -232,10 +237,15 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
 
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
-    sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
+    # Hata varsa (None) sessizce çık - hata mesajı zaten basıldı
+    if df is None:
+        return
+
+    sonuc_sayisi = 0 if df.empty else len(df['urun_kod'].unique())
     log_arama(arama_text, sonuc_sayisi)
 
-    if df is None or df.empty:
+    # Sonuç yoksa (empty) kullanıcıya bildir
+    if df.empty:
         st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
