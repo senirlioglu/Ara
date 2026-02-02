@@ -150,12 +150,8 @@ def temizle_ve_kok_bul(text: str) -> str:
 
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
-    SERVER-SIDE SEARCH:
-    1. Python'da kökleri bul (mamasi -> mama)
-    2. SQL'e temizlenmiş sorguyu gönder
-    3. Sonuçları döndür
-
-    RAM'e veri yüklemez, anlık sorgular.
+    SERVER-SIDE SEARCH - Doğrudan tablo sorgusu
+    RPC timeout sorununu aşmak için direkt sorgu kullanıyoruz.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -165,16 +161,19 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # 1. Kökleri bul
+        # 1. Kökleri bul ve temizle
         optimize_sorgu = temizle_ve_kok_bul(arama_text)
 
-        # 2. Supabase RPC çağır
-        result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+        # 2. Doğrudan tablo sorgusu (RPC yerine)
+        result = client.table('stok_gunluk')\
+            .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
+            .gt('stok_adet', 0)\
+            .ilike('urun_ad', f'%{optimize_sorgu}%')\
+            .limit(300)\
+            .execute()
 
         if result.data:
             df = pd.DataFrame(result.data)
-            # out_ prefix'lerini kaldır
-            df.columns = [col.replace('out_', '') for col in df.columns]
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
