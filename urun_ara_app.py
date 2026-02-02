@@ -173,6 +173,8 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
         if result.data:
             df = pd.DataFrame(result.data)
+            # out_ prefix'lerini kaldır
+            df.columns = [col.replace('out_', '') for col in df.columns]
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
