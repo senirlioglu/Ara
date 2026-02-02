@@ -151,7 +151,7 @@ def temizle_ve_kok_bul(text: str) -> str:
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
     SERVER-SIDE SEARCH - Doğrudan tablo sorgusu
-    RPC timeout sorununu aşmak için direkt sorgu kullanıyoruz.
+    Eşanlamlı kelimeler SQL'de OR ile aranır.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -172,32 +172,27 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             'laptop': 'bilgisayar',
             'telefon': 'cep',
             'cep': 'telefon',
-            'buzdolabi': 'buzdolabı',
-            'camasir': 'çamaşır',
-            'bulasik': 'bulaşık',
         }
 
-        # Arama terimlerini topla
+        # OR filtresi oluştur
         arama_terimleri = [optimize_sorgu]
         for kelime, esanlam in esanlamli.items():
             if kelime in optimize_sorgu.lower():
                 alternatif = optimize_sorgu.lower().replace(kelime, esanlam)
                 arama_terimleri.append(alternatif)
 
-        # 3. Tüm terimler için arama yap
-        tum_sonuclar = []
-        for terim in arama_terimleri:
-            result = client.table('stok_gunluk')\
-                .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
-                .gt('stok_adet', 0)\
-                .ilike('urun_ad', f'%{terim}%')\
-                .limit(300)\
-                .execute()
-            if result.data:
-                tum_sonuclar.extend(result.data)
+        # Tek sorgu ile OR kullan
+        or_filter = ','.join([f'urun_ad.ilike.%{t}%' for t in arama_terimleri])
 
-        if tum_sonuclar:
-            df = pd.DataFrame(tum_sonuclar)
+        result = client.table('stok_gunluk')\
+            .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
+            .gt('stok_adet', 0)\
+            .or_(or_filter)\
+            .limit(300)\
+            .execute()
+
+        if result.data:
+            df = pd.DataFrame(result.data)
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
