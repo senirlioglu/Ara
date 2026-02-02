@@ -173,6 +173,8 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
         if result.data:
             df = pd.DataFrame(result.data)
+            # out_ prefix'lerini kaldır
+            df.columns = [col.replace('out_', '') for col in df.columns]
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
@@ -217,7 +219,6 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
 
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
-
     sonuc_sayisi = 0 if df is None or df.empty else len(df['urun_kod'].unique())
     log_arama(arama_text, sonuc_sayisi)
 
@@ -225,7 +226,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
-    # Pandas Aggregation
+    # Pandas Gruplama
     urunler = df.groupby('urun_kod').agg({
         'urun_ad': 'first',
         'stok_adet': lambda x: (x > 0).sum()
@@ -240,7 +241,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         urun_ad = urun['urun_ad'] if urun['urun_ad'] else urun_kod
         stoklu_magaza = int(urun['stoklu_magaza'])
 
-        # Detay verisi
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].sort_values('stok_adet', ascending=False)
 
@@ -260,39 +260,54 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     adet = int(row['stok_adet'])
                     magaza_ad = row['magaza_ad'] or row['magaza_kod']
 
-                    # Veriler boşsa "-" koyuyoruz
-                    sm = row.get('sm_kod')
-                    if sm is None: sm = "-"
+                    # Güvenli Veri Çekme
+                    sm = row.get('sm_kod') or "-"
+                    bs = row.get('bs_kod') or "-"
 
-                    bs = row.get('bs_kod')
-                    if bs is None: bs = "-"
-
-                    # --- FİYAT KONTROLÜ (GÜVENLİ) ---
+                    # Fiyat Gösterimi (0 ise gösterme)
                     ham_fiyat = row.get('birim_fiyat')
-                    if ham_fiyat is not None and float(ham_fiyat) > 0:
+                    if ham_fiyat and float(ham_fiyat) > 0:
                         fiyat_str = f"{float(ham_fiyat):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
                     else:
                         fiyat_str = ""
 
-                    # --- HARİTA KONTROLÜ ---
+                    # Harita Linki
                     lat = row.get('latitude')
                     lon = row.get('longitude')
 
-                    if lat is not None and lon is not None:
+                    if lat and lon:
                         harita_ikonu = f'<a href="https://www.google.com/maps?q={lat},{lon}" target="_blank" style="text-decoration:none; margin-left:8px;" title="Haritada Göster">📍</a>'
                     else:
                         harita_ikonu = ""
 
-                    # Fiyat span
-                    fiyat_html = f'<span style="font-weight:normal; color:#2ecc71; font-size:0.9rem; margin-left:10px;">{fiyat_str}</span>' if fiyat_str else ""
-
-                    st.markdown(f"""<div style="background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%); border-left: 4px solid {renk}; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%);
+                        border-left: 4px solid {renk};
+                        border-radius: 8px;
+                        padding: 12px 16px;
+                        margin-bottom: 8px;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        flex-wrap: wrap;
+                        gap: 8px;
+                    ">
                         <div style="flex: 1; min-width: 200px;">
-                            <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f; display:flex; align-items:center;">{magaza_ad}{harita_ikonu}{fiyat_html}</div>
-                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;"><b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i></div>
+                            <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f; display:flex; align-items:center;">
+                                {magaza_ad}
+                                {harita_ikonu}
+                                <span style="font-weight:normal; color:#2ecc71; font-size:0.9rem; margin-left:10px;">{fiyat_str}</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
+                                <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
+                            </div>
                         </div>
-                        <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem; white-space: nowrap;">{adet} Adet</div>
-                    </div>""", unsafe_allow_html=True)
+                        <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
+                            {adet} Adet
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
 
 # ============================================================================
