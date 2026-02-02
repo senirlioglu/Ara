@@ -274,59 +274,25 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     else:
                         fiyat_str = ""
 
-                    # --- HARİTA KONTROLÜ (DÜZELTİLDİ) ---
+                    # --- HARİTA KONTROLÜ ---
                     lat = row.get('latitude')
                     lon = row.get('longitude')
 
                     if lat is not None and lon is not None:
-                        map_link = f"https://www.google.com/maps?q={lat},{lon}"
-                        harita_ikonu = f"""
-                            <a href="{map_link}" target="_blank" style="text-decoration:none; margin-left:8px;" title="Haritada Göster">
-                                📍
-                            </a>
-                        """
+                        harita_ikonu = f'<a href="https://www.google.com/maps?q={lat},{lon}" target="_blank" style="text-decoration:none; margin-left:8px;" title="Haritada Göster">📍</a>'
                     else:
                         harita_ikonu = ""
 
-                    st.markdown(f"""
-                    <div style="
-                        background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%);
-                        border-left: 4px solid {renk};
-                        border-radius: 8px;
-                        padding: 12px 16px;
-                        margin-bottom: 8px;
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        flex-wrap: wrap;
-                        gap: 8px;
-                    ">
-                        <div style="flex: 1; min-width: 200px;">
-                            <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f; display:flex; align-items:center;">
-                                {magaza_ad}
-                                {harita_ikonu}
-                                <span style="font-weight:normal; color:#2ecc71; font-size:0.9rem; margin-left:10px;">
-                                    {fiyat_str}
-                                </span>
-                            </div>
-                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
-                                <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
-                            </div>
-                        </div>
+                    # Fiyat span
+                    fiyat_html = f'<span style="font-weight:normal; color:#2ecc71; font-size:0.9rem; margin-left:10px;">{fiyat_str}</span>' if fiyat_str else ""
 
-                        <div style="
-                            background: {renk};
-                            color: white;
-                            padding: 6px 14px;
-                            border-radius: 20px;
-                            font-weight: 600;
-                            font-size: 0.9rem;
-                            white-space: nowrap;
-                        ">
-                            {adet} Adet
+                    st.markdown(f"""<div style="background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%); border-left: 4px solid {renk}; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                        <div style="flex: 1; min-width: 200px;">
+                            <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f; display:flex; align-items:center;">{magaza_ad}{harita_ikonu}{fiyat_html}</div>
+                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;"><b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i></div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem; white-space: nowrap;">{adet} Adet</div>
+                    </div>""", unsafe_allow_html=True)
 
 
 # ============================================================================
