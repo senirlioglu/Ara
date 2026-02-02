@@ -407,6 +407,17 @@ def admin_panel():
         else:
             st.dataframe(sonucsuz_df, use_container_width=True, hide_index=True)
 
+        # Bugün arananlar
+        st.subheader("🕐 Bugün Arananlar")
+        bugun = datetime.now().strftime('%Y-%m-%d')
+        bugun_df = df[df['tarih'] == bugun].sort_values('arama_sayisi', ascending=False)
+        if bugun_df.empty:
+            st.info("Bugün henüz arama yapılmamış")
+        else:
+            bugun_df = bugun_df[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].head(30)
+            bugun_df.columns = ['Terim', 'Arama', 'Sonuç']
+            st.dataframe(bugun_df, use_container_width=True, hide_index=True)
+
     except Exception as e:
         st.error(f"Hata: {e}")
 
