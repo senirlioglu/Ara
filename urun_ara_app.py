@@ -164,16 +164,40 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         # 1. Kökleri bul ve temizle
         optimize_sorgu = temizle_ve_kok_bul(arama_text)
 
-        # 2. Doğrudan tablo sorgusu (RPC yerine)
-        result = client.table('stok_gunluk')\
-            .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
-            .gt('stok_adet', 0)\
-            .ilike('urun_ad', f'%{optimize_sorgu}%')\
-            .limit(300)\
-            .execute()
+        # 2. Eşanlamlı kelimeler
+        esanlamli = {
+            'televizyon': 'tv',
+            'tv': 'televizyon',
+            'bilgisayar': 'laptop',
+            'laptop': 'bilgisayar',
+            'telefon': 'cep',
+            'cep': 'telefon',
+            'buzdolabi': 'buzdolabı',
+            'camasir': 'çamaşır',
+            'bulasik': 'bulaşık',
+        }
 
-        if result.data:
-            df = pd.DataFrame(result.data)
+        # Arama terimlerini topla
+        arama_terimleri = [optimize_sorgu]
+        for kelime, esanlam in esanlamli.items():
+            if kelime in optimize_sorgu.lower():
+                alternatif = optimize_sorgu.lower().replace(kelime, esanlam)
+                arama_terimleri.append(alternatif)
+
+        # 3. Tüm terimler için arama yap
+        tum_sonuclar = []
+        for terim in arama_terimleri:
+            result = client.table('stok_gunluk')\
+                .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
+                .gt('stok_adet', 0)\
+                .ilike('urun_ad', f'%{terim}%')\
+                .limit(300)\
+                .execute()
+            if result.data:
+                tum_sonuclar.extend(result.data)
+
+        if tum_sonuclar:
+            df = pd.DataFrame(tum_sonuclar)
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
