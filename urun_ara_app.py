@@ -169,12 +169,15 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if result.data:
             df = pd.DataFrame(result.data)
 
-            # PYTHON İLE AKILLI FİLTRELEME (DB'ye yük bindirme)
+            # Sütun isimlerini düzelt (out_ prefix varsa temizle)
+            df.columns = [col.replace('out_', '') for col in df.columns]
+
+            # PYTHON İLE ÇÖP TEMİZLİĞİ (CPU'da, DB'yi yormaz)
             arama_lower = optimize_sorgu.lower()
             if arama_lower in ['tv', 'televizyon']:
                 yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
                            'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
-                           'atv', 'oyuncak', 'lisanslı', 'tvk', 'cetvel']
+                           'atv', 'oyuncak', 'lisanslı', 'tvk']
                 for yasak in yasakli:
                     df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
 
