@@ -151,7 +151,7 @@ def temizle_ve_kok_bul(text: str) -> str:
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
     SERVER-SIDE SEARCH
-    SQL basit getirsin, Python akıllı filtrelesin.
+    SQL hızlı getirsin, Python akıllı filtrelesin.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -163,31 +163,18 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
         optimize_sorgu = temizle_ve_kok_bul(arama_text)
 
-        # 1. SQL'den veriyi al (RPC veya doğrudan sorgu)
-        try:
-            # Önce RPC dene
-            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
-        except:
-            # RPC başarısızsa doğrudan sorgu
-            result = client.table('stok_gunluk')\
-                .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
-                .gt('stok_adet', 0)\
-                .ilike('urun_ad', f'%{optimize_sorgu}%')\
-                .limit(500)\
-                .execute()
+        # SQL RPC çağır
+        result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
 
         if result.data:
             df = pd.DataFrame(result.data)
 
-            # out_ prefix temizle (RPC'den geliyorsa)
-            df.columns = [col.replace('out_', '') for col in df.columns]
-
-            # 2. PYTHON İLE AKILLI FİLTRELEME
+            # PYTHON İLE AKILLI FİLTRELEME (DB'ye yük bindirme)
             arama_lower = optimize_sorgu.lower()
             if arama_lower in ['tv', 'televizyon']:
                 yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
                            'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
-                           'atv', 'oyuncak', 'lisanslı', 'tvk']
+                           'atv', 'oyuncak', 'lisanslı', 'tvk', 'cetvel']
                 for yasak in yasakli:
                     df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
 
