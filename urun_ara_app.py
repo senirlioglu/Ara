@@ -150,8 +150,8 @@ def temizle_ve_kok_bul(text: str) -> str:
 
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
-    SERVER-SIDE SEARCH - Doğrudan tablo sorgusu
-    Eşanlamlı kelimeler SQL'de OR ile aranır.
+    SERVER-SIDE SEARCH
+    SQL basit getirsin, Python akıllı filtrelesin.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -161,38 +161,36 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # 1. Kökleri bul ve temizle
         optimize_sorgu = temizle_ve_kok_bul(arama_text)
 
-        # 2. Eşanlamlı kelimeler
-        esanlamli = {
-            'televizyon': 'tv',
-            'tv': 'televizyon',
-            'bilgisayar': 'laptop',
-            'laptop': 'bilgisayar',
-            'telefon': 'cep',
-            'cep': 'telefon',
-        }
-
-        # OR filtresi oluştur
-        arama_terimleri = [optimize_sorgu]
-        for kelime, esanlam in esanlamli.items():
-            if kelime in optimize_sorgu.lower():
-                alternatif = optimize_sorgu.lower().replace(kelime, esanlam)
-                arama_terimleri.append(alternatif)
-
-        # Tek sorgu ile OR kullan
-        or_filter = ','.join([f'urun_ad.ilike.%{t}%' for t in arama_terimleri])
-
-        result = client.table('stok_gunluk')\
-            .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
-            .gt('stok_adet', 0)\
-            .or_(or_filter)\
-            .limit(300)\
-            .execute()
+        # 1. SQL'den veriyi al (RPC veya doğrudan sorgu)
+        try:
+            # Önce RPC dene
+            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+        except:
+            # RPC başarısızsa doğrudan sorgu
+            result = client.table('stok_gunluk')\
+                .select('id, urun_kod, urun_ad, magaza_kod, magaza_ad, birim_fiyat, stok_adet, sm_kod, bs_kod, nitelik')\
+                .gt('stok_adet', 0)\
+                .ilike('urun_ad', f'%{optimize_sorgu}%')\
+                .limit(500)\
+                .execute()
 
         if result.data:
             df = pd.DataFrame(result.data)
+
+            # out_ prefix temizle (RPC'den geliyorsa)
+            df.columns = [col.replace('out_', '') for col in df.columns]
+
+            # 2. PYTHON İLE AKILLI FİLTRELEME
+            arama_lower = optimize_sorgu.lower()
+            if arama_lower in ['tv', 'televizyon']:
+                yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
+                           'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
+                           'atv', 'oyuncak', 'lisanslı', 'tvk']
+                for yasak in yasakli:
+                    df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
+
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
