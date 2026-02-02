@@ -225,12 +225,16 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         return
 
     # Ürün bazlı grupla
-    urunler = df.groupby('urun_kod').agg({
+    agg_dict = {
         'urun_ad': 'first',
-        'nitelik': 'first',
         'stok_adet': lambda x: (x > 0).sum()
-    }).reset_index()
-    urunler.columns = ['urun_kod', 'urun_ad', 'nitelik', 'stoklu_magaza']
+    }
+    # nitelik varsa ekle
+    if 'nitelik' in df.columns:
+        agg_dict['nitelik'] = 'first'
+
+    urunler = df.groupby('urun_kod').agg(agg_dict).reset_index()
+    urunler = urunler.rename(columns={'stok_adet': 'stoklu_magaza'})
 
     st.success(f"**{len(urunler)}** ürün bulundu")
 
@@ -252,9 +256,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                 for _, row in urun_df_stoklu.iterrows():
                     seviye, _, renk = get_stok_seviye(row['stok_adet'])
                     adet = int(row['stok_adet'])
-                    magaza_ad = row.get('magaza_ad', row['magaza_kod']) or row['magaza_kod']
-                    sm = row.get('sm_kod', '-') or '-'
-                    bs = row.get('bs_kod', '-') or '-'
+                    magaza_ad = row.get('magaza_ad') or row.get('magaza_kod') or "Bilinmiyor"
+                    magaza_kod = row.get('magaza_kod', '-')
 
                     st.markdown(f"""
                     <div style="
@@ -271,7 +274,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     ">
                         <div style="flex: 1; min-width: 200px;">
                             <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f;">{magaza_ad}</div>
-                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">SM: {sm}  •  BS: {bs}</div>
+                            <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">Mağaza Kodu: {magaza_kod}</div>
                         </div>
                         <div style="
                             background: {renk};
@@ -282,7 +285,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             font-size: 0.9rem;
                             white-space: nowrap;
                         ">
-                            {adet} Adet ({seviye})
+                            {adet} Adet
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
