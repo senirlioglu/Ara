@@ -299,7 +299,14 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     lon = row.get('longitude')
 
                     if lat and lon:
-                        harita_ikonu = f'<a href="https://www.google.com/maps?q={lat},{lon}" target="_blank" style="text-decoration:none; margin-left:8px;" title="Haritada Göster">📍</a>'
+                        harita_ikonu = (
+                            f'<a href="https://www.google.com/maps?q={lat},{lon}" '
+                            'target="_blank" '
+                            'style="text-decoration:none; margin-left:8px; padding:4px 8px; '
+                            'border-radius:12px; background:#eef2ff; color:#374151; font-size:0.78rem;" '
+                            'title="Yol tarifi al">'
+                            '📍 Yol tarifi</a>'
+                        )
                     else:
                         harita_ikonu = ""
 
