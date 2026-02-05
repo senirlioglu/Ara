@@ -7,6 +7,7 @@ Tüm arama işlemleri PostgreSQL'de yapılır. RAM kullanımı minimal.
 import streamlit as st
 import pandas as pd
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
@@ -89,15 +90,16 @@ def get_stok_seviye(adet: int) -> tuple:
         return "Yüksek", "stok-yuksek", "#2196f3"
 
 
-def temizle_ve_kok_bul(text: str) -> str:
-    """
-    Arama terimini temizle ve kökleri bul.
-    'kedi maması tavuklu' -> 'kedi mama tavuk'
-    """
+STOP_WORDS = {
+    "ve", "ile", "icin", "bir", "tek", "adet", "set", "paket", "parca"
+}
+
+
+def normalize_turkish(text: str) -> str:
+    """Türkçe karakterleri ASCII'ye normalize et ve küçült."""
     if not text:
         return ""
 
-    # Türkçe -> ASCII dönüşümü
     tr_map = {
         'İ': 'i', 'I': 'i', 'ı': 'i',
         'Ğ': 'g', 'ğ': 'g',
@@ -110,6 +112,19 @@ def temizle_ve_kok_bul(text: str) -> str:
     clean_text = text
     for tr, eng in tr_map.items():
         clean_text = clean_text.replace(tr, eng)
+
+    return clean_text.lower()
+
+
+def temizle_ve_kok_bul(text: str) -> str:
+    """
+    Arama terimini temizle ve kökleri bul.
+    'kedi maması tavuklu' -> 'kedi mama tavuk'
+    """
+    if not text:
+        return ""
+
+    clean_text = normalize_turkish(text)
 
     # Türkçe ekler (uzundan kısaya)
     ekler = [
@@ -126,7 +141,7 @@ def temizle_ve_kok_bul(text: str) -> str:
         'yi', 'yu', 'yı', 'yü',
     ]
 
-    kelimeler = clean_text.lower().split()
+    kelimeler = clean_text.split()
     temiz_kelimeler = []
 
     for kelime in kelimeler:
@@ -142,6 +157,100 @@ def temizle_ve_kok_bul(text: str) -> str:
         temiz_kelimeler.append(kok)
 
     return " ".join(temiz_kelimeler)
+
+
+def arama_tokenleri(text: str, max_tokens: int = 6) -> list:
+    """Arama terimini normalize edip tokenlere ayir."""
+    if not text:
+        return []
+
+    normalized = temizle_ve_kok_bul(text)
+    normalized = re.sub(r"[^0-9a-z]+", " ", normalized)
+
+    tokens = []
+    seen = set()
+    for tok in normalized.split():
+        tok = tok.lower()
+        if tok in seen:
+            continue
+        if tok in STOP_WORDS:
+            continue
+        if len(tok) < 2:
+            continue
+        if len(tok) < 3 and not tok.isdigit():
+            continue
+        tokens.append(tok)
+        seen.add(tok)
+
+    if len(tokens) > max_tokens:
+        sayilar = [t for t in tokens if t.isdigit()]
+        kelimeler = [t for t in tokens if not t.isdigit()]
+        kelimeler = sorted(kelimeler, key=len, reverse=True)
+        tokens = (sayilar + kelimeler)[:max_tokens]
+
+    return tokens
+
+
+def rpc_sonuc_to_df(result) -> Optional[pd.DataFrame]:
+    """RPC sonucunu guvenli sekilde DataFrame'e cevir."""
+    if not result or not getattr(result, 'data', None):
+        return None
+
+    df = pd.DataFrame(result.data)
+    if df.empty:
+        return df
+
+    # out_ prefix temizle (guvenlik icin)
+    df.columns = [col.replace('out_', '') for col in df.columns]
+    return df
+
+
+def uygula_negatif_filtre(df: pd.DataFrame, arama_lower: str) -> pd.DataFrame:
+    """Bazi anahtar kelimelerde negatif filtre uygula."""
+    if df.empty or 'urun_ad' not in df.columns:
+        return df
+
+    if arama_lower in ['tv', 'televizyon']:
+        yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
+                   'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
+                   'atv', 'oyuncak', 'lisanslı', 'tvk']
+        for yasak in yasakli:
+            df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
+
+    return df
+
+
+def filtrele_tum_kelimeler(df: pd.DataFrame, tokens: list) -> pd.DataFrame:
+    """Tum tokenleri iceren urunleri onceliklendir."""
+    if df.empty or not tokens:
+        return df
+
+    metin = pd.Series("", index=df.index, dtype=str)
+    if 'urun_ad' in df.columns:
+        metin = metin + df['urun_ad'].fillna('').astype(str)
+    if 'urun_kod' in df.columns:
+        metin = metin + " " + df['urun_kod'].fillna('').astype(str)
+
+    metin = metin.apply(normalize_turkish)
+
+    skorlar = []
+    for satir in metin:
+        skor = 0
+        for tok in tokens:
+            if tok in satir:
+                skor += 2 if tok.isdigit() else 1
+        skorlar.append(skor)
+
+    mask = pd.Series(True, index=df.index)
+    for tok in tokens:
+        mask &= metin.str.contains(tok, regex=False)
+
+    df = df.copy()
+    df['__score'] = skorlar
+
+    df_tam = df[mask]
+    df_son = df_tam if not df_tam.empty else df
+    return df_son.sort_values('__score', ascending=False)
 
 
 # ============================================================================
@@ -169,34 +278,44 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
-        # RPC Çağrısı
+        # RPC Çağrısı (ana arama)
         result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+        result_error = getattr(result, 'error', None)
 
-        # Hata kontrolü
-        if getattr(result, 'error', None):
-            st.error(f"Arama hatası (RPC): {result.error}")
+        df = None if result_error else rpc_sonuc_to_df(result)
+
+        # Sonuc yoksa coklu kelime icin token bazli fallback
+        if df is None or df.empty:
+            tokens = arama_tokenleri(arama_raw)
+            if len(tokens) >= 2:
+                df_list = []
+                for token in tokens:
+                    token_result = client.rpc('hizli_urun_ara', {'arama_terimi': token}).execute()
+                    if getattr(token_result, 'error', None):
+                        continue
+                    token_df = rpc_sonuc_to_df(token_result)
+                    if token_df is not None and not token_df.empty:
+                        df_list.append(token_df)
+
+                if df_list:
+                    df = pd.concat(df_list, ignore_index=True)
+                    df = filtrele_tum_kelimeler(df, tokens)
+
+        # Hata kontrolü (fallback de basarisizsa)
+        if result_error and (df is None or df.empty):
+            st.error(f"Arama hatası (RPC): {result_error}")
             return None
 
-        if result.data:
-            df = pd.DataFrame(result.data)
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-            # out_ prefix temizle (güvenlik için)
-            df.columns = [col.replace('out_', '') for col in df.columns]
+        # PYTHON TARAFI NEGATIF FILTRELEME (CPU)
+        df = uygula_negatif_filtre(df, optimize_sorgu.lower())
 
-            # PYTHON TARAFI NEGATİF FİLTRELEME (CPU)
-            arama_lower = optimize_sorgu.lower()
-            if arama_lower in ['tv', 'televizyon']:
-                yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
-                           'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
-                           'atv', 'oyuncak', 'lisanslı', 'tvk']
-                for yasak in yasakli:
-                    df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
-
+        if {'magaza_kod', 'urun_kod'}.issubset(df.columns):
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
-            return df
 
-        # Sonuç yoksa boş DataFrame
-        return pd.DataFrame()
+        return df
 
     except Exception as e:
         st.error(f"Beklenmeyen Hata: {e}")
@@ -250,12 +369,20 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         return
 
     # Pandas Gruplama
-    urunler = df.groupby('urun_kod').agg({
-        'urun_ad': 'first',
-        'stok_adet': lambda x: (x > 0).sum()
-    }).reset_index()
-
-    urunler.columns = ['urun_kod', 'urun_ad', 'stoklu_magaza']
+    if '__score' in df.columns:
+        urunler = df.groupby('urun_kod').agg({
+            'urun_ad': 'first',
+            'stok_adet': lambda x: (x > 0).sum(),
+            '__score': 'max'
+        }).reset_index()
+        urunler = urunler.rename(columns={'stok_adet': 'stoklu_magaza', '__score': 'match_score'})
+        urunler = urunler.sort_values(['match_score', 'stoklu_magaza'], ascending=[False, False])
+    else:
+        urunler = df.groupby('urun_kod').agg({
+            'urun_ad': 'first',
+            'stok_adet': lambda x: (x > 0).sum()
+        }).reset_index()
+        urunler = urunler.rename(columns={'stok_adet': 'stoklu_magaza'})
 
     st.success(f"**{len(urunler)}** farklı ürün bulundu")
 
