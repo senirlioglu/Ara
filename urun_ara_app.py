@@ -1,12 +1,21 @@
 """
-ÜRÜN ARAMA UYGULAMASI (Server-Side Search)
-==========================================
+ÜRÜN ARAMA UYGULAMASI v5 (Server-Side Search)
+==============================================
 Tüm arama işlemleri PostgreSQL'de yapılır. RAM kullanımı minimal.
+
+DEĞİŞİKLİKLER (v4 → v5):
+  - temizle_ve_kok_bul: Kök bulma KALDIRILDI (terlik→ter sorunu)
+  - SQL normalize_tr_search ile birebir uyumlu:
+      translate → unaccent → lower → makinasi/makinesi/makina→makine
+  - Smart quote temizliği eklendi (" " ' nbsp)
+  - Bitişik tv+sayı ayırma: tv65 → tv 65
 """
 
 import streamlit as st
 import pandas as pd
 import os
+import re
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
@@ -91,57 +100,64 @@ def get_stok_seviye(adet: int) -> tuple:
 
 def temizle_ve_kok_bul(text: str) -> str:
     """
-    Arama terimini temizle ve kökleri bul.
-    'kedi maması tavuklu' -> 'kedi mama tavuk'
+    SQL normalize_tr_search ile birebir uyumlu normalize.
+
+    SQL fonksiyonu sırası:
+      1. translate(text, 'İIıĞğÜüŞşÖöÇç', 'iiigguussoocc')
+      2. unaccent(...)       → â→a gibi accent temizliği
+      3. lower(...)
+      4. replace('makinasi','makine')
+      5. replace('makinesi','makine')
+      6. replace('makina','makine')
+
+    Örnekler:
+      "terlik"           → "terlik"          (ESKİ: "ter" ❌)
+      "waffle makinesi"  → "waffle makine"   ✅
+      "akıllı saat"      → "akilli saat"     (ESKİ: "akil saat" ❌)
+      "kedi maması"      → "kedi mamasi"     (ESKİ: "kedi mama" ❌)
     """
     if not text:
         return ""
 
-    # Türkçe -> ASCII dönüşümü
+    # 1. Türkçe karakter dönüşümü (SQL: translate)
     tr_map = {
         'İ': 'i', 'I': 'i', 'ı': 'i',
         'Ğ': 'g', 'ğ': 'g',
         'Ü': 'u', 'ü': 'u',
         'Ş': 's', 'ş': 's',
         'Ö': 'o', 'ö': 'o',
-        'Ç': 'c', 'ç': 'c'
+        'Ç': 'c', 'ç': 'c',
     }
+    result = text
+    for tr_char, ascii_char in tr_map.items():
+        result = result.replace(tr_char, ascii_char)
 
-    clean_text = text
-    for tr, eng in tr_map.items():
-        clean_text = clean_text.replace(tr, eng)
+    # 2. Accent temizliği (SQL: unaccent) - â→a, é→e gibi
+    result = unicodedata.normalize('NFKD', result)
+    result = ''.join(c for c in result if not unicodedata.combining(c))
 
-    # Türkçe ekler (uzundan kısaya)
-    ekler = [
-        'lari', 'leri', 'lar', 'ler',
-        'lık', 'lik', 'luk', 'lük',
-        'si', 'su', 'sı', 'sü',
-        'lu', 'lü', 'li', 'lı',
-        'cu', 'cü', 'ci', 'cı',
-        'daki', 'deki', 'taki', 'teki',
-        'dan', 'den', 'tan', 'ten',
-        'da', 'de', 'ta', 'te',
-        'nın', 'nin', 'nun', 'nün',
-        'in', 'ın', 'un', 'ün',
-        'yi', 'yu', 'yı', 'yü',
-    ]
+    # 3. Lowercase (SQL: lower)
+    result = result.lower()
 
-    kelimeler = clean_text.lower().split()
-    temiz_kelimeler = []
+    # 4-6. Makine dönüşümleri (SQL: replace)
+    result = result.replace('makinasi', 'makine')
+    result = result.replace('makinesi', 'makine')
+    result = result.replace('makina', 'makine')
 
-    for kelime in kelimeler:
-        kok = kelime
-        # Sadece 4+ karakterlik kelimelerde ek temizle
-        if len(kelime) > 4:
-            for ek in ekler:
-                if kelime.endswith(ek):
-                    olasi_kok = kelime[:-len(ek)]
-                    if len(olasi_kok) >= 3:  # Kök en az 3 karakter olsun
-                        kok = olasi_kok
-                        break
-        temiz_kelimeler.append(kok)
+    # Smart quote ve özel karakter temizliği
+    for c, r in {
+        '\u201c': '', '\u201d': '', '\u2019': '',
+        '\u00a0': ' ', '\u0307': '',
+    }.items():
+        result = result.replace(c, r)
 
-    return " ".join(temiz_kelimeler)
+    # Bitişik tv+sayı ayır: "tv65" → "tv 65"
+    result = re.sub(r'(tv|televizyon)(\d)', r'\1 \2', result)
+
+    # Çoklu boşlukları tekle
+    result = re.sub(r'\s+', ' ', result).strip()
+
+    return result
 
 
 # ============================================================================
@@ -150,9 +166,8 @@ def temizle_ve_kok_bul(text: str) -> str:
 
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
-    SERVER-SIDE SEARCH - Hibrit yaklaşım
-    TV → FTS (hızlı), Televizyon → Trigram (hızlı)
-    Negatif filtreler Python'da (CPU'da)
+    SERVER-SIDE SEARCH - Tüm arama SQL'de yapılır.
+    Python sadece normalize + negatif filtre uygular.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -162,7 +177,7 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # Sayıysa kök bulma yapma
+        # Sayıysa normalize yapma
         arama_raw = arama_text.strip()
         if arama_raw.isdigit():
             optimize_sorgu = arama_raw
