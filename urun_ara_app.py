@@ -114,7 +114,7 @@ def temizle_ve_kok_bul(text: str) -> str:
       "terlik"           → "terlik"          (ESKİ: "ter" ❌)
       "waffle makinesi"  → "waffle makine"   ✅
       "akıllı saat"      → "akilli saat"     (ESKİ: "akil saat" ❌)
-      "kedi maması"      → "kedi mamasi"     (ESKİ: "kedi mama" ❌)
+      "nescaffe gold"    → "nescafe gold"    ✅ (yazım düzeltme)
     """
     if not text:
         return ""
@@ -157,7 +157,49 @@ def temizle_ve_kok_bul(text: str) -> str:
     # Çoklu boşlukları tekle
     result = re.sub(r'\s+', ' ', result).strip()
 
+    # 7. Yazım hatası düzeltme (kelime bazlı)
+    words = result.split()
+    corrected = [YAZIM_DUZELTME.get(w, w) for w in words]
+    result = ' '.join(corrected)
+
     return result
+
+
+# ============================================================================
+# YAZIM HATASI SÖZLÜĞÜ
+# ============================================================================
+# Arama loglarından tespit edilen yaygın yazım hataları.
+# Yeni hatalar tespit edildikçe buraya eklenebilir.
+# Format: 'yanlis_yazim': 'dogru_yazim'
+# ============================================================================
+
+YAZIM_DUZELTME = {
+    # Marka yazım hataları
+    'nescaffe': 'nescafe', 'nescfe': 'nescafe', 'nesacfe': 'nescafe',
+    'philps': 'philips', 'phlips': 'philips', 'plips': 'philips',
+    'samsun': 'samsung', 'samgung': 'samsung', 'smasung': 'samsung',
+    'tosiba': 'toshiba', 'toshbia': 'toshiba', 'tosihba': 'toshiba',
+    'grundik': 'grundig', 'grunding': 'grundig',
+    'sinbo': 'sinbo',
+
+    # Ürün kategorisi yazım hataları
+    'tercere': 'tencere', 'tencre': 'tencere', 'tenecre': 'tencere',
+    'blendir': 'blender', 'belnder': 'blender', 'blnder': 'blender',
+    'wafle': 'waffle', 'vafle': 'waffle', 'wafle': 'waffle',
+    'aklli': 'akilli', 'akkilli': 'akilli', 'aklili': 'akilli',
+    'buzdobali': 'buzdolabi', 'buzdolbi': 'buzdolabi',
+    'televizon': 'televizyon', 'televzyon': 'televizyon', 'teleivzyon': 'televizyon',
+    'makarana': 'makarna', 'maknara': 'makarna',
+    'bibron': 'biberon', 'bbiron': 'biberon',
+    'termoss': 'termos',
+    'kulaklik': 'kulaklik',
+    'supurge': 'supurge', 'spurge': 'supurge', 'surpuge': 'supurge',
+    'camasir': 'camasir', 'camaisr': 'camasir',
+    'bulasik': 'bulasik', 'bualsik': 'bulasik',
+    'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
+    'sampuan': 'sampuan', 'sampuvan': 'sampuan',
+    'rejisor': 'rejisör',
+}
 
 
 # ============================================================================
