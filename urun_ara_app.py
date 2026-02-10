@@ -345,10 +345,19 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             fiyat_str = ""
 
         icon = "📦" if stoklu_magaza > 0 else "❌"
-        fiyat_badge = f"  •  💰 {fiyat_str}" if fiyat_str else ""
-        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}{fiyat_badge}  •  🏪 {stoklu_magaza} mağaza"
+        fiyat_badge = f"  ⸱  {fiyat_str}" if fiyat_str else ""
+        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}"
 
         with st.expander(baslik, expanded=False):
+            # Fiyat badge (expander içi üstte)
+            if fiyat_str:
+                st.markdown(f"""
+                <div style="display:inline-block; background:linear-gradient(135deg,#00b894,#00cec9);
+                     color:white; padding:6px 16px; border-radius:20px; font-weight:700;
+                     font-size:1.1rem; margin-bottom:12px;">
+                    🏷️ {fiyat_str}
+                </div>
+                """, unsafe_allow_html=True)
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
