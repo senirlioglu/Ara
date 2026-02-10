@@ -176,6 +176,7 @@ def temizle_ve_kok_bul(text: str) -> str:
 YAZIM_DUZELTME = {
     # Marka yazım hataları
     'nescaffe': 'nescafe', 'nescfe': 'nescafe', 'nesacfe': 'nescafe',
+    'cold': 'gold',
     'philps': 'philips', 'phlips': 'philips', 'plips': 'philips',
     'samsun': 'samsung', 'samgung': 'samsung', 'smasung': 'samsung',
     'tosiba': 'toshiba', 'toshbia': 'toshiba', 'tosihba': 'toshiba',
@@ -306,13 +307,23 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
-    # Pandas Gruplama
+    # Pandas Gruplama - SQL'den dönen sırayı koru
+    # SQL rank DESC ile sıralı gelir, groupby bunu bozar
+    # Bu yüzden ilk görünüş sırasını (SQL sırası) saklıyoruz
+    urun_sirasi = df['urun_kod'].drop_duplicates().reset_index(drop=True)
+
     urunler = df.groupby('urun_kod').agg({
         'urun_ad': 'first',
         'stok_adet': lambda x: (x > 0).sum()
     }).reset_index()
 
     urunler.columns = ['urun_kod', 'urun_ad', 'stoklu_magaza']
+
+    # SQL sırasına göre sırala
+    urunler['sira'] = urunler['urun_kod'].map(
+        {kod: i for i, kod in enumerate(urun_sirasi)}
+    )
+    urunler = urunler.sort_values('sira').drop('sira', axis=1)
 
     st.success(f"**{len(urunler)}** farklı ürün bulundu")
 
@@ -324,8 +335,18 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].sort_values('stok_adet', ascending=False)
 
+        # Fiyatı ürün seviyesinde al (ilk geçerli fiyat)
+        ham_fiyat = urun_df_stoklu['birim_fiyat'].dropna()
+        ham_fiyat = ham_fiyat[ham_fiyat > 0]
+        if not ham_fiyat.empty:
+            fiyat_val = float(ham_fiyat.iloc[0])
+            fiyat_str = f"{fiyat_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
+        else:
+            fiyat_str = ""
+
         icon = "📦" if stoklu_magaza > 0 else "❌"
-        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza"
+        fiyat_badge = f"  •  💰 {fiyat_str}" if fiyat_str else ""
+        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}{fiyat_badge}  •  🏪 {stoklu_magaza} mağaza"
 
         with st.expander(baslik, expanded=False):
             if urun_df_stoklu.empty:
@@ -343,13 +364,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     # Güvenli Veri Çekme
                     sm = row.get('sm_kod') or "-"
                     bs = row.get('bs_kod') or "-"
-
-                    # Fiyat Gösterimi (0 ise gösterme)
-                    ham_fiyat = row.get('birim_fiyat')
-                    if ham_fiyat and float(ham_fiyat) > 0:
-                        fiyat_str = f"{float(ham_fiyat):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
-                    else:
-                        fiyat_str = ""
 
                     # Harita Linki
                     lat = row.get('latitude')
@@ -384,7 +398,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f; display:flex; align-items:center;">
                                 {magaza_ad}
                                 {harita_ikonu}
-                                <span style="font-weight:normal; color:#2ecc71; font-size:0.9rem; margin-left:10px;">{fiyat_str}</span>
                             </div>
                             <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
                                 <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
