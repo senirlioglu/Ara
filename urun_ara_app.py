@@ -464,6 +464,7 @@ def main():
 def admin_panel():
     """Admin paneli - arama analitikleri"""
     import hashlib
+    from io import BytesIO
 
     admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
     today = datetime.now().strftime('%Y-%m-%d')
@@ -488,6 +489,13 @@ def admin_panel():
                 st.error("Yanlış şifre!")
         return
 
+    def df_to_xlsx(dataframe):
+        """DataFrame'i xlsx byte'larına çevir"""
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            dataframe.to_excel(writer, index=False, sheet_name='Veri')
+        return output.getvalue()
+
     st.title("📊 Arama Analitikleri")
 
     client = get_supabase_client()
@@ -499,18 +507,30 @@ def admin_panel():
 
     try:
         baslangic = (datetime.now() - timedelta(days=gun_sayisi)).strftime('%Y-%m-%d')
-        result = client.table('arama_log')\
-            .select('*')\
-            .gte('tarih', baslangic)\
-            .order('tarih', desc=True)\
-            .order('arama_sayisi', desc=True)\
-            .execute()
 
-        if not result.data:
+        # Tüm veriyi çek (sayfalama ile)
+        all_data = []
+        page_size = 1000
+        offset = 0
+        while True:
+            result = client.table('arama_log')\
+                .select('*')\
+                .gte('tarih', baslangic)\
+                .order('id', desc=True)\
+                .range(offset, offset + page_size - 1)\
+                .execute()
+            if not result.data:
+                break
+            all_data.extend(result.data)
+            if len(result.data) < page_size:
+                break
+            offset += page_size
+
+        if not all_data:
             st.warning("Henüz veri yok")
             return
 
-        df = pd.DataFrame(result.data)
+        df = pd.DataFrame(all_data)
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -523,31 +543,67 @@ def admin_panel():
 
         st.markdown("---")
 
+        # ---- 🔥 EN ÇOK ARANANLAR ----
         st.subheader("🔥 En Çok Arananlar")
-        top_df = df.groupby('arama_terimi').agg({'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}).reset_index()
-        top_df = top_df.sort_values('arama_sayisi', ascending=False).head(20)
-        top_df.columns = ['Terim', 'Arama', 'Sonuç']
-        st.dataframe(top_df, use_container_width=True, hide_index=True)
+        top_full = df.groupby('arama_terimi').agg(
+            {'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}
+        ).reset_index()
+        top_full = top_full.sort_values('arama_sayisi', ascending=False)
+        top_full.columns = ['Terim', 'Arama', 'Sonuç']
 
+        st.dataframe(top_full.head(20), use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "📥 Tümünü İndir (xlsx)",
+            data=df_to_xlsx(top_full),
+            file_name=f"en_cok_arananlar_{today}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_top"
+        )
+
+        # ---- ❌ SONUÇ BULUNAMAYANLAR ----
         st.subheader("❌ Sonuç Bulunamayanlar")
-        sonucsuz_df = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi')['arama_sayisi'].sum().reset_index()
-        sonucsuz_df = sonucsuz_df.sort_values('arama_sayisi', ascending=False).head(20)
-        sonucsuz_df.columns = ['Terim', 'Arama']
-        if sonucsuz_df.empty:
+        sonucsuz_full = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi').agg(
+            {'arama_sayisi': 'sum'}
+        ).reset_index()
+        sonucsuz_full = sonucsuz_full.sort_values('arama_sayisi', ascending=False)
+        sonucsuz_full.columns = ['Terim', 'Arama']
+
+        if sonucsuz_full.empty:
             st.success("Tüm aramalarda sonuç bulunmuş!")
         else:
-            st.dataframe(sonucsuz_df, use_container_width=True, hide_index=True)
+            st.dataframe(sonucsuz_full.head(20), use_container_width=True, hide_index=True)
 
-        # Bugün arananlar
+            st.download_button(
+                "📥 Tümünü İndir (xlsx)",
+                data=df_to_xlsx(sonucsuz_full),
+                file_name=f"sonucsuz_aramalar_{today}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_sonucsuz"
+            )
+
+        # ---- 🕐 BUGÜN ARANANLAR (son aranana göre sıralı) ----
         st.subheader("🕐 Bugün Arananlar")
         bugun = datetime.now().strftime('%Y-%m-%d')
-        bugun_df = df[df['tarih'] == bugun].sort_values('arama_sayisi', ascending=False)
-        if bugun_df.empty:
+        bugun_full = df[df['tarih'] == bugun].copy()
+
+        if bugun_full.empty:
             st.info("Bugün henüz arama yapılmamış")
         else:
-            bugun_df = bugun_df[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].head(30)
-            bugun_df.columns = ['Terim', 'Arama', 'Sonuç']
-            st.dataframe(bugun_df, use_container_width=True, hide_index=True)
+            # id DESC = en son aranan en üstte
+            bugun_full = bugun_full.sort_values('id', ascending=False)
+            bugun_show = bugun_full[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].copy()
+            bugun_show.columns = ['Terim', 'Arama', 'Sonuç']
+
+            st.dataframe(bugun_show.head(30), use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "📥 Tümünü İndir (xlsx)",
+                data=df_to_xlsx(bugun_show),
+                file_name=f"bugun_aramalar_{today}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_bugun"
+            )
 
     except Exception as e:
         st.error(f"Hata: {e}")
