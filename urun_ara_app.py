@@ -276,10 +276,16 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
                 .eq('arama_terimi', terim)\
                 .execute()
 
+            simdi = datetime.now().isoformat()
+
             if result.data:
                 kayit = result.data[0]
                 client.table('arama_log')\
-                    .update({'arama_sayisi': kayit['arama_sayisi'] + 1, 'sonuc_sayisi': sonuc_sayisi})\
+                    .update({
+                        'arama_sayisi': kayit['arama_sayisi'] + 1,
+                        'sonuc_sayisi': sonuc_sayisi,
+                        'son_arama_zamani': simdi
+                    })\
                     .eq('id', kayit['id'])\
                     .execute()
             else:
@@ -287,7 +293,8 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
                     'tarih': bugun,
                     'arama_terimi': terim,
                     'arama_sayisi': 1,
-                    'sonuc_sayisi': sonuc_sayisi
+                    'sonuc_sayisi': sonuc_sayisi,
+                    'son_arama_zamani': simdi
                 }).execute()
     except:
         pass
@@ -590,8 +597,9 @@ def admin_panel():
         if bugun_full.empty:
             st.info("Bugün henüz arama yapılmamış")
         else:
-            # id DESC = en son aranan en üstte
-            bugun_full = bugun_full.sort_values('id', ascending=False)
+            # En son aranan en üstte
+            sort_col = 'son_arama_zamani' if 'son_arama_zamani' in bugun_full.columns else 'id'
+            bugun_full = bugun_full.sort_values(sort_col, ascending=False)
             bugun_show = bugun_full[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].copy()
             bugun_show.columns = ['Terim', 'Arama', 'Sonuç']
 
