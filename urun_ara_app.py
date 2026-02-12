@@ -595,7 +595,7 @@ def admin_panel():
             bugun_show = bugun_full[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].copy()
             bugun_show.columns = ['Terim', 'Arama', 'Sonuç']
 
-            st.dataframe(bugun_show.head(30), use_container_width=True, hide_index=True)
+            st.dataframe(bugun_show.head(50), use_container_width=True, hide_index=True)
 
             st.download_button(
                 "📥 Tümünü İndir (xlsx)",
