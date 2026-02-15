@@ -280,22 +280,17 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
 
             if result.data:
                 kayit = result.data[0]
-                client.table('arama_log')\
-                    .update({
-                        'arama_sayisi': kayit['arama_sayisi'] + 1,
-                        'sonuc_sayisi': sonuc_sayisi,
-                        'son_arama_zamani': simdi
-                    })\
-                    .eq('id', kayit['id'])\
-                    .execute()
+                veri = {'arama_sayisi': kayit['arama_sayisi'] + 1, 'sonuc_sayisi': sonuc_sayisi}
+                try:
+                    client.table('arama_log').update({**veri, 'son_arama_zamani': simdi}).eq('id', kayit['id']).execute()
+                except Exception:
+                    client.table('arama_log').update(veri).eq('id', kayit['id']).execute()
             else:
-                client.table('arama_log').insert({
-                    'tarih': bugun,
-                    'arama_terimi': terim,
-                    'arama_sayisi': 1,
-                    'sonuc_sayisi': sonuc_sayisi,
-                    'son_arama_zamani': simdi
-                }).execute()
+                veri = {'tarih': bugun, 'arama_terimi': terim, 'arama_sayisi': 1, 'sonuc_sayisi': sonuc_sayisi}
+                try:
+                    client.table('arama_log').insert({**veri, 'son_arama_zamani': simdi}).execute()
+                except Exception:
+                    client.table('arama_log').insert(veri).execute()
     except:
         pass
 
