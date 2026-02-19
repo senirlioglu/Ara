@@ -71,8 +71,18 @@ def get_supabase_client():
     """Supabase client olustur"""
     try:
         from supabase import create_client
-        url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
-        key = os.environ.get('SUPABASE_KEY') or st.secrets.get('SUPABASE_KEY')
+        url = os.environ.get('SUPABASE_URL')
+        if not url:
+            try:
+                url = st.secrets["SUPABASE_URL"]
+            except Exception:
+                pass
+        key = os.environ.get('SUPABASE_KEY')
+        if not key:
+            try:
+                key = st.secrets["SUPABASE_KEY"]
+            except Exception:
+                pass
         if not url or not key:
             return None
         return create_client(url, key)
@@ -468,7 +478,15 @@ def admin_panel():
     import hashlib
     from io import BytesIO
 
-    admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
+    admin_pass = os.environ.get('ADMIN_PASSWORD')
+    if not admin_pass:
+        try:
+            admin_pass = st.secrets["ADMIN_PASSWORD"]
+        except Exception:
+            admin_pass = None
+    if not admin_pass:
+        st.error("ADMIN_PASSWORD ayarlanmamış.")
+        return
     today = datetime.now().strftime('%Y-%m-%d')
     valid_token = hashlib.md5(f"{admin_pass}{today}".encode()).hexdigest()[:16]
 
