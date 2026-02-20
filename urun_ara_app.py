@@ -1,12 +1,21 @@
 """
-ÜRÜN ARAMA UYGULAMASI (Server-Side Search)
-==========================================
+ÜRÜN ARAMA UYGULAMASI v5 (Server-Side Search)
+==============================================
 Tüm arama işlemleri PostgreSQL'de yapılır. RAM kullanımı minimal.
+
+DEĞİŞİKLİKLER (v4 → v5):
+  - temizle_ve_kok_bul: Kök bulma KALDIRILDI (terlik→ter sorunu)
+  - SQL normalize_tr_search ile birebir uyumlu:
+      translate → unaccent → lower → makinasi/makinesi/makina→makine
+  - Smart quote temizliği eklendi (" " ' nbsp)
+  - Bitişik tv+sayı ayırma: tv65 → tv 65
 """
 
 import streamlit as st
 import pandas as pd
 import os
+import re
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
@@ -62,8 +71,18 @@ def get_supabase_client():
     """Supabase client olustur"""
     try:
         from supabase import create_client
-        url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
-        key = os.environ.get('SUPABASE_KEY') or st.secrets.get('SUPABASE_KEY')
+        url = os.environ.get('SUPABASE_URL')
+        if not url:
+            try:
+                url = st.secrets["SUPABASE_URL"]
+            except Exception:
+                pass
+        key = os.environ.get('SUPABASE_KEY')
+        if not key:
+            try:
+                key = st.secrets["SUPABASE_KEY"]
+            except Exception:
+                pass
         if not url or not key:
             return None
         return create_client(url, key)
@@ -89,57 +108,107 @@ def get_stok_seviye(adet: int) -> tuple:
 
 def temizle_ve_kok_bul(text: str) -> str:
     """
-    Arama terimini temizle ve kökleri bul.
-    'kedi maması tavuklu' -> 'kedi mama tavuk'
+    SQL normalize_tr_search ile birebir uyumlu normalize.
+
+    SQL fonksiyonu sırası:
+      1. translate(text, 'İIıĞğÜüŞşÖöÇç', 'iiigguussoocc')
+      2. unaccent(...)       → â→a gibi accent temizliği
+      3. lower(...)
+      4. replace('makinasi','makine')
+      5. replace('makinesi','makine')
+      6. replace('makina','makine')
+
+    Örnekler:
+      "terlik"           → "terlik"          (ESKİ: "ter" ❌)
+      "waffle makinesi"  → "waffle makine"   ✅
+      "akıllı saat"      → "akilli saat"     (ESKİ: "akil saat" ❌)
+      "nescaffe gold"    → "nescafe gold"    ✅ (yazım düzeltme)
     """
     if not text:
         return ""
 
-    # Türkçe -> ASCII dönüşümü
+    # 1. Türkçe karakter dönüşümü (SQL: translate)
     tr_map = {
         'İ': 'i', 'I': 'i', 'ı': 'i',
         'Ğ': 'g', 'ğ': 'g',
         'Ü': 'u', 'ü': 'u',
         'Ş': 's', 'ş': 's',
         'Ö': 'o', 'ö': 'o',
-        'Ç': 'c', 'ç': 'c'
+        'Ç': 'c', 'ç': 'c',
     }
+    result = text
+    for tr_char, ascii_char in tr_map.items():
+        result = result.replace(tr_char, ascii_char)
 
-    clean_text = text
-    for tr, eng in tr_map.items():
-        clean_text = clean_text.replace(tr, eng)
+    # 2. Accent temizliği (SQL: unaccent) - â→a, é→e gibi
+    result = unicodedata.normalize('NFKD', result)
+    result = ''.join(c for c in result if not unicodedata.combining(c))
 
-    # Türkçe ekler (uzundan kısaya)
-    ekler = [
-        'lari', 'leri', 'lar', 'ler',
-        'lık', 'lik', 'luk', 'lük',
-        'si', 'su', 'sı', 'sü',
-        'lu', 'lü', 'li', 'lı',
-        'cu', 'cü', 'ci', 'cı',
-        'daki', 'deki', 'taki', 'teki',
-        'dan', 'den', 'tan', 'ten',
-        'da', 'de', 'ta', 'te',
-        'nın', 'nin', 'nun', 'nün',
-        'in', 'ın', 'un', 'ün',
-        'yi', 'yu', 'yı', 'yü',
-    ]
+    # 3. Lowercase (SQL: lower)
+    result = result.lower()
 
-    kelimeler = clean_text.lower().split()
-    temiz_kelimeler = []
+    # 4-6. Makine dönüşümleri (SQL: replace)
+    result = result.replace('makinasi', 'makine')
+    result = result.replace('makinesi', 'makine')
+    result = result.replace('makina', 'makine')
 
-    for kelime in kelimeler:
-        kok = kelime
-        # Sadece 4+ karakterlik kelimelerde ek temizle
-        if len(kelime) > 4:
-            for ek in ekler:
-                if kelime.endswith(ek):
-                    olasi_kok = kelime[:-len(ek)]
-                    if len(olasi_kok) >= 3:  # Kök en az 3 karakter olsun
-                        kok = olasi_kok
-                        break
-        temiz_kelimeler.append(kok)
+    # Smart quote ve özel karakter temizliği
+    for c, r in {
+        '\u201c': '', '\u201d': '', '\u2019': '',
+        '\u00a0': ' ', '\u0307': '',
+    }.items():
+        result = result.replace(c, r)
 
-    return " ".join(temiz_kelimeler)
+    # Bitişik tv+sayı ayır: "tv65" → "tv 65"
+    result = re.sub(r'(tv|televizyon)(\d)', r'\1 \2', result)
+
+    # Çoklu boşlukları tekle
+    result = re.sub(r'\s+', ' ', result).strip()
+
+    # 7. Yazım hatası düzeltme (kelime bazlı)
+    words = result.split()
+    corrected = [YAZIM_DUZELTME.get(w, w) for w in words]
+    result = ' '.join(corrected)
+
+    return result
+
+
+# ============================================================================
+# YAZIM HATASI SÖZLÜĞÜ
+# ============================================================================
+# Arama loglarından tespit edilen yaygın yazım hataları.
+# Yeni hatalar tespit edildikçe buraya eklenebilir.
+# Format: 'yanlis_yazim': 'dogru_yazim'
+# ============================================================================
+
+YAZIM_DUZELTME = {
+    # Marka yazım hataları
+    'nescaffe': 'nescafe', 'nescfe': 'nescafe', 'nesacfe': 'nescafe',
+    'cold': 'gold',
+    'philps': 'philips', 'phlips': 'philips', 'plips': 'philips',
+    'samsun': 'samsung', 'samgung': 'samsung', 'smasung': 'samsung',
+    'tosiba': 'toshiba', 'toshbia': 'toshiba', 'tosihba': 'toshiba',
+    'grundik': 'grundig', 'grunding': 'grundig',
+    'sinbo': 'sinbo',
+
+    # Ürün kategorisi yazım hataları
+    'tercere': 'tencere', 'tencre': 'tencere', 'tenecre': 'tencere',
+    'blendir': 'blender', 'belnder': 'blender', 'blnder': 'blender',
+    'wafle': 'waffle', 'vafle': 'waffle', 'wafle': 'waffle',
+    'aklli': 'akilli', 'akkilli': 'akilli', 'aklili': 'akilli',
+    'buzdobali': 'buzdolabi', 'buzdolbi': 'buzdolabi',
+    'televizon': 'televizyon', 'televzyon': 'televizyon', 'teleivzyon': 'televizyon',
+    'makarana': 'makarna', 'maknara': 'makarna',
+    'bibron': 'biberon', 'bbiron': 'biberon',
+    'termoss': 'termos',
+    'kulaklik': 'kulaklik',
+    'supurge': 'supurge', 'spurge': 'supurge', 'surpuge': 'supurge',
+    'camasir': 'camasir', 'camaisr': 'camasir',
+    'bulasik': 'bulasik', 'bualsik': 'bulasik',
+    'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
+    'sampuan': 'sampuan', 'sampuvan': 'sampuan',
+    'rejisor': 'rejisör',
+}
 
 
 # ============================================================================
@@ -148,9 +217,8 @@ def temizle_ve_kok_bul(text: str) -> str:
 
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
-    SERVER-SIDE SEARCH - Hibrit yaklaşım
-    TV → FTS (hızlı), Televizyon → Trigram (hızlı)
-    Negatif filtreler Python'da (CPU'da)
+    SERVER-SIDE SEARCH - Tüm arama SQL'de yapılır.
+    Python sadece normalize + negatif filtre uygular.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -160,7 +228,7 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # Sayıysa kök bulma yapma
+        # Sayıysa normalize yapma
         arama_raw = arama_text.strip()
         if arama_raw.isdigit():
             optimize_sorgu = arama_raw
@@ -216,19 +284,21 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
                 .eq('arama_terimi', terim)\
                 .execute()
 
+            simdi = datetime.now().isoformat()
+
             if result.data:
                 kayit = result.data[0]
-                client.table('arama_log')\
-                    .update({'arama_sayisi': kayit['arama_sayisi'] + 1, 'sonuc_sayisi': sonuc_sayisi})\
-                    .eq('id', kayit['id'])\
-                    .execute()
+                veri = {'arama_sayisi': kayit['arama_sayisi'] + 1, 'sonuc_sayisi': sonuc_sayisi}
+                try:
+                    client.table('arama_log').update({**veri, 'son_arama_zamani': simdi}).eq('id', kayit['id']).execute()
+                except Exception:
+                    client.table('arama_log').update(veri).eq('id', kayit['id']).execute()
             else:
-                client.table('arama_log').insert({
-                    'tarih': bugun,
-                    'arama_terimi': terim,
-                    'arama_sayisi': 1,
-                    'sonuc_sayisi': sonuc_sayisi
-                }).execute()
+                veri = {'tarih': bugun, 'arama_terimi': terim, 'arama_sayisi': 1, 'sonuc_sayisi': sonuc_sayisi}
+                try:
+                    client.table('arama_log').insert({**veri, 'son_arama_zamani': simdi}).execute()
+                except Exception:
+                    client.table('arama_log').insert(veri).execute()
     except:
         pass
 
@@ -247,13 +317,23 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
-    # Pandas Gruplama
+    # Pandas Gruplama - SQL'den dönen sırayı koru
+    # SQL rank DESC ile sıralı gelir, groupby bunu bozar
+    # Bu yüzden ilk görünüş sırasını (SQL sırası) saklıyoruz
+    urun_sirasi = df['urun_kod'].drop_duplicates().reset_index(drop=True)
+
     urunler = df.groupby('urun_kod').agg({
         'urun_ad': 'first',
         'stok_adet': lambda x: (x > 0).sum()
     }).reset_index()
 
     urunler.columns = ['urun_kod', 'urun_ad', 'stoklu_magaza']
+
+    # SQL sırasına göre sırala
+    urunler['sira'] = urunler['urun_kod'].map(
+        {kod: i for i, kod in enumerate(urun_sirasi)}
+    )
+    urunler = urunler.sort_values('sira').drop('sira', axis=1)
 
     st.success(f"**{len(urunler)}** farklı ürün bulundu")
 
@@ -267,11 +347,19 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
         # Toplam stok ve fiyat hesapla
         toplam_stok = int(urun_df_stoklu['stok_adet'].sum()) if not urun_df_stoklu.empty else 0
-        ilk_fiyat = urun_df_stoklu['birim_fiyat'].iloc[0] if not urun_df_stoklu.empty and 'birim_fiyat' in urun_df_stoklu.columns else 0
-        fiyat_goster = f"{float(ilk_fiyat):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺" if ilk_fiyat and float(ilk_fiyat) > 0 else ""
+
+        # Fiyatı ürün seviyesinde al (ilk geçerli fiyat)
+        ham_fiyat = urun_df_stoklu['birim_fiyat'].dropna()
+        ham_fiyat = ham_fiyat[ham_fiyat > 0]
+        if not ham_fiyat.empty:
+            fiyat_val = float(ham_fiyat.iloc[0])
+            fiyat_str = f"{fiyat_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
+        else:
+            fiyat_str = ""
 
         icon = "📦" if stoklu_magaza > 0 else "❌"
-        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza  •  {fiyat_goster}"
+        fiyat_badge = f"  •  {fiyat_str}" if fiyat_str else ""
+        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}"
 
         with st.expander(baslik, expanded=False):
             # Toplam stok badge'i (expander açılınca görünür)
@@ -283,7 +371,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     📊 Toplam Bölge Stok: {toplam_stok} Adet
                 </div>
                 """, unsafe_allow_html=True)
-
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
@@ -300,19 +387,19 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     sm = row.get('sm_kod') or "-"
                     bs = row.get('bs_kod') or "-"
 
-                    # Fiyat Gösterimi (0 ise gösterme)
-                    ham_fiyat = row.get('birim_fiyat')
-                    if ham_fiyat and float(ham_fiyat) > 0:
-                        fiyat_str = f"{float(ham_fiyat):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
-                    else:
-                        fiyat_str = ""
-
                     # Harita Linki
                     lat = row.get('latitude')
                     lon = row.get('longitude')
 
                     if lat and lon:
-                        harita_ikonu = f'<a href="https://www.google.com/maps?q={lat},{lon}" target="_blank" style="text-decoration:none; margin-left:8px;" title="Haritada Göster">📍</a>'
+                        harita_ikonu = (
+                            f'<a href="https://www.google.com/maps?q={lat},{lon}" '
+                            'target="_blank" '
+                            'style="text-decoration:none; margin-left:8px; padding:4px 8px; '
+                            'border-radius:12px; background:#eef2ff; color:#374151; font-size:0.78rem;" '
+                            'title="Yol tarifi al">'
+                            '📍 Yol tarifi</a>'
+                        )
                     else:
                         harita_ikonu = ""
 
@@ -333,7 +420,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             <div style="font-weight: 600; font-size: 1rem; color: #1e3a5f; display:flex; align-items:center;">
                                 {magaza_ad}
                                 {harita_ikonu}
-                                <span style="font-weight:normal; color:#2ecc71; font-size:0.9rem; margin-left:10px;">{fiyat_str}</span>
                             </div>
                             <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
                                 <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
@@ -391,8 +477,17 @@ def main():
 def admin_panel():
     """Admin paneli - arama analitikleri"""
     import hashlib
+    from io import BytesIO
 
-    admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD', 'admin123')
+    admin_pass = os.environ.get('ADMIN_PASSWORD')
+    if not admin_pass:
+        try:
+            admin_pass = st.secrets["ADMIN_PASSWORD"]
+        except Exception:
+            admin_pass = None
+    if not admin_pass:
+        st.error("ADMIN_PASSWORD ayarlanmamış.")
+        return
     today = datetime.now().strftime('%Y-%m-%d')
     valid_token = hashlib.md5(f"{admin_pass}{today}".encode()).hexdigest()[:16]
 
@@ -415,6 +510,13 @@ def admin_panel():
                 st.error("Yanlış şifre!")
         return
 
+    def df_to_xlsx(dataframe):
+        """DataFrame'i xlsx byte'larına çevir"""
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            dataframe.to_excel(writer, index=False, sheet_name='Veri')
+        return output.getvalue()
+
     st.title("📊 Arama Analitikleri")
 
     client = get_supabase_client()
@@ -426,18 +528,30 @@ def admin_panel():
 
     try:
         baslangic = (datetime.now() - timedelta(days=gun_sayisi)).strftime('%Y-%m-%d')
-        result = client.table('arama_log')\
-            .select('*')\
-            .gte('tarih', baslangic)\
-            .order('tarih', desc=True)\
-            .order('arama_sayisi', desc=True)\
-            .execute()
 
-        if not result.data:
+        # Tüm veriyi çek (sayfalama ile)
+        all_data = []
+        page_size = 1000
+        offset = 0
+        while True:
+            result = client.table('arama_log')\
+                .select('*')\
+                .gte('tarih', baslangic)\
+                .order('id', desc=True)\
+                .range(offset, offset + page_size - 1)\
+                .execute()
+            if not result.data:
+                break
+            all_data.extend(result.data)
+            if len(result.data) < page_size:
+                break
+            offset += page_size
+
+        if not all_data:
             st.warning("Henüz veri yok")
             return
 
-        df = pd.DataFrame(result.data)
+        df = pd.DataFrame(all_data)
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -450,31 +564,68 @@ def admin_panel():
 
         st.markdown("---")
 
+        # ---- 🔥 EN ÇOK ARANANLAR ----
         st.subheader("🔥 En Çok Arananlar")
-        top_df = df.groupby('arama_terimi').agg({'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}).reset_index()
-        top_df = top_df.sort_values('arama_sayisi', ascending=False).head(20)
-        top_df.columns = ['Terim', 'Arama', 'Sonuç']
-        st.dataframe(top_df, use_container_width=True, hide_index=True)
+        top_full = df.groupby('arama_terimi').agg(
+            {'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}
+        ).reset_index()
+        top_full = top_full.sort_values('arama_sayisi', ascending=False)
+        top_full.columns = ['Terim', 'Arama', 'Sonuç']
 
+        st.dataframe(top_full.head(20), use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "📥 Tümünü İndir (xlsx)",
+            data=df_to_xlsx(top_full),
+            file_name=f"en_cok_arananlar_{today}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_top"
+        )
+
+        # ---- ❌ SONUÇ BULUNAMAYANLAR ----
         st.subheader("❌ Sonuç Bulunamayanlar")
-        sonucsuz_df = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi')['arama_sayisi'].sum().reset_index()
-        sonucsuz_df = sonucsuz_df.sort_values('arama_sayisi', ascending=False).head(20)
-        sonucsuz_df.columns = ['Terim', 'Arama']
-        if sonucsuz_df.empty:
+        sonucsuz_full = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi').agg(
+            {'arama_sayisi': 'sum'}
+        ).reset_index()
+        sonucsuz_full = sonucsuz_full.sort_values('arama_sayisi', ascending=False)
+        sonucsuz_full.columns = ['Terim', 'Arama']
+
+        if sonucsuz_full.empty:
             st.success("Tüm aramalarda sonuç bulunmuş!")
         else:
-            st.dataframe(sonucsuz_df, use_container_width=True, hide_index=True)
+            st.dataframe(sonucsuz_full.head(20), use_container_width=True, hide_index=True)
 
-        # Bugün arananlar
+            st.download_button(
+                "📥 Tümünü İndir (xlsx)",
+                data=df_to_xlsx(sonucsuz_full),
+                file_name=f"sonucsuz_aramalar_{today}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_sonucsuz"
+            )
+
+        # ---- 🕐 BUGÜN ARANANLAR (son aranana göre sıralı) ----
         st.subheader("🕐 Bugün Arananlar")
         bugun = datetime.now().strftime('%Y-%m-%d')
-        bugun_df = df[df['tarih'] == bugun].sort_values('arama_sayisi', ascending=False)
-        if bugun_df.empty:
+        bugun_full = df[df['tarih'] == bugun].copy()
+
+        if bugun_full.empty:
             st.info("Bugün henüz arama yapılmamış")
         else:
-            bugun_df = bugun_df[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].head(30)
-            bugun_df.columns = ['Terim', 'Arama', 'Sonuç']
-            st.dataframe(bugun_df, use_container_width=True, hide_index=True)
+            # En son aranan en üstte
+            sort_col = 'son_arama_zamani' if 'son_arama_zamani' in bugun_full.columns else 'id'
+            bugun_full = bugun_full.sort_values(sort_col, ascending=False)
+            bugun_show = bugun_full[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].copy()
+            bugun_show.columns = ['Terim', 'Arama', 'Sonuç']
+
+            st.dataframe(bugun_show.head(50), use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "📥 Tümünü İndir (xlsx)",
+                data=df_to_xlsx(bugun_show),
+                file_name=f"bugun_aramalar_{today}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_bugun"
+            )
 
     except Exception as e:
         st.error(f"Hata: {e}")
