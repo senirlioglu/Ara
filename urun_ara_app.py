@@ -98,14 +98,12 @@ def get_stok_seviye(adet: int) -> tuple:
     """Stok seviyesi, css class ve renk döndür"""
     if adet is None or adet <= 0:
         return "Yok", "stok-yok", "#9e9e9e"
-    elif adet == 1:
-        return "Kritik", "stok-kritik", "#ff4444"
+    elif adet <= 2:
+        return "Düşük", "stok-dusuk", "#e74c3c"  # Kırmızı
     elif adet <= 5:
-        return "Düşük", "stok-dusuk", "#ff9800"
-    elif adet <= 10:
-        return "Normal", "stok-normal", "#4caf50"
+        return "Orta", "stok-orta", "#f39c12"    # Sarı/Turuncu
     else:
-        return "Yüksek", "stok-yuksek", "#2196f3"
+        return "Yüksek", "stok-yuksek", "#27ae60" # Yeşil
 
 
 def temizle_ve_kok_bul(text: str) -> str:
@@ -347,6 +345,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].sort_values('stok_adet', ascending=False)
 
+        # Toplam stok ve fiyat hesapla
+        toplam_stok = int(urun_df_stoklu['stok_adet'].sum()) if not urun_df_stoklu.empty else 0
+
         # Fiyatı ürün seviyesinde al (ilk geçerli fiyat)
         ham_fiyat = urun_df_stoklu['birim_fiyat'].dropna()
         ham_fiyat = ham_fiyat[ham_fiyat > 0]
@@ -357,17 +358,18 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             fiyat_str = ""
 
         icon = "📦" if stoklu_magaza > 0 else "❌"
-        fiyat_badge = f"  ⸱  {fiyat_str}" if fiyat_str else ""
-        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}"
+        fiyat_badge = f"  •  {fiyat_str}" if fiyat_str else ""
+        stok_badge = f"  •  {toplam_stok} adet" if toplam_stok > 0 else ""
+        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}{stok_badge}"
 
         with st.expander(baslik, expanded=False):
-            # Fiyat badge (expander içi üstte)
-            if fiyat_str:
+            # Toplam stok badge'i (expander açılınca görünür)
+            if toplam_stok > 0:
+                toplam_seviye, _, toplam_renk = get_stok_seviye(toplam_stok)
                 st.markdown(f"""
-                <div style="display:inline-block; background:linear-gradient(135deg,#00b894,#00cec9);
-                     color:white; padding:6px 16px; border-radius:20px; font-weight:700;
-                     font-size:1.1rem; margin-bottom:12px;">
-                    🏷️ {fiyat_str}
+                <div style="background: {toplam_renk}; color: white; padding: 8px 16px; border-radius: 10px;
+                            display: inline-block; font-weight: 600; margin-bottom: 12px;">
+                    📊 Toplam Bölge Stok: {toplam_stok} Adet
                 </div>
                 """, unsafe_allow_html=True)
             if urun_df_stoklu.empty:
@@ -425,7 +427,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             </div>
                         </div>
                         <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
-                            {adet} Adet
+                            {seviye}
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
