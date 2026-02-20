@@ -359,7 +359,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
         icon = "📦" if stoklu_magaza > 0 else "❌"
         fiyat_badge = f"  •  {fiyat_str}" if fiyat_str else ""
-        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}"
+        stok_badge = f"  •  {toplam_stok} adet" if toplam_stok > 0 else ""
+        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}{stok_badge}"
 
         with st.expander(baslik, expanded=False):
             # Toplam stok badge'i (expander açılınca görünür)
