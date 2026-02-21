@@ -170,6 +170,13 @@ def temizle_ve_kok_bul(text: str) -> str:
     corrected = [YAZIM_DUZELTME.get(w, w) for w in words]
     result = ' '.join(corrected)
 
+    # 8. Terim eşleştirme (çoklu kelime → ürün adı)
+    # Uzun terimlerden kısaya doğru kontrol et
+    for terim, eslesme in sorted(TERIM_ESLESME.items(), key=lambda x: -len(x[0])):
+        if terim in result:
+            result = result.replace(terim, eslesme)
+            break  # İlk eşleşmede dur
+
     return result
 
 
@@ -208,6 +215,22 @@ YAZIM_DUZELTME = {
     'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
     'sampuan': 'sampuan', 'sampuvan': 'sampuan',
     'rejisor': 'rejisör',
+}
+
+# ============================================================================
+# TERİM EŞLEŞTİRME SÖZLÜĞÜ (Çoklu kelime → Ürün adı)
+# ============================================================================
+# Kullanıcıların aradığı terimler ile gerçek ürün adlarını eşleştirir.
+# Örn: "hamur yoğurma makinası" arayan aslında "stand mikser" istiyor.
+# Not: Tüm terimler normalize edilmiş halde olmalı (küçük harf, türkçe→ascii)
+# ============================================================================
+
+TERIM_ESLESME = {
+    # Hamur yoğurma makinası/makinesi → Stand mikser
+    'hamur yogurma makine': 'stand mikser',
+    'hamur yogurma': 'stand mikser',
+    'yogurma makine': 'stand mikser',
+    'hamur makine': 'stand mikser',
 }
 
 
