@@ -231,6 +231,8 @@ TERIM_ESLESME = {
     'hamur yogurma': 'stand mikser',
     'yogurma makine': 'stand mikser',
     'hamur makine': 'stand mikser',
+    # Namazlık → Namaz elbisesi
+    'namazlik': 'namaz elbisesi',  # ı→i (normalize edilmiş)
 }
 
 
