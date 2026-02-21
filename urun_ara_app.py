@@ -170,6 +170,13 @@ def temizle_ve_kok_bul(text: str) -> str:
     corrected = [YAZIM_DUZELTME.get(w, w) for w in words]
     result = ' '.join(corrected)
 
+    # 8. Terim eşleştirme (çoklu kelime → ürün adı)
+    # Uzun terimlerden kısaya doğru kontrol et
+    for terim, eslesme in sorted(TERIM_ESLESME.items(), key=lambda x: -len(x[0])):
+        if terim in result:
+            result = result.replace(terim, eslesme)
+            break  # İlk eşleşmede dur
+
     return result
 
 
@@ -208,6 +215,22 @@ YAZIM_DUZELTME = {
     'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
     'sampuan': 'sampuan', 'sampuvan': 'sampuan',
     'rejisor': 'rejisör',
+}
+
+# ============================================================================
+# TERİM EŞLEŞTİRME SÖZLÜĞÜ (Çoklu kelime → Ürün adı)
+# ============================================================================
+# Kullanıcıların aradığı terimler ile gerçek ürün adlarını eşleştirir.
+# Örn: "hamur yoğurma makinası" arayan aslında "stand mikser" istiyor.
+# Not: Tüm terimler normalize edilmiş halde olmalı (küçük harf, türkçe→ascii)
+# ============================================================================
+
+TERIM_ESLESME = {
+    # Hamur yoğurma makinası/makinesi → Stand mikser
+    'hamur yogurma makine': 'stand mikser',
+    'hamur yogurma': 'stand mikser',
+    'yogurma makine': 'stand mikser',
+    'hamur makine': 'stand mikser',
 }
 
 
@@ -358,20 +381,28 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             fiyat_str = ""
 
         icon = "📦" if stoklu_magaza > 0 else "❌"
-        fiyat_badge = f"  •  {fiyat_str}" if fiyat_str else ""
-        stok_badge = f"  •  {toplam_stok} adet" if toplam_stok > 0 else ""
+        fiyat_badge = f"  •  🏷️ {fiyat_str}" if fiyat_str else ""
+        stok_badge = f"  •  {toplam_stok}" if toplam_stok > 0 else ""
         baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}{stok_badge}"
 
         with st.expander(baslik, expanded=False):
-            # Toplam stok badge'i (expander açılınca görünür)
+            # Fiyat + Toplam stok badge'leri (expander açılınca görünür)
+            badges_html = ""
+            if fiyat_str:
+                badges_html += f"""
+                <div style="background: linear-gradient(135deg, #00b894, #00cec9); color: white; padding: 8px 16px; border-radius: 10px;
+                            display: inline-block; font-weight: 600; margin-right: 8px; margin-bottom: 12px;">
+                    🏷️ {fiyat_str}
+                </div>"""
             if toplam_stok > 0:
                 toplam_seviye, _, toplam_renk = get_stok_seviye(toplam_stok)
-                st.markdown(f"""
+                badges_html += f"""
                 <div style="background: {toplam_renk}; color: white; padding: 8px 16px; border-radius: 10px;
                             display: inline-block; font-weight: 600; margin-bottom: 12px;">
-                    📊 Toplam Bölge Stok: {toplam_stok} Adet
-                </div>
-                """, unsafe_allow_html=True)
+                    📊 Toplam Bölge Stok: {toplam_stok}
+                </div>"""
+            if badges_html:
+                st.markdown(badges_html, unsafe_allow_html=True)
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
