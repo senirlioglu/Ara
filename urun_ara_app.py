@@ -214,7 +214,7 @@ YAZIM_DUZELTME = {
     'bulasik': 'bulasik', 'bualsik': 'bulasik',
     'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
     'sampuan': 'sampuan', 'sampuvan': 'sampuan',
-    'rejisor': 'rejisör',
+    'rejisor': 'rejisör', 'inventor': 'inverter', 'hopörler': 'hopörlör',
 }
 
 # ============================================================================
@@ -231,6 +231,8 @@ TERIM_ESLESME = {
     'hamur yogurma': 'stand mikser',
     'yogurma makine': 'stand mikser',
     'hamur makine': 'stand mikser',
+    'hamur yoğurma': 'stand mixer',
+    'namazlık': 'namaz elbisesi',
 }
 
 
