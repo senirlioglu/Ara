@@ -259,6 +259,8 @@ TERIM_ESLESME = {
     'airfrey': 'airfryer',
     'kanepe ortusu': 'koltuk ortusu',
     'hotweels': 'hotwheels',
+    'kilot': 'kulot',
+    'kilotlu': 'kulotlu',
 }
 
 
