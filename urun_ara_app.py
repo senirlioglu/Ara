@@ -241,7 +241,7 @@ TERIM_ESLESME = {
     'hunday': 'hyundai',
     'finish50': 'finish',
     'slezenger': 'slazenger',
-    'sitanley': 'stanley,
+    'sitanley': 'stanley',
     'termisifon': 'termosifon',
     'termasifon': 'termosifon',
     'sitanl': 'stanley',
