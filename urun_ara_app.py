@@ -232,7 +232,7 @@ TERIM_ESLESME = {
     'yogurma makine': 'stand mikser',
     'hamur makine': 'stand mikser',
     'hamur yoğurma': 'stand mixer',
-    'namazlık': 'namaz elbisesi',
+    'namazlik': 'namaz elbisesi',
 }
 
 
