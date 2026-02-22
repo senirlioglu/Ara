@@ -252,6 +252,11 @@ TERIM_ESLESME = {
     'pier': 'Pierre Cardin',
     'pierre': 'Pierre Cardin',
     '12 binlik klima': 'klima',
+    'sitanly': 'stanley',
+    'araba telefon tutucusu': 'telefon tutucu',
+    'numarotor': 'numaratoru',
+    'airfreyer': 'airfryer',
+    'airfrey': 'airfryer',
 }
 
 
