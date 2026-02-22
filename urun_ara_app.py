@@ -257,6 +257,8 @@ TERIM_ESLESME = {
     'numarotor': 'numaratoru',
     'airfreyer': 'airfryer',
     'airfrey': 'airfryer',
+    'kanepe ortusu': 'koltuk ortusu',
+    'hotweels: 'hotwheels',
 }
 
 
