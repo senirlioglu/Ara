@@ -473,11 +473,44 @@ def get_populer_terimler():
 
 @st.cache_data(ttl=3600)
 def get_oneri_listesi():
-    """Autocomplete için popüler arama terimlerini getir (top 50, cached 1 saat)"""
+    """Autocomplete için ürün isimlerini veritabanından getir (cached 1 saat)"""
     try:
         client = get_supabase_client()
         if not client: return []
 
+        urun_adlari = set()
+
+        # 1. Doğrudan ürün tablosundan çek (en hızlı)
+        for tablo, kolon in [('urun_stok', 'urun_ad'), ('urunler', 'urun_ad'),
+                              ('products', 'name'), ('stoklar', 'urun_ad')]:
+            try:
+                result = client.table(tablo).select(kolon).limit(500).execute()
+                if result.data:
+                    for r in result.data:
+                        ad = r.get(kolon, '')
+                        if ad:
+                            urun_adlari.add(ad.strip().lower())
+                    if urun_adlari:
+                        return sorted(urun_adlari)[:300]
+            except Exception:
+                continue
+
+        # 2. Fallback: RPC ile yaygın harflerden ürün isimlerini topla
+        for terim in ['a', 'e', 'k', 'm', 'b']:
+            try:
+                result = client.rpc('hizli_urun_ara', {'arama_terimi': terim}).execute()
+                if result.data:
+                    for r in result.data:
+                        ad = r.get('out_urun_ad', '')
+                        if ad:
+                            urun_adlari.add(ad.strip().lower())
+            except Exception:
+                continue
+
+        if urun_adlari:
+            return sorted(urun_adlari)[:300]
+
+        # 3. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         result = client.table('arama_log')\
             .select('arama_terimi, arama_sayisi')\
@@ -486,10 +519,9 @@ def get_oneri_listesi():
             .order('arama_sayisi', desc=True)\
             .limit(50)\
             .execute()
-
         if result.data:
             return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
-    except:
+    except Exception:
         pass
     return []
 
