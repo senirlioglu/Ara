@@ -480,9 +480,9 @@ def get_oneri_listesi():
 
         urun_adlari = set()
 
-        # 1. stok_ozet tablosundan benzersiz ürün kodlarını çek
+        # 1. stok_gunluk tablosundan benzersiz ürün kodlarını çek
         try:
-            result = client.table('stok_ozet')\
+            result = client.table('stok_gunluk')\
                 .select('urun_kod')\
                 .limit(1000)\
                 .execute()
