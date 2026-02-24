@@ -481,7 +481,7 @@ def _get_oneri_listesi_impl():
 
         # 1. RPC ile benzersiz ürün isimlerini çek (DB tarafında DISTINCT - en hızlı)
         try:
-            result = client.rpc('get_urun_adlari', {'result_limit': 500}).execute()
+            result = client.rpc('get_urun_adlari', {'result_limit': 2000}).execute()
             if result.data:
                 liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
                 debug_info.append(f"RPC OK: {len(liste)} ürün")
@@ -503,7 +503,7 @@ def _get_oneri_listesi_impl():
                 ))
                 if urunler:
                     debug_info.append(f"Tablo sorgusu OK: {len(urunler)} ürün")
-                    return sorted(urunler)[:500], debug_info
+                    return sorted(urunler)[:2000], debug_info
             debug_info.append("Tablo sorgusu sonuç boş")
         except Exception as e:
             debug_info.append(f"Tablo sorgusu hata: {e}")
