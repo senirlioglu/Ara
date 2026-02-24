@@ -737,7 +737,7 @@ function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/<
 function show(v){
   if(v.length<2){dd.style.display='none';return;}
   var lv=v.toLowerCase();
-  var m=S.filter(function(s){return s.indexOf(lv)!==-1;}).slice(0,8);
+  var m=S.filter(function(s){return s.toLowerCase().indexOf(lv)!==-1;}).slice(0,8);
   if(!m.length){dd.style.display='none';return;}
   dd.innerHTML=m.map(function(s){
     return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
