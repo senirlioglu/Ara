@@ -486,7 +486,22 @@ def get_oneri_listesi():
         except Exception:
             pass
 
-        # 2. Son fallback: arama_log'dan popüler terimleri kullan
+        # 2. RPC yoksa doğrudan stok_gunluk tablosundan çek
+        try:
+            result = client.table('stok_gunluk')\
+                .select('urun_ad')\
+                .limit(5000)\
+                .execute()
+            if result.data:
+                urunler = list(dict.fromkeys(
+                    r['urun_ad'].strip() for r in result.data if r.get('urun_ad')
+                ))
+                if urunler:
+                    return sorted(urunler)[:500]
+        except Exception:
+            pass
+
+        # 3. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         result = client.table('arama_log')\
             .select('arama_terimi, arama_sayisi')\
