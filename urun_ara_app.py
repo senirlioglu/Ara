@@ -254,6 +254,11 @@ YAZIM_DUZELTME = {
     'hunday': 'hyundai', 'huindai': 'hyundai',
     'hotweels': 'hot wheels', 'hat wheels': 'hot wheels', 'hat weels': 'hot wheels',
     'flavel': 'flavel', 'falvel': 'flavel',
+    'airyfer': 'airfryer', 'airfyer': 'airfryer', 'airfry': 'airfryer',
+    'leptop': 'laptop', 'labtop': 'laptop',
+    'hoporlor': 'hoparlor', 'haporlor': 'hoparlor',
+    'samsun': 'samsung', 'samsunga': 'samsung',
+    'vileda': 'vileda',
 }
 
 
@@ -322,20 +327,31 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                 q_words = query.split()
                 ad_words = ad_norm.split()
 
-                # Tam kelime eşleşmesi (Örn: "su" için "hayat su")
+                # 1. Tam kelime eşleşmesi (En yüksek alaka)
+                # Örn: "su" için "hayat su" veya "erikli su"
                 if all(any(qw == aw for aw in ad_words) for qw in q_words):
                     return 90
 
-                # Başlangıç eşleşmesi (Örn: "iphone" için "iphone 13")
-                if ad_norm.startswith(query): return 80
+                # 2. Kelime başı eşleşmesi (Örn: "tv" -> "tv ünitesi")
+                if all(any(aw.startswith(qw) for aw in ad_words) for qw in q_words):
+                    return 80
 
-                # Kelime bazlı kısmi eşleşme (substring)
+                # Kısa sorgu koruması: "su" gibi <= 2 harfli aramalar için
+                # substring (içinde geçme) eşleşmesini devre dışı bırak.
+                # Bu "bisiklet aksesuarları"ndaki "su"yu eler.
+                if len(query) <= 2:
+                    return 0
+
+                # 3. Genel Başlangıç eşleşmesi
+                if ad_norm.startswith(query): return 75
+
+                # 4. Kelime bazlı kısmi eşleşme (substring)
                 if all(qw in ad_norm for qw in q_words): return 70
 
                 # Kategori/Sinonim desteği (Google gibi)
                 sinonim_skor = 0
-                if 'klima' in q_words and any(x in ad_norm for x in ['btu', '000', 'inv']): sinonim_skor = 60
-                if 'tv' in q_words and any(x in ad_norm for x in ['inc', 'led', 'ekran']): sinonim_skor = 60
+                if 'klima' in q_words and any(x in ad_norm for x in ['btu', '000', 'inv']): sinonim_skor = 65
+                if 'tv' in q_words and any(x in ad_norm for x in ['inc', 'led', 'ekran']): sinonim_skor = 65
 
                 return sinonim_skor
 
@@ -351,26 +367,38 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
         kategoriler = {
             'klima', 'televizyon', 'tv', 'telefon', 'supurge', 'buzdolabi',
-            'camasir', 'bulasik', 'makine', 'makinesi', 'makinası'
+            'camasir', 'bulasik', 'makine', 'makinesi', 'makinası', 'ucretsiz', 'teslimat'
         }
         sorgu_kelimeleri = optimize_sorgu.split()
         yeni_sorgu_kelimeleri = [w for w in sorgu_kelimeleri if w not in kategoriler]
 
-        if len(yeni_sorgu_kelimeleri) < len(sorgu_kelimeleri):
+        if 0 < len(yeni_sorgu_kelimeleri) < len(sorgu_kelimeleri):
             yeni_sorgu = " ".join(yeni_sorgu_kelimeleri)
-            if len(yeni_sorgu) >= 2:
+            try:
                 fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
                 if fallback_result.data:
                     return process_results(fallback_result.data, optimize_sorgu)
+            except: pass
 
-        # 2. Kapasite temizleyip tekrar dene (Örn: "18000" -> "18")
-        # Eğer "000" ile biten bir sayı varsa, onu kısaltıp tekrar dene
+        # 2. Kelimeleri Tek Tek Dene (Eğer çok kelimeliyse ve sonuç yoksa)
+        if len(sorgu_kelimeleri) > 1:
+            for w in sorgu_kelimeleri:
+                if len(w) >= 3 and w not in kategoriler:
+                    try:
+                        fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': w}).execute()
+                        if fallback_result.data:
+                            return process_results(fallback_result.data, optimize_sorgu)
+                    except: pass
+
+        # 3. Kapasite temizleyip tekrar dene (Örn: "18000" -> "18")
         if "000" in optimize_sorgu:
             yeni_sorgu = optimize_sorgu.replace("000", "").strip()
             if len(yeni_sorgu) >= 2:
-                fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
-                if fallback_result.data:
-                    return process_results(fallback_result.data, optimize_sorgu)
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
 
         # Sonuç yoksa boş DataFrame
         return pd.DataFrame()
@@ -579,6 +607,15 @@ def main():
         )
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
+
+    # Hızlı Arama Önerileri (Google-like)
+    st.markdown("---")
+    populer = ["Su", "Klima", "Seg", "Peynir", "Bisküvi", "Süt", "Ekmek", "Süpürge", "TV"]
+    cols = st.columns(len(populer))
+    for i, p in enumerate(populer):
+        if cols[i].button(p, use_container_width=True, key=f"pop_{p}"):
+            st.session_state.arama_input = p
+            st.rerun()
 
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
