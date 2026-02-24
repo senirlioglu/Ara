@@ -20,6 +20,14 @@ from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
 
+# --- Performans için Önceden Derlenmiş Regexler ---
+RE_TV_DIGIT = re.compile(r'(tv|televizyon)(\d)', re.IGNORECASE)
+RE_MULTIPLE_SPACES = re.compile(r'\s+')
+RE_TV_NEGATIF = re.compile(
+    r'battaniye|battanıye|ünite|unite|sehpa|koltuk|kılıf|kumanda|askı|aparat|kablo|atv|oyuncak|lisanslı|tvk',
+    re.IGNORECASE
+)
+
 # Ikonu yukle (Favicon icin)
 try:
     img_icon = Image.open("static/icon-192.png")
@@ -160,10 +168,10 @@ def temizle_ve_kok_bul(text: str) -> str:
         result = result.replace(c, r)
 
     # Bitişik tv+sayı ayır: "tv65" → "tv 65"
-    result = re.sub(r'(tv|televizyon)(\d)', r'\1 \2', result)
+    result = RE_TV_DIGIT.sub(r'\1 \2', result)
 
     # Çoklu boşlukları tekle
-    result = re.sub(r'\s+', ' ', result).strip()
+    result = RE_MULTIPLE_SPACES.sub(' ', result).strip()
 
     # 7. Yazım hatası düzeltme (kelime bazlı)
     words = result.split()
@@ -305,11 +313,7 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             # PYTHON TARAFI NEGATİF FİLTRELEME (CPU)
             arama_lower = optimize_sorgu.lower()
             if arama_lower in ['tv', 'televizyon']:
-                yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
-                           'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
-                           'atv', 'oyuncak', 'lisanslı', 'tvk']
-                for yasak in yasakli:
-                    df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
+                df = df[~df['urun_ad'].str.contains(RE_TV_NEGATIF, na=False, regex=True)]
 
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
