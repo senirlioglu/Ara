@@ -160,11 +160,13 @@ def temizle_ve_kok_bul(text: str) -> str:
     for c, r in {
         '\u201c': '', '\u201d': '', '\u2019': '',
         '\u00a0': ' ', '\u0307': '',
+        "'": "", "’": "", "‘": "",
     }.items():
         result = result.replace(c, r)
 
     # Klima kapasite birleştirme: "12 binlik" -> "12000", "12binlik" -> "12000"
     result = re.sub(r'\s*binlik', '000', result)
+    result = re.sub(r'\s*bin', '000', result)
 
     # Bitişik harf+sayı ayır: "tv65" → "tv 65", "seg12000" → "seg 12000"
     result = re.sub(r'([a-zA-Z]+)(\d+)', r'\1 \2', result)
@@ -346,14 +348,25 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             return process_results(result.data, optimize_sorgu)
 
         # ---- FALLBACK SEARCH (Google-like) ----
-        # Eğer sonuç yoksa ve sorguda "klima", "tv" gibi kategori kelimeleri varsa
-        # Kategoriyi çıkarıp markayla tekrar dene
-        kategoriler = {'klima', 'televizyon', 'tv', 'telefon', 'supurge', 'buzdolabi', 'camasir', 'bulasik'}
-        sorgu_kelimeleri = set(optimize_sorgu.split())
-        bulunan_kat = sorgu_kelimeleri.intersection(kategoriler)
+        # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
+        kategoriler = {
+            'klima', 'televizyon', 'tv', 'telefon', 'supurge', 'buzdolabi',
+            'camasir', 'bulasik', 'makine', 'makinesi', 'makinası'
+        }
+        sorgu_kelimeleri = optimize_sorgu.split()
+        yeni_sorgu_kelimeleri = [w for w in sorgu_kelimeleri if w not in kategoriler]
 
-        if bulunan_kat:
-            yeni_sorgu = " ".join([w for w in optimize_sorgu.split() if w not in kategoriler])
+        if len(yeni_sorgu_kelimeleri) < len(sorgu_kelimeleri):
+            yeni_sorgu = " ".join(yeni_sorgu_kelimeleri)
+            if len(yeni_sorgu) >= 2:
+                fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
+                if fallback_result.data:
+                    return process_results(fallback_result.data, optimize_sorgu)
+
+        # 2. Kapasite temizleyip tekrar dene (Örn: "18000" -> "18")
+        # Eğer "000" ile biten bir sayı varsa, onu kısaltıp tekrar dene
+        if "000" in optimize_sorgu:
+            yeni_sorgu = optimize_sorgu.replace("000", "").strip()
             if len(yeni_sorgu) >= 2:
                 fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
                 if fallback_result.data:
