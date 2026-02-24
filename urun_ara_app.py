@@ -480,17 +480,17 @@ def get_oneri_listesi():
 
         urun_adlari = set()
 
-        # 1. stok_gunluk tablosundan benzersiz ürün kodlarını çek
+        # 1. stok_gunluk tablosundan benzersiz ürün isimlerini çek
         try:
             result = client.table('stok_gunluk')\
-                .select('urun_kod')\
+                .select('urun_ad')\
                 .limit(1000)\
                 .execute()
             if result.data:
                 for r in result.data:
-                    kod = r.get('urun_kod', '')
-                    if kod:
-                        urun_adlari.add(kod.strip())
+                    ad = r.get('urun_ad', '')
+                    if ad:
+                        urun_adlari.add(ad.strip())
                 if urun_adlari:
                     return sorted(urun_adlari)[:500]
         except Exception:
