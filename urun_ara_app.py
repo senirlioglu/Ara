@@ -471,9 +471,9 @@ def get_populer_terimler():
     return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)
 def get_oneri_listesi():
-    """Autocomplete için ürün isimlerini veritabanından getir (cached 1 saat)"""
+    """Autocomplete için ürün isimlerini veritabanından getir (cached 5 dk)"""
     try:
         client = get_supabase_client()
         if not client: return []
@@ -482,9 +482,12 @@ def get_oneri_listesi():
         try:
             result = client.rpc('get_urun_adlari', {'result_limit': 500}).execute()
             if result.data:
+                print(f"[ONERI] RPC başarılı, {len(result.data)} ürün geldi")
                 return [r['urun_ad'] for r in result.data if r.get('urun_ad')]
-        except Exception:
-            pass
+            else:
+                print("[ONERI] RPC sonuç boş döndü")
+        except Exception as e:
+            print(f"[ONERI] RPC hatası: {e}")
 
         # 2. RPC yoksa doğrudan stok_gunluk tablosundan çek
         try:
@@ -497,9 +500,10 @@ def get_oneri_listesi():
                     r['urun_ad'].strip() for r in result.data if r.get('urun_ad')
                 ))
                 if urunler:
+                    print(f"[ONERI] Doğrudan tablo sorgusu, {len(urunler)} ürün geldi")
                     return sorted(urunler)[:500]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ONERI] Tablo sorgusu hatası: {e}")
 
         # 3. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
