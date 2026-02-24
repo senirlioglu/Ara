@@ -703,17 +703,25 @@ def main():
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
     if not oneriler:
-        # Boş sonucu cache'de tutma - sonraki yüklemede tekrar dene
-        get_oneri_listesi.clear()
+        try:
+            get_oneri_listesi.clear()
+        except Exception:
+            pass
     import json
     import streamlit.components.v1 as components
     _ac_data = json.dumps(oneriler, ensure_ascii=False) if oneriler else '[]'
-    _ac_js = """
+    # DEBUG: Autocomplete veri durumu
+    _ac_debug_html = f'<div style="position:fixed;bottom:5px;right:5px;background:rgba(0,0,0,0.7);color:#0f0;padding:4px 8px;border-radius:4px;font-size:10px;z-index:99999;font-family:monospace;">AC: {len(oneriler)} ürün</div>'
+    _ac_js = _ac_debug_html + """
 <script>
 (function(){
 try{
 var S=__DATA__;
-var pd=window.parent.document;
+var dbg=document.createElement('div');dbg.style.cssText='position:fixed;bottom:5px;left:5px;background:rgba(0,0,0,0.7);color:#0f0;padding:4px 8px;border-radius:4px;font-size:10px;z-index:99999;font-family:monospace;';
+document.body.appendChild(dbg);
+dbg.textContent='JS:init S='+S.length;
+var pd;
+try{pd=window.parent.document;dbg.textContent+=' | parent:OK';}catch(pe){dbg.textContent+=' | parent:BLOCKED '+pe.message;throw pe;}
 var _curInp=null,_dd=null,_lastVal='',_docBound=false;
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
@@ -766,10 +774,11 @@ function setup(inp){
 function poll(){
   try{
     var inp=pd.querySelector('input[placeholder*="Ürün kodu"]')||pd.querySelector('[data-testid="stTextInput"] input')||pd.querySelector('input[aria-label="Arama"]');
+    if(dbg)dbg.textContent='S='+S.length+(inp?' | inp:OK':' | inp:NONE')+(_dd?' | dd:OK':'')+' | v='+(inp?inp.value:'');
     if(!inp)return;
     if(inp!==_curInp)setup(inp);
     if(inp.value!==_lastVal){_lastVal=inp.value;show(inp,inp.value);}
-  }catch(ex){}
+  }catch(ex){if(dbg)dbg.textContent='poll err:'+ex.message;}
 }
 
 poll();
