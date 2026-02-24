@@ -22,7 +22,6 @@ from typing import Optional
 from PIL import Image
 
 # --- Performans için Önceden Derlenmiş Regexler ---
-RE_TV_DIGIT = re.compile(r'(tv|televizyon)(\d)', re.IGNORECASE)
 RE_MULTIPLE_SPACES = re.compile(r'\s+')
 RE_TV_NEGATIF = re.compile(
     r'battaniye|battanıye|ünite|unite|sehpa|koltuk|kılıf|kumanda|askı|aparat|kablo|atv|oyuncak|lisanslı|tvk',
@@ -30,7 +29,7 @@ RE_TV_NEGATIF = re.compile(
 )
 
 # Ikonu yukle (Favicon icin)
-@st.cache_data
+@st.cache_resource
 def get_app_icon():
     try:
         return Image.open("static/icon-192.png")
@@ -231,7 +230,7 @@ YAZIM_DUZELTME = {
     'gözlük': 'gozluk',
     'kulaklık': 'kulaklik',
     'hoparlör': 'hoparlor', 'hopörler': 'hoparlor',
-    'pirhana': 'piranha', 'pirana': 'piranha',
+    'pirhana': 'piranha', 'pirana': 'piranha', 'prinha': 'piranha', 'prihana': 'piranha', 'prihanna': 'piranha',
     'fujı': 'fuji', 'fujıfilm': 'fujifilm',
     'early': 'earl', 'gray': 'grey',
     'prince': 'price',
@@ -239,6 +238,20 @@ YAZIM_DUZELTME = {
     'çakmaii': 'cakmak',
     'btu': 'btu',
     'seg': 'seg',
+    'realmi': 'realme', 'realme': 'realme',
+    'nimet ziyafet': 'nimet',
+    'yeşilyayla': 'yesilyayla',
+    'yer safrası': 'yer sofrasi',
+    'yapoz': 'yapboz',
+    'welxoft': 'welsoft',
+    'samsuna': 'samsung',
+    'saaf': 'saat',
+    'powebank': 'powerbank',
+    'phlips': 'philips',
+    'hopörlor': 'hoparlor', 'hopörloe': 'hoparlor', 'hopörle': 'hoparlor', 'hapörler': 'hoparlor',
+    'hunday': 'hyundai', 'huindai': 'hyundai',
+    'hotweels': 'hot wheels', 'hat wheels': 'hot wheels', 'hat weels': 'hot wheels',
+    'flavel': 'flavel', 'falvel': 'flavel',
 }
 
 
@@ -284,40 +297,59 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             st.error(f"Arama hatası (RPC): {result.error}")
             return None
 
-        if result.data:
-            df = pd.DataFrame(result.data)
-
-            # out_ prefix temizle (güvenlik için)
+        # Sonuç işleme fonksiyonu (Tekrar kullanılabilirlik için)
+        def process_results(data, query):
+            if not data: return pd.DataFrame()
+            df = pd.DataFrame(data)
             df.columns = [col.replace('out_', '') for col in df.columns]
 
-            # PYTHON TARAFI NEGATİF FİLTRELEME (CPU)
-            arama_lower = optimize_sorgu.lower()
-            if arama_lower in ['tv', 'televizyon']:
+            # Negatif Filtre
+            q_lower = query.lower()
+            if q_lower in ['tv', 'televizyon']:
                 df = df[~df['urun_ad'].str.contains(RE_TV_NEGATIF, na=False, regex=True)]
 
-            # ARAMA SIRALAMASI (Ranking) - Google benzeri alaka düzeyi
-            # Tam eşleşenleri veya başlangıçta olanları öne çıkar
+            # Alaka Skoru (Ranking)
             def alaka_skoru(row):
                 ad = str(row.get('urun_ad', '')).lower()
                 kod = str(row.get('urun_kod', '')).lower()
+                if query in kod: return 100
 
-                # Kod eşleşmesi (en yüksek öncelik)
-                if optimize_sorgu in kod: return 100
-
-                # İsim eşleşmesi
                 ad_norm = temizle_ve_kok_bul(ad)
-                if ad_norm == optimize_sorgu: return 90
-                if ad_norm.startswith(optimize_sorgu): return 80
-                if all(word in ad_norm for word in optimize_sorgu.split()): return 60
-                return 0
+                if ad_norm == query: return 90
+                if ad_norm.startswith(query): return 80
+
+                # Kelime bazlı eşleşme
+                q_words = query.split()
+                if all(w in ad_norm for w in q_words): return 70
+
+                # Kategori/Sinonim desteği (Google gibi)
+                sinonim_skor = 0
+                if 'klima' in q_words and any(x in ad_norm for x in ['btu', '000', 'inv']): sinonim_skor = 60
+                if 'tv' in q_words and any(x in ad_norm for x in ['inc', 'led', 'ekran']): sinonim_skor = 60
+
+                return sinonim_skor
 
             df['alaka'] = df.apply(alaka_skoru, axis=1)
-            # Hem SQL rankını (gelen sıra) hem de bizim alaka skorumuzu kullan
-            # Gelen sıra zaten rank'a göre olduğu için onu koruyarak alaka ekliyoruz
             df = df.sort_values(by=['alaka'], ascending=False)
-
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
+
+        if result.data:
+            return process_results(result.data, optimize_sorgu)
+
+        # ---- FALLBACK SEARCH (Google-like) ----
+        # Eğer sonuç yoksa ve sorguda "klima", "tv" gibi kategori kelimeleri varsa
+        # Kategoriyi çıkarıp markayla tekrar dene
+        kategoriler = {'klima', 'televizyon', 'tv', 'telefon', 'supurge', 'buzdolabi', 'camasir', 'bulasik'}
+        sorgu_kelimeleri = set(optimize_sorgu.split())
+        bulunan_kat = sorgu_kelimeleri.intersection(kategoriler)
+
+        if bulunan_kat:
+            yeni_sorgu = " ".join([w for w in optimize_sorgu.split() if w not in kategoriler])
+            if len(yeni_sorgu) >= 2:
+                fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
+                if fallback_result.data:
+                    return process_results(fallback_result.data, optimize_sorgu)
 
         # Sonuç yoksa boş DataFrame
         return pd.DataFrame()
