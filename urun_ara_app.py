@@ -107,12 +107,6 @@ st.markdown("""
         color: #333;
         margin: 0.8rem 0 0.3rem 0.2rem;
     }
-    .recent-title {
-        font-size: 0.88rem;
-        font-weight: 600;
-        color: #666;
-        margin: 0.5rem 0 0.3rem 0.2rem;
-    }
 
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 1rem; }
     .streamlit-expanderHeader { background: white !important; border-radius: 12px !important; border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; padding: 0.75rem 1rem !important; font-weight: 500 !important; }
@@ -634,52 +628,27 @@ def main():
     # Arama kutusu
     col1, col2 = st.columns([5, 1])
 
-    def save_recent():
-        if st.session_state.arama_input:
-            term = st.session_state.arama_input
-            if "son_aramalar" not in st.session_state:
-                st.session_state.son_aramalar = []
-            if term not in st.session_state.son_aramalar:
-                st.session_state.son_aramalar.insert(0, term)
-                st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
-
     with col1:
         arama_text = st.text_input(
             "Arama",
             placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
             label_visibility="collapsed",
-            key="arama_input",
-            on_change=save_recent
+            key="arama_input"
         )
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
-    # Popüler & Son Aramalar (Yatay kaydırmalı pill butonlar)
+    # Popüler Aramalar (Yatay kaydırmalı pill butonlar)
     def set_search_term(term):
         st.session_state.arama_input = term
-        if "son_aramalar" not in st.session_state:
-            st.session_state.son_aramalar = []
-        if term not in st.session_state.son_aramalar:
-            st.session_state.son_aramalar.insert(0, term)
-            st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
 
     populer = get_populer_terimler()
-    son_aramalar = st.session_state.get("son_aramalar", [])
 
-    if son_aramalar or populer:
-        # Son Aramalar
-        if son_aramalar:
-            st.markdown('<div class="recent-title">🕒 Son Aramalarınız</div>', unsafe_allow_html=True)
-            cols_son = st.columns(len(son_aramalar))
-            for i, s in enumerate(son_aramalar):
-                cols_son[i].button(s, use_container_width=True, key=f"son_{s}_{i}", on_click=set_search_term, args=(s,))
-
-        # Popüler Aramalar (tek satır, yatay kaydırmalı)
-        if populer:
-            st.markdown('<div class="popular-title">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
-            cols_pop = st.columns(len(populer))
-            for i, p in enumerate(populer):
-                cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_term, args=(p,))
+    if populer:
+        st.markdown('<div class="popular-title">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
+        cols_pop = st.columns(len(populer))
+        for i, p in enumerate(populer):
+            cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_term, args=(p,))
 
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
