@@ -315,12 +315,20 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                 if query in kod: return 100
 
                 ad_norm = temizle_ve_kok_bul(ad)
-                if ad_norm == query: return 90
+                if ad_norm == query: return 95
+
+                q_words = query.split()
+                ad_words = ad_norm.split()
+
+                # Tam kelime eşleşmesi (Örn: "su" için "hayat su")
+                if all(any(qw == aw for aw in ad_words) for qw in q_words):
+                    return 90
+
+                # Başlangıç eşleşmesi (Örn: "iphone" için "iphone 13")
                 if ad_norm.startswith(query): return 80
 
-                # Kelime bazlı eşleşme
-                q_words = query.split()
-                if all(w in ad_norm for w in q_words): return 70
+                # Kelime bazlı kısmi eşleşme (substring)
+                if all(qw in ad_norm for qw in q_words): return 70
 
                 # Kategori/Sinonim desteği (Google gibi)
                 sinonim_skor = 0
