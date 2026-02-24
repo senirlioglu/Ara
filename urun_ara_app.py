@@ -531,10 +531,6 @@ def get_oneri_listesi():
     liste, _ = _get_oneri_listesi_impl()
     return liste
 
-def get_oneri_debug():
-    """Debug bilgisi (cache'siz)"""
-    _, debug = _get_oneri_listesi_impl()
-    return debug
 
 
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
@@ -780,12 +776,6 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
     elif arama_text and len(arama_text) < 2:
         st.info("En az 2 karakter girin.")
 
-    # --- GEÇİCİ DEBUG (sorun bulunduktan sonra silinecek) ---
-    with st.expander("🔧 Debug: Öneri Kaynağı"):
-        debug = get_oneri_debug()
-        for d in debug:
-            st.code(d)
-        st.write(f"Öneri sayısı: {len(oneriler) if oneriler else 0}")
 
 
 # ============================================================================
