@@ -471,6 +471,29 @@ def get_populer_terimler():
     return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
 
 
+@st.cache_data(ttl=3600)
+def get_oneri_listesi():
+    """Autocomplete için popüler arama terimlerini getir (top 50, cached 1 saat)"""
+    try:
+        client = get_supabase_client()
+        if not client: return []
+
+        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        result = client.table('arama_log')\
+            .select('arama_terimi, arama_sayisi')\
+            .gte('tarih', baslangic)\
+            .gt('sonuc_sayisi', 0)\
+            .order('arama_sayisi', desc=True)\
+            .limit(50)\
+            .execute()
+
+        if result.data:
+            return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
+    except:
+        pass
+    return []
+
+
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
     # Hata varsa (None) sessizce çık - hata mesajı zaten basıldı
@@ -637,6 +660,63 @@ def main():
         )
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
+
+    # Autocomplete önerileri (client-side, performans dostu)
+    oneriler = get_oneri_listesi()
+    if oneriler:
+        import json
+        import streamlit.components.v1 as components
+        _ac_data = json.dumps(oneriler, ensure_ascii=False)
+        _ac_js = """
+<script>
+(function(){
+try{
+var S=__DATA__;
+var pd=window.parent.document;
+var inp=pd.querySelector('input[placeholder*="Ürün kodu"]');
+if(!inp)return;
+var old=pd.getElementById('ac-dd');if(old)old.remove();
+if(inp._acIn)inp.removeEventListener('input',inp._acIn);
+if(inp._acFo)inp.removeEventListener('focus',inp._acFo);
+
+var dd=pd.createElement('div');dd.id='ac-dd';
+dd.style.cssText='display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);max-height:280px;overflow-y:auto;z-index:9999;';
+var wr=inp.closest('[data-testid="stTextInput"]')||inp.parentElement;
+wr.style.position='relative';wr.appendChild(dd);
+
+dd.addEventListener('click',function(e){
+  var it=e.target.closest('[data-t]');if(!it)return;
+  var t=it.getAttribute('data-t');
+  var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+  st.call(inp,t);
+  inp.dispatchEvent(new Event('input',{bubbles:true}));
+  setTimeout(function(){inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();},50);
+  dd.style.display='none';
+});
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function show(v){
+  if(v.length<2){dd.style.display='none';return;}
+  var lv=v.toLowerCase();
+  var m=S.filter(function(s){return s.indexOf(lv)!==-1;}).slice(0,8);
+  if(!m.length){dd.style.display='none';return;}
+  dd.innerHTML=m.map(function(s){
+    return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
+    +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+    +'<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span></div>';
+  }).join('');
+  dd.style.display='block';
+}
+
+inp._acIn=function(e){show(e.target.value);};
+inp._acFo=function(){if(inp.value.length>=2)show(inp.value);};
+inp.addEventListener('input',inp._acIn);
+inp.addEventListener('focus',inp._acFo);
+pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==inp)dd.style.display='none';});
+}catch(e){}
+})();
+</script>""".replace('__DATA__', _ac_data)
+        components.html(_ac_js, height=0, scrolling=False)
 
     # Popüler Aramalar (Yatay kaydırmalı pill butonlar)
     def set_search_term(term):
