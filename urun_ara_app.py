@@ -472,41 +472,51 @@ def get_populer_terimler():
 
 
 def _get_oneri_listesi_impl():
-    """Autocomplete için ürün isimlerini veritabanından getir - debug bilgisi ile"""
+    """Autocomplete için ürün kod + isimlerini veritabanından getir"""
     debug_info = []
     try:
         client = get_supabase_client()
         if not client:
             return [], ["Supabase client oluşturulamadı"]
 
-        # 1. RPC ile benzersiz ürün isimlerini çek (DB tarafında DISTINCT - en hızlı)
+        # 1. stok_gunluk'dan urun_kod + urun_ad çek (kod ile de aranabilsin)
         try:
-            result = client.rpc('get_urun_adlari', {'result_limit': 2000}).execute()
+            result = client.table('stok_gunluk')\
+                .select('urun_kod, urun_ad')\
+                .limit(10000)\
+                .execute()
+            if result.data:
+                seen = set()
+                liste = []
+                for r in result.data:
+                    kod = (r.get('urun_kod') or '').strip()
+                    ad = (r.get('urun_ad') or '').strip()
+                    if not ad:
+                        continue
+                    # "KOD - AD" formatı (kod varsa)
+                    if kod:
+                        key = f"{kod} - {ad}"
+                    else:
+                        key = ad
+                    if key not in seen:
+                        seen.add(key)
+                        liste.append(key)
+                if liste:
+                    debug_info.append(f"Tablo sorgusu OK: {len(liste)} ürün")
+                    return sorted(liste)[:5000], debug_info
+            debug_info.append("Tablo sorgusu sonuç boş")
+        except Exception as e:
+            debug_info.append(f"Tablo sorgusu hata: {e}")
+
+        # 2. Fallback: Sadece ürün adları (RPC)
+        try:
+            result = client.rpc('get_urun_adlari', {'result_limit': 5000}).execute()
             if result.data:
                 liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
                 debug_info.append(f"RPC OK: {len(liste)} ürün")
                 return liste, debug_info
-            else:
-                debug_info.append("RPC sonuç boş")
         except Exception as e:
             debug_info.append(f"RPC hata: {e}")
-
-        # 2. RPC yoksa doğrudan stok_gunluk tablosundan çek
-        try:
-            result = client.table('stok_gunluk')\
-                .select('urun_ad')\
-                .limit(5000)\
-                .execute()
-            if result.data:
-                urunler = list(dict.fromkeys(
-                    r['urun_ad'].strip() for r in result.data if r.get('urun_ad')
-                ))
-                if urunler:
-                    debug_info.append(f"Tablo sorgusu OK: {len(urunler)} ürün")
-                    return sorted(urunler)[:2000], debug_info
-            debug_info.append("Tablo sorgusu sonuç boş")
-        except Exception as e:
-            debug_info.append(f"Tablo sorgusu hata: {e}")
 
         # 3. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
