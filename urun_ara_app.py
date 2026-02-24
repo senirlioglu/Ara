@@ -702,11 +702,13 @@ def main():
 
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
-    if oneriler:
-        import json
-        import streamlit.components.v1 as components
-        _ac_data = json.dumps(oneriler, ensure_ascii=False)
-        _ac_js = """
+    if not oneriler:
+        # Boş sonucu cache'de tutma - sonraki yüklemede tekrar dene
+        get_oneri_listesi.clear()
+    import json
+    import streamlit.components.v1 as components
+    _ac_data = json.dumps(oneriler, ensure_ascii=False) if oneriler else '[]'
+    _ac_js = """
 <script>
 (function(){
 try{
@@ -763,7 +765,7 @@ function setup(inp){
 
 function poll(){
   try{
-    var inp=pd.querySelector('input[placeholder*="Ürün kodu"]');
+    var inp=pd.querySelector('input[placeholder*="Ürün kodu"]')||pd.querySelector('[data-testid="stTextInput"] input')||pd.querySelector('input[aria-label="Arama"]');
     if(!inp)return;
     if(inp!==_curInp)setup(inp);
     if(inp.value!==_lastVal){_lastVal=inp.value;show(inp,inp.value);}
@@ -775,7 +777,7 @@ setInterval(poll,250);
 }catch(e){}
 })();
 </script>""".replace('__DATA__', _ac_data)
-        components.html(_ac_js, height=0, scrolling=False)
+    components.html(_ac_js, height=0, scrolling=False)
 
     # Popüler Aramalar (Yatay kaydırmalı pill butonlar)
     def set_search_term(term):
