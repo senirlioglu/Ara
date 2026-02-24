@@ -16,27 +16,22 @@ import pandas as pd
 import os
 import re
 import unicodedata
-import threading
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
+import threading
 
 # --- Performans için Önceden Derlenmiş Regexler ---
-RE_MULTIPLE_SPACES = re.compile(r'\s+')
 RE_TV_NEGATIF = re.compile(
     r'battaniye|battanıye|ünite|unite|sehpa|koltuk|kılıf|kumanda|askı|aparat|kablo|atv|oyuncak|lisanslı|tvk',
     re.IGNORECASE
 )
 
 # Ikonu yukle (Favicon icin)
-@st.cache_resource
-def get_app_icon():
-    try:
-        return Image.open("static/icon-192.png")
-    except:
-        return "🔍"
-
-img_icon = get_app_icon()
+try:
+    img_icon = Image.open("static/icon-192.png")
+except:
+    img_icon = "🔍"
 
 # Sayfa ayarları
 st.set_page_config(
@@ -90,42 +85,6 @@ def get_supabase_client():
         return create_client(url, key)
     except:
         return None
-
-
-@st.cache_data(ttl=3600)
-def get_populer_terimler():
-    """Son 3 günde en çok aranan ve sonuç bulunan terimleri getir"""
-    try:
-        client = get_supabase_client()
-        if not client:
-            return ["Su", "Klima", "Seg", "Peynir", "Süt", "Ekmek", "Süpürge", "TV"]
-
-        # Son 3 günü hesapla
-        uc_gun_once = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-
-        # Veriyi çek
-        result = client.table('arama_log')\
-            .select('arama_terimi, arama_sayisi')\
-            .gte('tarih', uc_gun_once)\
-            .gt('sonuc_sayisi', 0)\
-            .order('arama_sayisi', desc=True)\
-            .limit(100)\
-            .execute()
-
-        if not result.data:
-            return ["Su", "Klima", "Seg", "Peynir", "Süt", "Ekmek", "Süpürge", "TV"]
-
-        # Python tarafında grupla ve topla (aynı terim farklı günlerde olabilir)
-        df = pd.DataFrame(result.data)
-        pop_df = df.groupby('arama_terimi')['arama_sayisi'].sum().reset_index()
-        pop_df = pop_df.sort_values('arama_sayisi', ascending=False)
-
-        # En çok aranan ilk 10 terim
-        terimler = [t.title() for t in pop_df['arama_terimi'].head(10).tolist() if len(t) > 1]
-
-        return terimler if terimler else ["Su", "Klima", "Seg", "Peynir", "Süt"]
-    except Exception:
-        return ["Su", "Klima", "Seg", "Peynir", "Süt"]
 
 
 # ============================================================================
@@ -196,23 +155,14 @@ def temizle_ve_kok_bul(text: str) -> str:
     for c, r in {
         '\u201c': '', '\u201d': '', '\u2019': '',
         '\u00a0': ' ', '\u0307': '',
-        "'": "", "’": "", "‘": "",
     }.items():
         result = result.replace(c, r)
 
-    # Klima kapasite birleştirme: "12 binlik" -> "12000", "12binlik" -> "12000"
-    result = re.sub(r'(\d)\s*bin(?:lik)?', r'\g<1>000', result)
-
-    # Bitişik harf+sayı ayır: "tv65" → "tv 65", "seg12000" → "seg 12000"
-    result = re.sub(r'([a-zA-Z]+)(\d+)', r'\1 \2', result)
-    result = re.sub(r'(\d+)([a-zA-Z]+)', r'\1 \2', result)
-
-    # Sayılardaki nokta ve virgülleri temizle (örn: 12.000 -> 12000)
-    # Sadece sayılar arasındaysa temizle
-    result = re.sub(r'(\d)[.,](\d)', r'\1\2', result)
+    # Bitişik tv+sayı ayır: "tv65" → "tv 65"
+    result = re.sub(r'(tv|televizyon)(\d)', r'\1 \2', result)
 
     # Çoklu boşlukları tekle
-    result = RE_MULTIPLE_SPACES.sub(' ', result).strip()
+    result = re.sub(r'\s+', ' ', result).strip()
 
     # 7. Yazım hatası düzeltme (kelime bazlı)
     words = result.split()
@@ -257,43 +207,6 @@ YAZIM_DUZELTME = {
     'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
     'sampuan': 'sampuan', 'sampuvan': 'sampuan',
     'rejisor': 'rejisör',
-    'deterjan': 'deterjan', 'deterjanı': 'deterjan', 'detarjan': 'deterjan',
-    'yumusatici': 'yumusatici', 'yumuatıcı': 'yumusatici',
-    'tuvalet': 'tuvalet', 'tuvalet kağıdı': 'tuvalet kagit',
-    'kağıdı': 'kagit', 'kagidi': 'kagit',
-    'peçete': 'pecete', 'pecete': 'pecete',
-    'ayakkabı': 'ayakkabi', 'ayakkabi': 'ayakkabi',
-    'terlik': 'terlik',
-    'gözlük': 'gozluk',
-    'kulaklık': 'kulaklik',
-    'hoparlör': 'hoparlor', 'hopörler': 'hoparlor',
-    'pirhana': 'piranha', 'pirana': 'piranha', 'prinha': 'piranha', 'prihana': 'piranha', 'prihanna': 'piranha',
-    'fujı': 'fuji', 'fujıfilm': 'fujifilm',
-    'early': 'earl', 'gray': 'grey',
-    'prince': 'price',
-    'mutfaf': 'mutfak',
-    'çakmaii': 'cakmak',
-    'btu': 'btu',
-    'seg': 'seg',
-    'realmi': 'realme', 'realme': 'realme',
-    'nimet ziyafet': 'nimet',
-    'yeşilyayla': 'yesilyayla',
-    'yer safrası': 'yer sofrasi',
-    'yapoz': 'yapboz',
-    'welxoft': 'welsoft',
-    'samsuna': 'samsung',
-    'saaf': 'saat',
-    'powebank': 'powerbank',
-    'phlips': 'philips',
-    'hopörlor': 'hoparlor', 'hopörloe': 'hoparlor', 'hopörle': 'hoparlor', 'hapörler': 'hoparlor',
-    'hunday': 'hyundai', 'huindai': 'hyundai',
-    'hotweels': 'hot wheels', 'hat wheels': 'hot wheels', 'hat weels': 'hot wheels',
-    'flavel': 'flavel', 'falvel': 'flavel',
-    'airyfer': 'airfryer', 'airfyer': 'airfryer', 'airfry': 'airfryer',
-    'leptop': 'laptop', 'labtop': 'laptop',
-    'hoporlor': 'hoparlor', 'haporlor': 'hoparlor',
-    'samsun': 'samsung', 'samsunga': 'samsung',
-    'vileda': 'vileda',
 }
 
 
@@ -321,61 +234,38 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
-        # Sonuç işleme fonksiyonu (Tekrar kullanılabilirlik için)
         def process_results(data, query):
-            if not data: return pd.DataFrame()
             df = pd.DataFrame(data)
             df.columns = [col.replace('out_', '') for col in df.columns]
 
-            # Negatif Filtre
-            q_lower = query.lower()
-            if q_lower in ['tv', 'televizyon']:
+            # --- Akıllı Sıralama (Relevance Scoring) ---
+            query_words = set(query.lower().split())
+
+            def calculate_relevance(row):
+                score = 0
+                urun_ad = str(row.get('urun_ad', '')).lower()
+
+                # Tam eşleşme (En yüksek puan)
+                if query.lower() in urun_ad:
+                    score += 100
+
+                # Kelime bazlı eşleşme
+                urun_words = set(urun_ad.split())
+                common_words = query_words.intersection(urun_words)
+                score += len(common_words) * 10
+
+                # Stok puanı (Bonus)
+                stok = row.get('stok_adet', 0)
+                if stok > 0:
+                    score += 5
+
+                return score
+
+            df['alaka'] = df.apply(calculate_relevance, axis=1)
+
+            # TV Filtresi
+            if any(x in query.lower() for x in ['tv', 'televizyon']):
                 df = df[~df['urun_ad'].str.contains(RE_TV_NEGATIF, na=False, regex=True)]
-
-            # Alaka Skoru (Ranking)
-            def alaka_skoru(row):
-                ad = str(row.get('urun_ad', '')).lower()
-                kod = str(row.get('urun_kod', '')).lower()
-                if query in kod: return 100
-
-                ad_norm = temizle_ve_kok_bul(ad)
-                if ad_norm == query: return 95
-
-                q_words = query.split()
-                ad_words = ad_norm.split()
-
-                # 1. Tam kelime eşleşmesi (En yüksek alaka)
-                # Örn: "su" için "hayat su" veya "erikli su"
-                if all(any(qw == aw for aw in ad_words) for qw in q_words):
-                    return 90
-
-                # 2. Kelime başı eşleşmesi (Örn: "tv" -> "tv ünitesi")
-                # Kısa sorgularda (su) kelime başı eşleşmeyi de kısıtla (Örn: su -> süzme eşleşmesin)
-                if all(any(aw.startswith(qw) for aw in ad_words) for qw in q_words):
-                    if len(query) > 2:
-                        return 80
-                    # Eğer 2 harfse, sadece kelime TAM eşleşirse 90 alıp yukarıdan döner.
-                    # Buraya gelirse ve query <= 2 ise alaka sıfırlanır.
-
-                # Kısa sorgu koruması: "su" gibi <= 2 harfli aramalar için
-                # substring (içinde geçme) eşleşmesini devre dışı bırak.
-                if len(query) <= 2:
-                    return 0
-
-                # 3. Genel Başlangıç eşleşmesi
-                if ad_norm.startswith(query): return 75
-
-                # 4. Kelime bazlı kısmi eşleşme (substring)
-                if all(qw in ad_norm for qw in q_words): return 70
-
-                # Kategori/Sinonim desteği (Google gibi)
-                sinonim_skor = 0
-                if 'klima' in q_words and any(x in ad_norm for x in ['btu', '000', 'inv']): sinonim_skor = 65
-                if 'tv' in q_words and any(x in ad_norm for x in ['inc', 'led', 'ekran']): sinonim_skor = 65
-
-                return sinonim_skor
-
-            df['alaka'] = df.apply(alaka_skoru, axis=1)
 
             # Kısa sorgularda alakasızları (substring) temizle
             if len(query) <= 2:
@@ -502,6 +392,30 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
         pass
 
 
+@st.cache_data(ttl=3600)
+def get_populer_terimler():
+    """En çok aranan ve sonuç getiren terimleri getir"""
+    try:
+        client = get_supabase_client()
+        if not client: return []
+
+        # Son 30 günün en çok aranan 10 terimi (en az 1 sonuç getirmiş olanlar)
+        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        result = client.table('arama_log')\
+            .select('arama_terimi, arama_sayisi')\
+            .gte('tarih', baslangic)\
+            .gt('sonuc_sayisi', 0)\
+            .order('arama_sayisi', desc=True)\
+            .limit(10)\
+            .execute()
+
+        if result.data:
+            return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))[:10]
+    except:
+        pass
+    return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
+
+
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
     # Hata varsa (None) sessizce çık - hata mesajı zaten basıldı
@@ -510,7 +424,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
     sonuc_sayisi = 0 if df.empty else len(df['urun_kod'].unique())
 
-    # Arka planda logla (Google hızı için)
+    # Arka planda logla (UI bloklamaması için)
     threading.Thread(target=log_arama, args=(arama_text, sonuc_sayisi), daemon=True).start()
 
     # Sonuç yoksa (empty) kullanıcıya bildir
