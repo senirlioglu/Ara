@@ -503,14 +503,14 @@ def _get_oneri_listesi_impl():
                         liste.append(key)
                 if liste:
                     debug_info.append(f"Tablo sorgusu OK: {len(liste)} ürün")
-                    return sorted(liste)[:3000], debug_info
+                    return sorted(liste)[:5000], debug_info
             debug_info.append("Tablo sorgusu sonuç boş")
         except Exception as e:
             debug_info.append(f"Tablo sorgusu hata: {e}")
 
         # 2. Fallback: Sadece ürün adları (RPC)
         try:
-            result = client.rpc('get_urun_adlari', {'result_limit': 2000}).execute()
+            result = client.rpc('get_urun_adlari', {'result_limit': 5000}).execute()
             if result.data:
                 liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
                 debug_info.append(f"RPC OK: {len(liste)} ürün")
