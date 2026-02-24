@@ -747,11 +747,14 @@ function show(v){
   dd.style.display='block';
 }
 
-inp._acIn=function(e){show(e.target.value);};
+inp._acIn=function(){show(inp.value);};
 inp._acFo=function(){if(inp.value.length>=2)show(inp.value);};
 inp.addEventListener('input',inp._acIn);
+inp.addEventListener('keyup',inp._acIn);
+inp.addEventListener('compositionend',inp._acIn);
 inp.addEventListener('focus',inp._acFo);
 pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==inp)dd.style.display='none';});
+var _lastVal='';setInterval(function(){if(pd.activeElement===inp&&inp.value!==_lastVal){_lastVal=inp.value;show(inp.value);}},300);
 }catch(e){}
 })();
 </script>""".replace('__DATA__', _ac_data)
