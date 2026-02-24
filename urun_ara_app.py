@@ -92,6 +92,42 @@ def get_supabase_client():
         return None
 
 
+@st.cache_data(ttl=3600)
+def get_populer_terimler():
+    """Son 3 günde en çok aranan ve sonuç bulunan terimleri getir"""
+    try:
+        client = get_supabase_client()
+        if not client:
+            return ["Su", "Klima", "Seg", "Peynir", "Süt", "Ekmek", "Süpürge", "TV"]
+
+        # Son 3 günü hesapla
+        uc_gun_once = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
+
+        # Veriyi çek
+        result = client.table('arama_log')\
+            .select('arama_terimi, arama_sayisi')\
+            .gte('tarih', uc_gun_once)\
+            .gt('sonuc_sayisi', 0)\
+            .order('arama_sayisi', desc=True)\
+            .limit(100)\
+            .execute()
+
+        if not result.data:
+            return ["Su", "Klima", "Seg", "Peynir", "Süt", "Ekmek", "Süpürge", "TV"]
+
+        # Python tarafında grupla ve topla (aynı terim farklı günlerde olabilir)
+        df = pd.DataFrame(result.data)
+        pop_df = df.groupby('arama_terimi')['arama_sayisi'].sum().reset_index()
+        pop_df = pop_df.sort_values('arama_sayisi', ascending=False)
+
+        # En çok aranan ilk 10 terim
+        terimler = [t.title() for t in pop_df['arama_terimi'].head(10).tolist() if len(t) > 1]
+
+        return terimler if terimler else ["Su", "Klima", "Seg", "Peynir", "Süt"]
+    except Exception:
+        return ["Su", "Klima", "Seg", "Peynir", "Süt"]
+
+
 # ============================================================================
 # YARDIMCI FONKSIYONLAR
 # ============================================================================
@@ -286,24 +322,6 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
-        # RPC Çağrısı (Zaman aşımı kontrolü ile)
-        try:
-            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
-        except Exception as e:
-            if "timeout" in str(e).lower() or "57014" in str(e):
-                st.warning("⚠️ Arama çok uzun sürdü. Lütfen daha spesifik kelimeler deneyin (örn: marka model).")
-                return pd.DataFrame()
-            raise e
-
-        # Hata kontrolü
-        if getattr(result, 'error', None):
-            err_msg = str(result.error)
-            if "timeout" in err_msg.lower() or "57014" in err_msg:
-                st.warning("⚠️ Veritabanı meşgul veya arama çok geniş. Lütfen kelimeleri daraltın.")
-                return pd.DataFrame()
-            st.error(f"Arama hatası (RPC): {result.error}")
-            return None
-
         # Sonuç işleme fonksiyonu (Tekrar kullanılabilirlik için)
         def process_results(data, query):
             if not data: return pd.DataFrame()
@@ -360,8 +378,20 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
-        if result.data:
-            return process_results(result.data, optimize_sorgu)
+        # RPC Çağrısı (Zaman aşımı kontrolü ile)
+        try:
+            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+            if result.data:
+                return process_results(result.data, optimize_sorgu)
+        except Exception as e:
+            if not ("timeout" in str(e).lower() or "57014" in str(e)):
+                st.error(f"Beklenmeyen Hata: {e}")
+
+        # Hata kontrolü (result nesnesi üzerinden)
+        if 'result' in locals() and getattr(result, 'error', None):
+            err_msg = str(result.error)
+            if not ("timeout" in err_msg.lower() or "57014" in err_msg):
+                st.error(f"Arama hatası (RPC): {result.error}")
 
         # ---- FALLBACK SEARCH (Google-like) ----
         # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
@@ -400,7 +430,18 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                         return process_results(fallback_result.data, optimize_sorgu)
                 except: pass
 
-        # Sonuç yoksa boş DataFrame
+        # 4. En Uzun Kelimeyi Dene (Son çare)
+        if len(sorgu_kelimeleri) > 1:
+            en_uzun_kelime = max(sorgu_kelimeleri, key=len)
+            if len(en_uzun_kelime) >= 4:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': en_uzun_kelime}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # Timeout uyarısı (Eğer buraya kadar gelip sonuç yoksa ve timeout olmuşsa)
+        st.warning("🔍 Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
         return pd.DataFrame()
 
     except Exception as e:
@@ -609,13 +650,17 @@ def main():
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
     # Hızlı Arama Önerileri (Google-like)
-    st.markdown("---")
-    populer = ["Su", "Klima", "Seg", "Peynir", "Bisküvi", "Süt", "Ekmek", "Süpürge", "TV"]
-    cols = st.columns(len(populer))
-    for i, p in enumerate(populer):
-        if cols[i].button(p, use_container_width=True, key=f"pop_{p}"):
-            st.session_state.arama_input = p
-            st.rerun()
+    populer = get_populer_terimler()
+    if populer:
+        st.markdown("<div style='margin-top: 1rem; margin-bottom: 0.5rem;'><small>🔥 <b>Son 3 Günün Popüler Aramaları:</b></small></div>", unsafe_allow_html=True)
+        # 5'li ızgara yapısı
+        cols = st.columns(5)
+        for i, p in enumerate(populer):
+            col_idx = i % 5
+            if cols[col_idx].button(p, use_container_width=True, key=f"pop_{p}_{i}"):
+                st.session_state.arama_input = p
+                st.rerun()
+        st.markdown("---")
 
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
