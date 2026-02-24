@@ -239,7 +239,21 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- 9. ÖRNEK VERİ EKLE (Test için)
+-- 9. AUTOCOMPLETE İÇİN DISTINCT ÜRÜN ADLARI (Performanslı)
+CREATE OR REPLACE FUNCTION get_urun_adlari(result_limit INTEGER DEFAULT 500)
+RETURNS TABLE (urun_ad TEXT) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT DISTINCT sg.urun_ad
+    FROM stok_gunluk sg
+    WHERE sg.urun_ad IS NOT NULL AND sg.urun_ad != ''
+    ORDER BY sg.urun_ad
+    LIMIT result_limit;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- 10. ÖRNEK VERİ EKLE (Test için)
 INSERT INTO products (name, description, category, price, stock) VALUES
     ('Ekmek', 'Taze günlük ekmek', 'Gıda', 5.00, 100),
     ('Ekmeği', 'Kepekli ekmek çeşidi', 'Gıda', 7.50, 50),
