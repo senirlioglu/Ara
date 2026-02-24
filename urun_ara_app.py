@@ -16,6 +16,7 @@ import pandas as pd
 import os
 import re
 import unicodedata
+import threading
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
@@ -29,10 +30,14 @@ RE_TV_NEGATIF = re.compile(
 )
 
 # Ikonu yukle (Favicon icin)
-try:
-    img_icon = Image.open("static/icon-192.png")
-except:
-    img_icon = "🔍"
+@st.cache_data
+def get_app_icon():
+    try:
+        return Image.open("static/icon-192.png")
+    except:
+        return "🔍"
+
+img_icon = get_app_icon()
 
 # Sayfa ayarları
 st.set_page_config(
@@ -208,6 +213,16 @@ YAZIM_DUZELTME = {
     'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
     'sampuan': 'sampuan', 'sampuvan': 'sampuan',
     'rejisor': 'rejisör',
+    'deterjan': 'deterjan', 'deterjanı': 'deterjan', 'detarjan': 'deterjan',
+    'yumusatici': 'yumusatici', 'yumuatıcı': 'yumusatici',
+    'tuvalet': 'tuvalet', 'tuvalet kağıdı': 'tuvalet kagit',
+    'kağıdı': 'kagit', 'kagidi': 'kagit',
+    'peçete': 'pecete', 'pecete': 'pecete',
+    'ayakkabı': 'ayakkabi', 'ayakkabi': 'ayakkabi',
+    'terlik': 'terlik',
+    'gözlük': 'gozluk',
+    'kulaklık': 'kulaklik',
+    'hoparlör': 'hoparlor', 'hopörler': 'hoparlor',
 }
 
 
@@ -253,6 +268,21 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             arama_lower = optimize_sorgu.lower()
             if arama_lower in ['tv', 'televizyon']:
                 df = df[~df['urun_ad'].str.contains(RE_TV_NEGATIF, na=False, regex=True)]
+
+            # ARAMA SIRALAMASI (Ranking) - Google benzeri alaka düzeyi
+            # Tam eşleşenleri veya başlangıçta olanları öne çıkar
+            def alaka_skoru(urun_ad):
+                if not urun_ad: return 0
+                urun_ad_norm = temizle_ve_kok_bul(urun_ad)
+                if urun_ad_norm == optimize_sorgu: return 100
+                if urun_ad_norm.startswith(optimize_sorgu): return 80
+                if all(word in urun_ad_norm for word in optimize_sorgu.split()): return 60
+                return 0
+
+            df['alaka'] = df['urun_ad'].apply(alaka_skoru)
+            # Hem SQL rankını (gelen sıra) hem de bizim alaka skorumuzu kullan
+            # Gelen sıra zaten rank'a göre olduğu için onu koruyarak alaka ekliyoruz
+            df = df.sort_values(by=['alaka'], ascending=False)
 
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
@@ -306,7 +336,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         return
 
     sonuc_sayisi = 0 if df.empty else len(df['urun_kod'].unique())
-    log_arama(arama_text, sonuc_sayisi)
+
+    # Arka planda logla (Google hızı için)
+    threading.Thread(target=log_arama, args=(arama_text, sonuc_sayisi), daemon=True).start()
 
     # Sonuç yoksa (empty) kullanıcıya bildir
     if df.empty:
@@ -331,9 +363,16 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     )
     urunler = urunler.sort_values('sira').drop('sira', axis=1)
 
-    st.success(f"**{len(urunler)}** farklı ürün bulundu")
+    # Performans için sonuçları sınırla
+    top_n = 40
+    gosterilecek_urunler = urunler.head(top_n)
 
-    for _, urun in urunler.iterrows():
+    if len(urunler) > top_n:
+        st.info(f"🔍 Toplam {len(urunler)} ürün bulundu, en alakalı {top_n} ürün gösteriliyor.")
+    else:
+        st.success(f"**{len(urunler)}** farklı ürün bulundu")
+
+    for _, urun in gosterilecek_urunler.iterrows():
         urun_kod = urun['urun_kod']
         urun_ad = urun['urun_ad'] if urun['urun_ad'] else urun_kod
         stoklu_magaza = int(urun['stoklu_magaza'])
@@ -367,6 +406,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
+                html_cards = []
                 for _, row in urun_df_stoklu.iterrows():
                     try:
                         seviye, _, renk = get_stok_seviye(row['stok_adet'])
@@ -384,6 +424,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     lat = row.get('latitude')
                     lon = row.get('longitude')
 
+                    harita_ikonu = ""
                     if lat and lon:
                         harita_ikonu = (
                             f'<a href="https://www.google.com/maps?q={lat},{lon}" '
@@ -393,10 +434,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             'title="Yol tarifi al">'
                             '📍 Yol tarifi</a>'
                         )
-                    else:
-                        harita_ikonu = ""
 
-                    st.markdown(f"""
+                    html_cards.append(f"""
                     <div style="
                         background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%);
                         border-left: 4px solid {renk};
@@ -422,7 +461,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             {adet} Adet
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """)
+                st.markdown("".join(html_cards), unsafe_allow_html=True)
 
 
 # ============================================================================
