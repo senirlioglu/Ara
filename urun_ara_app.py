@@ -64,59 +64,43 @@ st.markdown("""
     .stButton > button { border-radius: 12px !important; padding: 0.75rem 1.5rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
     .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
 
-    /* Yatay kaydırmalı pill container */
-    .pill-scroll {
-        display: flex;
-        overflow-x: auto;
-        gap: 8px;
-        padding: 8px 2px;
+    /* Pill satırları: 3+ kolonlu yatay bloklar kaydırılabilir olsun */
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
         -ms-overflow-style: none;
+        gap: 4px !important;
+        padding-bottom: 4px;
     }
-    .pill-scroll::-webkit-scrollbar { display: none; }
-    .pill-tag {
-        flex-shrink: 0;
-        display: inline-block;
-        background: #f0f1f6;
-        color: #555;
-        border: 1px solid #e0e2ea;
-        border-radius: 20px;
-        padding: 8px 16px;
-        font-size: 0.85rem;
-        font-weight: 500;
-        text-decoration: none;
-        white-space: nowrap;
-        transition: all 0.2s ease;
-        cursor: pointer;
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3))::-webkit-scrollbar { display: none; }
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) > [data-testid="stColumn"] {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: fit-content !important;
     }
-    .pill-tag:hover {
-        background: #e4e5f0;
-        border-color: #667eea;
-        color: #667eea;
-        text-decoration: none;
+    /* Pill satırlarındaki butonlar küçük pill olsun */
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+        background: #f0f1f6 !important;
+        color: #555 !important;
+        border: 1px solid #e0e2ea !important;
+        border-radius: 20px !important;
+        padding: 0.4rem 1rem !important;
+        font-size: 0.85rem !important;
+        font-weight: 500 !important;
+        white-space: nowrap !important;
+        min-height: unset !important;
+        line-height: 1.4 !important;
     }
-    .pill-tag-recent {
-        flex-shrink: 0;
-        display: inline-block;
-        background: #fff;
-        color: #667eea;
-        border: 1px solid #667eea33;
-        border-radius: 20px;
-        padding: 8px 16px;
-        font-size: 0.85rem;
-        font-weight: 500;
-        text-decoration: none;
-        white-space: nowrap;
-        transition: all 0.2s ease;
-        cursor: pointer;
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button:hover {
+        background: #e4e5f0 !important;
+        border-color: #667eea !important;
+        color: #667eea !important;
+        transform: none !important;
+        box-shadow: none !important;
     }
-    .pill-tag-recent:hover {
-        background: #667eea11;
-        border-color: #667eea;
-        color: #667eea;
-        text-decoration: none;
-    }
+
     .popular-title {
         font-size: 0.95rem;
         font-weight: 600;
@@ -136,7 +120,10 @@ st.markdown("""
 
     @media (max-width: 768px) {
         .block-container { padding: 0.5rem !important; }
-        .pill-tag, .pill-tag-recent { padding: 6px 12px; font-size: 0.8rem; }
+        [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+            padding: 0.35rem 0.75rem !important;
+            font-size: 0.8rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -336,8 +323,9 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
             df['alaka'] = df.apply(calculate_relevance, axis=1)
 
-            # TV Filtresi
-            if any(x in query.lower() for x in ['tv', 'televizyon']):
+            # TV Filtresi (sadece bağımsız kelime olarak "tv" veya "televizyon" varsa)
+            query_words_set = set(query.lower().split())
+            if query_words_set.intersection({'tv', 'televizyon'}):
                 df = df[~df['urun_ad'].str.contains(RE_TV_NEGATIF, na=False, regex=True)]
 
             # Kısa sorgularda alakasızları (substring) temizle
@@ -630,20 +618,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 # ============================================================================
 
 def main():
-    import urllib.parse
-    import html as html_mod
-
-    # Popüler arama pill tıklaması (URL parametre ile)
-    q_param = st.query_params.get("q")
-    if q_param:
-        st.session_state.arama_input = q_param
-        if "son_aramalar" not in st.session_state:
-            st.session_state.son_aramalar = []
-        if q_param not in st.session_state.son_aramalar:
-            st.session_state.son_aramalar.insert(0, q_param)
-            st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
-        del st.query_params["q"]
-
     st.markdown("""
     <div class="main-header">
         <h1>🔍 Ürün Ara</h1>
@@ -680,30 +654,32 @@ def main():
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
-    # Popüler & Son Aramalar (Yatay kaydırmalı pill tasarımı)
+    # Popüler & Son Aramalar (Yatay kaydırmalı pill butonlar)
+    def set_search_term(term):
+        st.session_state.arama_input = term
+        if "son_aramalar" not in st.session_state:
+            st.session_state.son_aramalar = []
+        if term not in st.session_state.son_aramalar:
+            st.session_state.son_aramalar.insert(0, term)
+            st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
+
     populer = get_populer_terimler()
     son_aramalar = st.session_state.get("son_aramalar", [])
 
     if son_aramalar or populer:
-        pills_html = ""
-
         # Son Aramalar
         if son_aramalar:
-            son_pills = ''.join(
-                f'<a href="?q={urllib.parse.quote(t)}" class="pill-tag-recent">{html_mod.escape(t)}</a>'
-                for t in son_aramalar
-            )
-            pills_html += f'<div class="recent-title">🕒 Son Aramalarınız</div><div class="pill-scroll">{son_pills}</div>'
+            st.markdown('<div class="recent-title">🕒 Son Aramalarınız</div>', unsafe_allow_html=True)
+            cols_son = st.columns(len(son_aramalar))
+            for i, s in enumerate(son_aramalar):
+                cols_son[i].button(s, use_container_width=True, key=f"son_{s}_{i}", on_click=set_search_term, args=(s,))
 
-        # Popüler Aramalar
+        # Popüler Aramalar (tek satır, yatay kaydırmalı)
         if populer:
-            pop_pills = ''.join(
-                f'<a href="?q={urllib.parse.quote(t)}" class="pill-tag">{html_mod.escape(t)}</a>'
-                for t in populer
-            )
-            pills_html += f'<div class="popular-title">🔥 Popüler Aramalar</div><div class="pill-scroll">{pop_pills}</div>'
-
-        st.markdown(pills_html, unsafe_allow_html=True)
+            st.markdown('<div class="popular-title">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
+            cols_pop = st.columns(len(populer))
+            for i, p in enumerate(populer):
+                cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_term, args=(p,))
 
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
