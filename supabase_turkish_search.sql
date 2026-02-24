@@ -244,10 +244,10 @@ CREATE OR REPLACE FUNCTION get_urun_adlari(result_limit INTEGER DEFAULT 500)
 RETURNS TABLE (urun_ad TEXT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT DISTINCT sg.urun_ad
+    SELECT DISTINCT sg.urun_ad::TEXT
     FROM stok_gunluk sg
     WHERE sg.urun_ad IS NOT NULL AND sg.urun_ad != ''
-    ORDER BY sg.urun_ad
+    ORDER BY sg.urun_ad::TEXT
     LIMIT result_limit;
 END;
 $$ LANGUAGE plpgsql;
