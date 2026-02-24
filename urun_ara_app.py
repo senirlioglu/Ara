@@ -478,40 +478,15 @@ def get_oneri_listesi():
         client = get_supabase_client()
         if not client: return []
 
-        urun_adlari = set()
-
-        # 1. stok_gunluk tablosundan benzersiz ürün isimlerini çek
+        # 1. RPC ile benzersiz ürün isimlerini çek (DB tarafında DISTINCT - en hızlı)
         try:
-            result = client.table('stok_gunluk')\
-                .select('urun_ad')\
-                .limit(1000)\
-                .execute()
+            result = client.rpc('get_urun_adlari', {'result_limit': 500}).execute()
             if result.data:
-                for r in result.data:
-                    ad = r.get('urun_ad', '')
-                    if ad:
-                        urun_adlari.add(ad.strip())
-                if urun_adlari:
-                    return sorted(urun_adlari)[:500]
+                return [r['urun_ad'] for r in result.data if r.get('urun_ad')]
         except Exception:
             pass
 
-        # 2. Fallback: RPC ile yaygın harflerden ürün isimlerini topla
-        for terim in ['a', 'e', 'k', 'm', 'b']:
-            try:
-                result = client.rpc('hizli_urun_ara', {'arama_terimi': terim}).execute()
-                if result.data:
-                    for r in result.data:
-                        ad = r.get('out_urun_ad', '')
-                        if ad:
-                            urun_adlari.add(ad.strip())
-            except Exception:
-                continue
-
-        if urun_adlari:
-            return sorted(urun_adlari)[:500]
-
-        # 3. Son fallback: arama_log'dan popüler terimleri kullan
+        # 2. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         result = client.table('arama_log')\
             .select('arama_terimi, arama_sayisi')\
