@@ -471,23 +471,25 @@ def get_populer_terimler():
     return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
 
 
-@st.cache_data(ttl=300)
-def get_oneri_listesi():
-    """Autocomplete için ürün isimlerini veritabanından getir (cached 5 dk)"""
+def _get_oneri_listesi_impl():
+    """Autocomplete için ürün isimlerini veritabanından getir - debug bilgisi ile"""
+    debug_info = []
     try:
         client = get_supabase_client()
-        if not client: return []
+        if not client:
+            return [], ["Supabase client oluşturulamadı"]
 
         # 1. RPC ile benzersiz ürün isimlerini çek (DB tarafında DISTINCT - en hızlı)
         try:
             result = client.rpc('get_urun_adlari', {'result_limit': 500}).execute()
             if result.data:
-                print(f"[ONERI] RPC başarılı, {len(result.data)} ürün geldi")
-                return [r['urun_ad'] for r in result.data if r.get('urun_ad')]
+                liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
+                debug_info.append(f"RPC OK: {len(liste)} ürün")
+                return liste, debug_info
             else:
-                print("[ONERI] RPC sonuç boş döndü")
+                debug_info.append("RPC sonuç boş")
         except Exception as e:
-            print(f"[ONERI] RPC hatası: {e}")
+            debug_info.append(f"RPC hata: {e}")
 
         # 2. RPC yoksa doğrudan stok_gunluk tablosundan çek
         try:
@@ -500,10 +502,11 @@ def get_oneri_listesi():
                     r['urun_ad'].strip() for r in result.data if r.get('urun_ad')
                 ))
                 if urunler:
-                    print(f"[ONERI] Doğrudan tablo sorgusu, {len(urunler)} ürün geldi")
-                    return sorted(urunler)[:500]
+                    debug_info.append(f"Tablo sorgusu OK: {len(urunler)} ürün")
+                    return sorted(urunler)[:500], debug_info
+            debug_info.append("Tablo sorgusu sonuç boş")
         except Exception as e:
-            print(f"[ONERI] Tablo sorgusu hatası: {e}")
+            debug_info.append(f"Tablo sorgusu hata: {e}")
 
         # 3. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -515,10 +518,23 @@ def get_oneri_listesi():
             .limit(50)\
             .execute()
         if result.data:
-            return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
-    except Exception:
-        pass
-    return []
+            liste = list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
+            debug_info.append(f"Fallback arama_log: {len(liste)} terim")
+            return liste, debug_info
+    except Exception as e:
+        debug_info.append(f"Genel hata: {e}")
+    return [], debug_info
+
+@st.cache_data(ttl=300)
+def get_oneri_listesi():
+    """Cached wrapper"""
+    liste, _ = _get_oneri_listesi_impl()
+    return liste
+
+def get_oneri_debug():
+    """Debug bilgisi (cache'siz)"""
+    _, debug = _get_oneri_listesi_impl()
+    return debug
 
 
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
@@ -763,6 +779,13 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
             goster_sonuclar(df, arama_text)
     elif arama_text and len(arama_text) < 2:
         st.info("En az 2 karakter girin.")
+
+    # --- GEÇİCİ DEBUG (sorun bulunduktan sonra silinecek) ---
+    with st.expander("🔧 Debug: Öneri Kaynağı"):
+        debug = get_oneri_debug()
+        for d in debug:
+            st.code(d)
+        st.write(f"Öneri sayısı: {len(oneriler) if oneriler else 0}")
 
 
 # ============================================================================
