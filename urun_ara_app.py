@@ -59,12 +59,90 @@ st.markdown("""
     .search-container { background: white; padding: 1rem; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 1rem; }
     .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.75rem 1rem !important; font-size: 1rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
-    .stButton > button { border-radius: 12px !important; padding: 0.75rem 1.5rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
-    .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
+
+    /* Default: pill tag style for all buttons */
+    .stButton > button {
+        border-radius: 20px !important;
+        padding: 0.4rem 1rem !important;
+        font-weight: 500 !important;
+        font-size: 0.85rem !important;
+        background: #f0f1f6 !important;
+        color: #555 !important;
+        border: 1px solid #e0e2ea !important;
+        min-height: unset !important;
+        line-height: 1.4 !important;
+        transition: all 0.2s ease !important;
+        white-space: nowrap !important;
+    }
+    .stButton > button:hover {
+        background: #e4e5f0 !important;
+        border-color: #667eea !important;
+        color: #667eea !important;
+        box-shadow: none !important;
+        transform: none !important;
+    }
+
+    /* Primary button override (Ara) */
+    .stButton > button[kind="primary"],
+    button[data-testid="baseButton-primary"] {
+        border-radius: 12px !important;
+        padding: 0.75rem 1.5rem !important;
+        font-weight: 600 !important;
+        font-size: 1rem !important;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        border: none !important;
+        color: white !important;
+        min-height: auto !important;
+    }
+    .stButton > button[kind="primary"]:hover,
+    button[data-testid="baseButton-primary"]:hover {
+        background: linear-gradient(135deg, #5a6fd6 0%, #6a4196 100%) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
+        color: white !important;
+        border-color: transparent !important;
+    }
+
+    /* Popular searches section title */
+    .popular-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #333;
+        margin: 0.8rem 0 0.5rem 0.2rem;
+    }
+    .recent-title {
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: #666;
+        margin: 0.5rem 0 0.4rem 0.2rem;
+    }
+
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 1rem; }
     .streamlit-expanderHeader { background: white !important; border-radius: 12px !important; border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; padding: 0.75rem 1rem !important; font-weight: 500 !important; }
     .streamlit-expanderContent { background: white !important; border-radius: 0 0 12px 12px !important; border: none !important; padding: 0.5rem !important; }
-    @media (max-width: 768px) { .block-container { padding: 1rem !important; } }
+
+    /* Mobile: keep pill buttons horizontal, don't stack */
+    @media (max-width: 768px) {
+        .block-container { padding: 0.5rem !important; }
+        [data-testid="stHorizontalBlock"] {
+            flex-direction: row !important;
+            flex-wrap: wrap !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            flex: 0 1 auto !important;
+            width: auto !important;
+            min-width: 0 !important;
+        }
+        .stButton > button {
+            padding: 0.35rem 0.75rem !important;
+            font-size: 0.8rem !important;
+        }
+        .stButton > button[kind="primary"],
+        button[data-testid="baseButton-primary"] {
+            padding: 0.6rem 1.2rem !important;
+            font-size: 0.95rem !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -593,7 +671,7 @@ def main():
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
-    # Hızlı Arama Önerileri (Google-like)
+    # Hızlı Arama Önerileri (Mobil uyumlu pill tasarımı)
     def set_search_term(term):
         st.session_state.arama_input = term
         if "son_aramalar" not in st.session_state:
@@ -604,28 +682,26 @@ def main():
 
     populer = get_populer_terimler()
 
-    # UI: Aramalar Yan Yana (Popüler + Son)
     if populer or st.session_state.get("son_aramalar"):
-        st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
-
         # Son Aramalar (Varsa)
         son_aramalar = st.session_state.get("son_aramalar", [])
         if son_aramalar:
-            st.markdown("<small>🕒 <b>Son Aramalarınız:</b></small>", unsafe_allow_html=True)
-            cols_son = st.columns(len(son_aramalar))
-            for i, s in enumerate(son_aramalar):
+            st.markdown('<div class="recent-title">🕒 Son Aramalarınız</div>', unsafe_allow_html=True)
+            cols_count = min(len(son_aramalar), 5)
+            cols_son = st.columns(cols_count)
+            for i, s in enumerate(son_aramalar[:cols_count]):
                 cols_son[i].button(s, use_container_width=True, key=f"son_{s}_{i}", on_click=set_search_term, args=(s,))
 
         # Popüler Aramalar
         if populer:
-            st.markdown("<small>🔥 <b>Popüler:</b></small>", unsafe_allow_html=True)
-            # 5'li ızgara
+            st.markdown('<div class="popular-title">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
             rows = [populer[i:i + 5] for i in range(0, len(populer), 5)]
             for row_idx, row_items in enumerate(rows):
-                cols = st.columns(5)
+                cols = st.columns(len(row_items))
                 for i, p in enumerate(row_items):
                     cols[i].button(p, use_container_width=True, key=f"pop_{p}_{row_idx}_{i}", on_click=set_search_term, args=(p,))
-        st.markdown("---")
+
+        st.markdown("<div style='margin-bottom: 1rem;'></div>", unsafe_allow_html=True)
 
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
