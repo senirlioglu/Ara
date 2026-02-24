@@ -164,8 +164,16 @@ def temizle_ve_kok_bul(text: str) -> str:
     }.items():
         result = result.replace(c, r)
 
-    # Bitişik tv+sayı ayır: "tv65" → "tv 65"
-    result = RE_TV_DIGIT.sub(r'\1 \2', result)
+    # Klima kapasite birleştirme: "12 binlik" -> "12000", "12binlik" -> "12000"
+    result = re.sub(r'\s*binlik', '000', result)
+
+    # Bitişik harf+sayı ayır: "tv65" → "tv 65", "seg12000" → "seg 12000"
+    result = re.sub(r'([a-zA-Z]+)(\d+)', r'\1 \2', result)
+    result = re.sub(r'(\d+)([a-zA-Z]+)', r'\1 \2', result)
+
+    # Sayılardaki nokta ve virgülleri temizle (örn: 12.000 -> 12000)
+    # Sadece sayılar arasındaysa temizle
+    result = re.sub(r'(\d)[.,](\d)', r'\1\2', result)
 
     # Çoklu boşlukları tekle
     result = RE_MULTIPLE_SPACES.sub(' ', result).strip()
@@ -223,6 +231,14 @@ YAZIM_DUZELTME = {
     'gözlük': 'gozluk',
     'kulaklık': 'kulaklik',
     'hoparlör': 'hoparlor', 'hopörler': 'hoparlor',
+    'pirhana': 'piranha', 'pirana': 'piranha',
+    'fujı': 'fuji', 'fujıfilm': 'fujifilm',
+    'early': 'earl', 'gray': 'grey',
+    'prince': 'price',
+    'mutfaf': 'mutfak',
+    'çakmaii': 'cakmak',
+    'btu': 'btu',
+    'seg': 'seg',
 }
 
 
@@ -250,11 +266,21 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
-        # RPC Çağrısı
-        result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+        # RPC Çağrısı (Zaman aşımı kontrolü ile)
+        try:
+            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+        except Exception as e:
+            if "timeout" in str(e).lower() or "57014" in str(e):
+                st.warning("⚠️ Arama çok uzun sürdü. Lütfen daha spesifik kelimeler deneyin (örn: marka model).")
+                return pd.DataFrame()
+            raise e
 
         # Hata kontrolü
         if getattr(result, 'error', None):
+            err_msg = str(result.error)
+            if "timeout" in err_msg.lower() or "57014" in err_msg:
+                st.warning("⚠️ Veritabanı meşgul veya arama çok geniş. Lütfen kelimeleri daraltın.")
+                return pd.DataFrame()
             st.error(f"Arama hatası (RPC): {result.error}")
             return None
 
@@ -271,15 +297,21 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
 
             # ARAMA SIRALAMASI (Ranking) - Google benzeri alaka düzeyi
             # Tam eşleşenleri veya başlangıçta olanları öne çıkar
-            def alaka_skoru(urun_ad):
-                if not urun_ad: return 0
-                urun_ad_norm = temizle_ve_kok_bul(urun_ad)
-                if urun_ad_norm == optimize_sorgu: return 100
-                if urun_ad_norm.startswith(optimize_sorgu): return 80
-                if all(word in urun_ad_norm for word in optimize_sorgu.split()): return 60
+            def alaka_skoru(row):
+                ad = str(row.get('urun_ad', '')).lower()
+                kod = str(row.get('urun_kod', '')).lower()
+
+                # Kod eşleşmesi (en yüksek öncelik)
+                if optimize_sorgu in kod: return 100
+
+                # İsim eşleşmesi
+                ad_norm = temizle_ve_kok_bul(ad)
+                if ad_norm == optimize_sorgu: return 90
+                if ad_norm.startswith(optimize_sorgu): return 80
+                if all(word in ad_norm for word in optimize_sorgu.split()): return 60
                 return 0
 
-            df['alaka'] = df['urun_ad'].apply(alaka_skoru)
+            df['alaka'] = df.apply(alaka_skoru, axis=1)
             # Hem SQL rankını (gelen sıra) hem de bizim alaka skorumuzu kullan
             # Gelen sıra zaten rank'a göre olduğu için onu koruyarak alaka ekliyoruz
             df = df.sort_values(by=['alaka'], ascending=False)
