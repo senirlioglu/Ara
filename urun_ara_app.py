@@ -480,20 +480,21 @@ def get_oneri_listesi():
 
         urun_adlari = set()
 
-        # 1. Doğrudan ürün tablosundan çek (en hızlı)
-        for tablo, kolon in [('urun_stok', 'urun_ad'), ('urunler', 'urun_ad'),
-                              ('products', 'name'), ('stoklar', 'urun_ad')]:
-            try:
-                result = client.table(tablo).select(kolon).limit(500).execute()
-                if result.data:
-                    for r in result.data:
-                        ad = r.get(kolon, '')
-                        if ad:
-                            urun_adlari.add(ad.strip().lower())
-                    if urun_adlari:
-                        return sorted(urun_adlari)[:300]
-            except Exception:
-                continue
+        # 1. stok_ozet tablosundan benzersiz ürün kodlarını çek
+        try:
+            result = client.table('stok_ozet')\
+                .select('urun_kod')\
+                .limit(1000)\
+                .execute()
+            if result.data:
+                for r in result.data:
+                    kod = r.get('urun_kod', '')
+                    if kod:
+                        urun_adlari.add(kod.strip())
+                if urun_adlari:
+                    return sorted(urun_adlari)[:500]
+        except Exception:
+            pass
 
         # 2. Fallback: RPC ile yaygın harflerden ürün isimlerini topla
         for terim in ['a', 'e', 'k', 'm', 'b']:
@@ -503,12 +504,12 @@ def get_oneri_listesi():
                     for r in result.data:
                         ad = r.get('out_urun_ad', '')
                         if ad:
-                            urun_adlari.add(ad.strip().lower())
+                            urun_adlari.add(ad.strip())
             except Exception:
                 continue
 
         if urun_adlari:
-            return sorted(urun_adlari)[:300]
+            return sorted(urun_adlari)[:500]
 
         # 3. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
