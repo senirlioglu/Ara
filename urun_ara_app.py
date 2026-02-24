@@ -201,8 +201,7 @@ def temizle_ve_kok_bul(text: str) -> str:
         result = result.replace(c, r)
 
     # Klima kapasite birleştirme: "12 binlik" -> "12000", "12binlik" -> "12000"
-    result = re.sub(r'\s*binlik', '000', result)
-    result = re.sub(r'\s*bin', '000', result)
+    result = re.sub(r'(\d)\s*bin(?:lik)?', r'\g<1>000', result)
 
     # Bitişik harf+sayı ayır: "tv65" → "tv 65", "seg12000" → "seg 12000"
     result = re.sub(r'([a-zA-Z]+)(\d+)', r'\1 \2', result)
@@ -351,12 +350,15 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                     return 90
 
                 # 2. Kelime başı eşleşmesi (Örn: "tv" -> "tv ünitesi")
+                # Kısa sorgularda (su) kelime başı eşleşmeyi de kısıtla (Örn: su -> süzme eşleşmesin)
                 if all(any(aw.startswith(qw) for aw in ad_words) for qw in q_words):
-                    return 80
+                    if len(query) > 2:
+                        return 80
+                    # Eğer 2 harfse, sadece kelime TAM eşleşirse 90 alıp yukarıdan döner.
+                    # Buraya gelirse ve query <= 2 ise alaka sıfırlanır.
 
                 # Kısa sorgu koruması: "su" gibi <= 2 harfli aramalar için
                 # substring (içinde geçme) eşleşmesini devre dışı bırak.
-                # Bu "bisiklet aksesuarları"ndaki "su"yu eler.
                 if len(query) <= 2:
                     return 0
 
@@ -374,7 +376,13 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                 return sinonim_skor
 
             df['alaka'] = df.apply(alaka_skoru, axis=1)
-            df = df.sort_values(by=['alaka'], ascending=False)
+
+            # Kısa sorgularda alakasızları (substring) temizle
+            if len(query) <= 2:
+                df = df[df['alaka'] > 0]
+
+            # Hem alakaya hem de stok durumuna göre sırala
+            df = df.sort_values(by=['alaka', 'stok_adet'], ascending=[False, False])
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
@@ -397,7 +405,8 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
         kategoriler = {
             'klima', 'televizyon', 'tv', 'telefon', 'supurge', 'buzdolabi',
-            'camasir', 'bulasik', 'makine', 'makinesi', 'makinası', 'ucretsiz', 'teslimat'
+            'camasir', 'bulasik', 'makine', 'makinesi', 'makinası', 'ucretsiz', 'teslimat',
+            'btu', 'inv', 'inverter'
         }
         sorgu_kelimeleri = optimize_sorgu.split()
         yeni_sorgu_kelimeleri = [w for w in sorgu_kelimeleri if w not in kategoriler]
@@ -430,7 +439,17 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                         return process_results(fallback_result.data, optimize_sorgu)
                 except: pass
 
-        # 4. En Uzun Kelimeyi Dene (Son çare)
+        # 4. İlk Kelimeyi Dene (Marka odaklı)
+        if len(sorgu_kelimeleri) > 1:
+            ilk_kelime = sorgu_kelimeleri[0]
+            if len(ilk_kelime) >= 3 and ilk_kelime not in kategoriler:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': ilk_kelime}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # 5. En Uzun Kelimeyi Dene (Son çare)
         if len(sorgu_kelimeleri) > 1:
             en_uzun_kelime = max(sorgu_kelimeleri, key=len)
             if len(en_uzun_kelime) >= 4:
@@ -639,27 +658,59 @@ def main():
 
     # Arama kutusu
     col1, col2 = st.columns([5, 1])
+
+    def save_recent():
+        if st.session_state.arama_input:
+            term = st.session_state.arama_input
+            if "son_aramalar" not in st.session_state:
+                st.session_state.son_aramalar = []
+            if term not in st.session_state.son_aramalar:
+                st.session_state.son_aramalar.insert(0, term)
+                st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
+
     with col1:
         arama_text = st.text_input(
             "Arama",
             placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
             label_visibility="collapsed",
-            key="arama_input"
+            key="arama_input",
+            on_change=save_recent
         )
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
     # Hızlı Arama Önerileri (Google-like)
+    def set_search_term(term):
+        st.session_state.arama_input = term
+        if "son_aramalar" not in st.session_state:
+            st.session_state.son_aramalar = []
+        if term not in st.session_state.son_aramalar:
+            st.session_state.son_aramalar.insert(0, term)
+            st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
+
     populer = get_populer_terimler()
-    if populer:
-        st.markdown("<div style='margin-top: 1rem; margin-bottom: 0.5rem;'><small>🔥 <b>Son 3 Günün Popüler Aramaları:</b></small></div>", unsafe_allow_html=True)
-        # 5'li ızgara yapısı
-        cols = st.columns(5)
-        for i, p in enumerate(populer):
-            col_idx = i % 5
-            if cols[col_idx].button(p, use_container_width=True, key=f"pop_{p}_{i}"):
-                st.session_state.arama_input = p
-                st.rerun()
+
+    # UI: Aramalar Yan Yana (Popüler + Son)
+    if populer or st.session_state.get("son_aramalar"):
+        st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+
+        # Son Aramalar (Varsa)
+        son_aramalar = st.session_state.get("son_aramalar", [])
+        if son_aramalar:
+            st.markdown("<small>🕒 <b>Son Aramalarınız:</b></small>", unsafe_allow_html=True)
+            cols_son = st.columns(len(son_aramalar))
+            for i, s in enumerate(son_aramalar):
+                cols_son[i].button(s, use_container_width=True, key=f"son_{s}_{i}", on_click=set_search_term, args=(s,))
+
+        # Popüler Aramalar
+        if populer:
+            st.markdown("<small>🔥 <b>Popüler:</b></small>", unsafe_allow_html=True)
+            # 5'li ızgara
+            rows = [populer[i:i + 5] for i in range(0, len(populer), 5)]
+            for row_idx, row_items in enumerate(rows):
+                cols = st.columns(5)
+                for i, p in enumerate(row_items):
+                    cols[i].button(p, use_container_width=True, key=f"pop_{p}_{row_idx}_{i}", on_click=set_search_term, args=(p,))
         st.markdown("---")
 
     if arama_text and len(arama_text) >= 2:
