@@ -19,6 +19,13 @@ import unicodedata
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
+import threading
+
+# --- Performans için Önceden Derlenmiş Regexler ---
+RE_TV_NEGATIF = re.compile(
+    r'battaniye|battanıye|ünite|unite|sehpa|koltuk|kılıf|kumanda|askı|aparat|kablo|atv|oyuncak|lisanslı|tvk',
+    re.IGNORECASE
+)
 
 # Ikonu yukle (Favicon icin)
 try:
@@ -288,33 +295,123 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
-        # RPC Çağrısı
-        result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
-
-        # Hata kontrolü
-        if getattr(result, 'error', None):
-            st.error(f"Arama hatası (RPC): {result.error}")
-            return None
-
-        if result.data:
-            df = pd.DataFrame(result.data)
-
-            # out_ prefix temizle (güvenlik için)
+        def process_results(data, query):
+            df = pd.DataFrame(data)
             df.columns = [col.replace('out_', '') for col in df.columns]
 
-            # PYTHON TARAFI NEGATİF FİLTRELEME (CPU)
-            arama_lower = optimize_sorgu.lower()
-            if arama_lower in ['tv', 'televizyon']:
-                yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
-                           'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
-                           'atv', 'oyuncak', 'lisanslı', 'tvk']
-                for yasak in yasakli:
-                    df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
+            # --- Akıllı Sıralama (Relevance Scoring) ---
+            query_words = set(query.lower().split())
 
+            def calculate_relevance(row):
+                score = 0
+                urun_ad = str(row.get('urun_ad', '')).lower()
+
+                # Tam eşleşme (En yüksek puan)
+                if query.lower() in urun_ad:
+                    score += 100
+
+                # Kelime bazlı eşleşme
+                urun_words = set(urun_ad.split())
+                common_words = query_words.intersection(urun_words)
+                score += len(common_words) * 10
+
+                # Stok puanı (Bonus)
+                stok = row.get('stok_adet', 0)
+                if stok > 0:
+                    score += 5
+
+                return score
+
+            df['alaka'] = df.apply(calculate_relevance, axis=1)
+
+            # TV Filtresi
+            if any(x in query.lower() for x in ['tv', 'televizyon']):
+                df = df[~df['urun_ad'].str.contains(RE_TV_NEGATIF, na=False, regex=True)]
+
+            # Kısa sorgularda alakasızları (substring) temizle
+            if len(query) <= 2:
+                df = df[df['alaka'] > 0]
+
+            # Hem alakaya hem de stok durumuna göre sırala
+            df = df.sort_values(by=['alaka', 'stok_adet'], ascending=[False, False])
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
-        # Sonuç yoksa boş DataFrame
+        # RPC Çağrısı (Zaman aşımı kontrolü ile)
+        try:
+            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+            if result.data:
+                return process_results(result.data, optimize_sorgu)
+        except Exception as e:
+            if not ("timeout" in str(e).lower() or "57014" in str(e)):
+                st.error(f"Beklenmeyen Hata: {e}")
+
+        # Hata kontrolü (result nesnesi üzerinden)
+        if 'result' in locals() and getattr(result, 'error', None):
+            err_msg = str(result.error)
+            if not ("timeout" in err_msg.lower() or "57014" in err_msg):
+                st.error(f"Arama hatası (RPC): {result.error}")
+
+        # ---- FALLBACK SEARCH (Google-like) ----
+        # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
+        kategoriler = {
+            'klima', 'televizyon', 'tv', 'telefon', 'supurge', 'buzdolabi',
+            'camasir', 'bulasik', 'makine', 'makinesi', 'makinası', 'ucretsiz', 'teslimat',
+            'btu', 'inv', 'inverter'
+        }
+        sorgu_kelimeleri = optimize_sorgu.split()
+        yeni_sorgu_kelimeleri = [w for w in sorgu_kelimeleri if w not in kategoriler]
+
+        if 0 < len(yeni_sorgu_kelimeleri) < len(sorgu_kelimeleri):
+            yeni_sorgu = " ".join(yeni_sorgu_kelimeleri)
+            try:
+                fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
+                if fallback_result.data:
+                    return process_results(fallback_result.data, optimize_sorgu)
+            except: pass
+
+        # 2. Kelimeleri Tek Tek Dene (Eğer çok kelimeliyse ve sonuç yoksa)
+        if len(sorgu_kelimeleri) > 1:
+            for w in sorgu_kelimeleri:
+                if len(w) >= 3 and w not in kategoriler:
+                    try:
+                        fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': w}).execute()
+                        if fallback_result.data:
+                            return process_results(fallback_result.data, optimize_sorgu)
+                    except: pass
+
+        # 3. Kapasite temizleyip tekrar dene (Örn: "18000" -> "18")
+        if "000" in optimize_sorgu:
+            yeni_sorgu = optimize_sorgu.replace("000", "").strip()
+            if len(yeni_sorgu) >= 2:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # 4. İlk Kelimeyi Dene (Marka odaklı)
+        if len(sorgu_kelimeleri) > 1:
+            ilk_kelime = sorgu_kelimeleri[0]
+            if len(ilk_kelime) >= 3 and ilk_kelime not in kategoriler:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': ilk_kelime}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # 5. En Uzun Kelimeyi Dene (Son çare)
+        if len(sorgu_kelimeleri) > 1:
+            en_uzun_kelime = max(sorgu_kelimeleri, key=len)
+            if len(en_uzun_kelime) >= 4:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': en_uzun_kelime}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # Timeout uyarısı (Eğer buraya kadar gelip sonuç yoksa ve timeout olmuşsa)
+        st.warning("🔍 Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
         return pd.DataFrame()
 
     except Exception as e:
@@ -356,6 +453,30 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
         pass
 
 
+@st.cache_data(ttl=3600)
+def get_populer_terimler():
+    """En çok aranan ve sonuç getiren terimleri getir"""
+    try:
+        client = get_supabase_client()
+        if not client: return []
+
+        # Son 30 günün en çok aranan 10 terimi (en az 1 sonuç getirmiş olanlar)
+        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        result = client.table('arama_log')\
+            .select('arama_terimi, arama_sayisi')\
+            .gte('tarih', baslangic)\
+            .gt('sonuc_sayisi', 0)\
+            .order('arama_sayisi', desc=True)\
+            .limit(10)\
+            .execute()
+
+        if result.data:
+            return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))[:10]
+    except:
+        pass
+    return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
+
+
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
     # Hata varsa (None) sessizce çık - hata mesajı zaten basıldı
@@ -363,7 +484,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         return
 
     sonuc_sayisi = 0 if df.empty else len(df['urun_kod'].unique())
-    log_arama(arama_text, sonuc_sayisi)
+
+    # Arka planda logla (UI bloklamaması için)
+    threading.Thread(target=log_arama, args=(arama_text, sonuc_sayisi), daemon=True).start()
 
     # Sonuç yoksa (empty) kullanıcıya bildir
     if df.empty:
@@ -388,9 +511,16 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     )
     urunler = urunler.sort_values('sira').drop('sira', axis=1)
 
-    st.success(f"**{len(urunler)}** farklı ürün bulundu")
+    # Performans için sonuçları sınırla
+    top_n = 40
+    gosterilecek_urunler = urunler.head(top_n)
 
-    for _, urun in urunler.iterrows():
+    if len(urunler) > top_n:
+        st.info(f"🔍 Toplam {len(urunler)} ürün bulundu, en alakalı {top_n} ürün gösteriliyor.")
+    else:
+        st.success(f"**{len(urunler)}** farklı ürün bulundu")
+
+    for _, urun in gosterilecek_urunler.iterrows():
         urun_kod = urun['urun_kod']
         urun_ad = urun['urun_ad'] if urun['urun_ad'] else urun_kod
         stoklu_magaza = int(urun['stoklu_magaza'])
@@ -436,6 +566,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
+                html_cards = []
                 for _, row in urun_df_stoklu.iterrows():
                     try:
                         seviye, _, renk = get_stok_seviye(row['stok_adet'])
@@ -453,6 +584,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     lat = row.get('latitude')
                     lon = row.get('longitude')
 
+                    harita_ikonu = ""
                     if lat and lon:
                         harita_ikonu = (
                             f'<a href="https://www.google.com/maps?q={lat},{lon}" '
@@ -462,10 +594,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             'title="Yol tarifi al">'
                             '📍 Yol tarifi</a>'
                         )
-                    else:
-                        harita_ikonu = ""
 
-                    st.markdown(f"""
+                    html_cards.append(f"""
                     <div style="
                         background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%);
                         border-left: 4px solid {renk};
@@ -491,7 +621,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             {seviye}
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """)
+                st.markdown("".join(html_cards), unsafe_allow_html=True)
 
 
 # ============================================================================
@@ -514,15 +645,60 @@ def main():
 
     # Arama kutusu
     col1, col2 = st.columns([5, 1])
+
+    def save_recent():
+        if st.session_state.arama_input:
+            term = st.session_state.arama_input
+            if "son_aramalar" not in st.session_state:
+                st.session_state.son_aramalar = []
+            if term not in st.session_state.son_aramalar:
+                st.session_state.son_aramalar.insert(0, term)
+                st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
+
     with col1:
         arama_text = st.text_input(
             "Arama",
             placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
             label_visibility="collapsed",
-            key="arama_input"
+            key="arama_input",
+            on_change=save_recent
         )
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
+
+    # Hızlı Arama Önerileri (Google-like)
+    def set_search_term(term):
+        st.session_state.arama_input = term
+        if "son_aramalar" not in st.session_state:
+            st.session_state.son_aramalar = []
+        if term not in st.session_state.son_aramalar:
+            st.session_state.son_aramalar.insert(0, term)
+            st.session_state.son_aramalar = st.session_state.son_aramalar[:5]
+
+    populer = get_populer_terimler()
+
+    # UI: Aramalar Yan Yana (Popüler + Son)
+    if populer or st.session_state.get("son_aramalar"):
+        st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+
+        # Son Aramalar (Varsa)
+        son_aramalar = st.session_state.get("son_aramalar", [])
+        if son_aramalar:
+            st.markdown("<small>🕒 <b>Son Aramalarınız:</b></small>", unsafe_allow_html=True)
+            cols_son = st.columns(len(son_aramalar))
+            for i, s in enumerate(son_aramalar):
+                cols_son[i].button(s, use_container_width=True, key=f"son_{s}_{i}", on_click=set_search_term, args=(s,))
+
+        # Popüler Aramalar
+        if populer:
+            st.markdown("<small>🔥 <b>Popüler:</b></small>", unsafe_allow_html=True)
+            # 5'li ızgara
+            rows = [populer[i:i + 5] for i in range(0, len(populer), 5)]
+            for row_idx, row_items in enumerate(rows):
+                cols = st.columns(5)
+                for i, p in enumerate(row_items):
+                    cols[i].button(p, use_container_width=True, key=f"pop_{p}_{row_idx}_{i}", on_click=set_search_term, args=(p,))
+        st.markdown("---")
 
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
