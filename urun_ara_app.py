@@ -19,6 +19,13 @@ import unicodedata
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
+import threading
+
+# --- Performans için Önceden Derlenmiş Regexler ---
+RE_TV_NEGATIF = re.compile(
+    r'battaniye|battanıye|ünite|unite|sehpa|koltuk|kılıf|kumanda|askı|aparat|kablo|atv|oyuncak|lisanslı|tvk',
+    re.IGNORECASE
+)
 
 # Ikonu yukle (Favicon icin)
 try:
@@ -52,12 +59,66 @@ st.markdown("""
     .search-container { background: white; padding: 1rem; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 1rem; }
     .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.75rem 1rem !important; font-size: 1rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
+
+    /* Button styling (Ara butonu - orijinal boyut) */
     .stButton > button { border-radius: 12px !important; padding: 0.75rem 1.5rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
     .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
+
+    /* Pill satırları: 3+ kolonlu yatay bloklar kaydırılabilir olsun */
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        gap: 4px !important;
+        padding-bottom: 4px;
+    }
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3))::-webkit-scrollbar { display: none; }
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) > [data-testid="stColumn"] {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: fit-content !important;
+    }
+    /* Pill satırlarındaki butonlar küçük pill olsun */
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+        background: #f0f1f6 !important;
+        color: #555 !important;
+        border: 1px solid #e0e2ea !important;
+        border-radius: 20px !important;
+        padding: 0.4rem 1rem !important;
+        font-size: 0.85rem !important;
+        font-weight: 500 !important;
+        white-space: nowrap !important;
+        min-height: unset !important;
+        line-height: 1.4 !important;
+    }
+    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button:hover {
+        background: #e4e5f0 !important;
+        border-color: #667eea !important;
+        color: #667eea !important;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+
+    .popular-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #333;
+        margin: 0.8rem 0 0.3rem 0.2rem;
+    }
+
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 1rem; }
     .streamlit-expanderHeader { background: white !important; border-radius: 12px !important; border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; padding: 0.75rem 1rem !important; font-weight: 500 !important; }
     .streamlit-expanderContent { background: white !important; border-radius: 0 0 12px 12px !important; border: none !important; padding: 0.5rem !important; }
-    @media (max-width: 768px) { .block-container { padding: 1rem !important; } }
+
+    @media (max-width: 768px) {
+        .block-container { padding: 0.5rem !important; }
+        [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+            padding: 0.35rem 0.75rem !important;
+            font-size: 0.8rem !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -71,18 +132,8 @@ def get_supabase_client():
     """Supabase client olustur"""
     try:
         from supabase import create_client
-        url = os.environ.get('SUPABASE_URL')
-        if not url:
-            try:
-                url = st.secrets["SUPABASE_URL"]
-            except Exception:
-                pass
-        key = os.environ.get('SUPABASE_KEY')
-        if not key:
-            try:
-                key = st.secrets["SUPABASE_KEY"]
-            except Exception:
-                pass
+        url = os.environ.get('SUPABASE_URL') or st.secrets.get('SUPABASE_URL')
+        key = os.environ.get('SUPABASE_KEY') or st.secrets.get('SUPABASE_KEY')
         if not url or not key:
             return None
         return create_client(url, key)
@@ -98,12 +149,14 @@ def get_stok_seviye(adet: int) -> tuple:
     """Stok seviyesi, css class ve renk döndür"""
     if adet is None or adet <= 0:
         return "Yok", "stok-yok", "#9e9e9e"
-    elif adet <= 2:
-        return "Düşük", "stok-dusuk", "#e74c3c"  # Kırmızı
+    elif adet == 1:
+        return "Kritik", "stok-kritik", "#ff4444"
     elif adet <= 5:
-        return "Orta", "stok-orta", "#f39c12"    # Sarı/Turuncu
+        return "Düşük", "stok-dusuk", "#ff9800"
+    elif adet <= 10:
+        return "Normal", "stok-normal", "#4caf50"
     else:
-        return "Yüksek", "stok-yuksek", "#27ae60" # Yeşil
+        return "Yüksek", "stok-yuksek", "#2196f3"
 
 
 def temizle_ve_kok_bul(text: str) -> str:
@@ -170,13 +223,6 @@ def temizle_ve_kok_bul(text: str) -> str:
     corrected = [YAZIM_DUZELTME.get(w, w) for w in words]
     result = ' '.join(corrected)
 
-    # 8. Terim eşleştirme (çoklu kelime → ürün adı)
-    # Uzun terimlerden kısaya doğru kontrol et
-    for terim, eslesme in sorted(TERIM_ESLESME.items(), key=lambda x: -len(x[0])):
-        if terim in result:
-            result = result.replace(terim, eslesme)
-            break  # İlk eşleşmede dur
-
     return result
 
 
@@ -214,53 +260,7 @@ YAZIM_DUZELTME = {
     'bulasik': 'bulasik', 'bualsik': 'bulasik',
     'mikrodlga': 'mikrodalga', 'mikrdalga': 'mikrodalga',
     'sampuan': 'sampuan', 'sampuvan': 'sampuan',
-    'rejisor': 'rejisör', 'inventor': 'inverter', 'hopörler': 'hopörlör',
-}
-
-# ============================================================================
-# TERİM EŞLEŞTİRME SÖZLÜĞÜ (Çoklu kelime → Ürün adı)
-# ============================================================================
-# Kullanıcıların aradığı terimler ile gerçek ürün adlarını eşleştirir.
-# Örn: "hamur yoğurma makinası" arayan aslında "stand mikser" istiyor.
-# Not: Tüm terimler normalize edilmiş halde olmalı (küçük harf, türkçe→ascii)
-# ============================================================================
-
-TERIM_ESLESME = {
-    # Hamur yoğurma makinası/makinesi → Stand mikser
-    'hamur yogurma makine': 'stand mikser',
-    'hamur yogurma': 'stand mikser',
-    'yogurma makine': 'stand mikser',
-    'hamur makine': 'stand mikser',
-    'hamur yogurma': 'stand mixer',
-    'namazlik': 'namaz elbisesi',
-    'airfyer': 'airfryer',
-    'ankestre': 'ankastre',
-    'hoporler': 'hoparlor',
-    'waffel': 'waffle',
-    'fhantom': 'phantom',
-    'hunday': 'hyundai',
-    'finish50': 'finish',
-    'slezenger': 'slazenger',
-    'sitanley': 'stanley',
-    'termisifon': 'termosifon',
-    'termasifon': 'termosifon',
-    'sitanl': 'stanley',
-    'antifrizi': 'antifirizi',
-    'realmi': 'realme',
-    'simbo': 'sinbo',
-    'waffl': 'waffle',
-    'pier': 'Pierre Cardin',
-    'pierre': 'Pierre Cardin',
-    '12 binlik klima': 'klima',
-    'sitanly': 'stanley',
-    'araba telefon tutucusu': 'telefon tutucu',
-    'numarotor': 'numaratoru',
-    'airfreyer': 'airfryer',
-    'airfrey': 'airfryer',
-    'kanepe ortusu': 'koltuk ortusu',
-    'hotweels': 'hotwheels',
-    'kilot': 'kulot',
-    'kilotlu': 'kulotlu',
+    'rejisor': 'rejisör',
 }
 
 
@@ -288,33 +288,124 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
-        # RPC Çağrısı
-        result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
-
-        # Hata kontrolü
-        if getattr(result, 'error', None):
-            st.error(f"Arama hatası (RPC): {result.error}")
-            return None
-
-        if result.data:
-            df = pd.DataFrame(result.data)
-
-            # out_ prefix temizle (güvenlik için)
+        def process_results(data, query):
+            df = pd.DataFrame(data)
             df.columns = [col.replace('out_', '') for col in df.columns]
 
-            # PYTHON TARAFI NEGATİF FİLTRELEME (CPU)
-            arama_lower = optimize_sorgu.lower()
-            if arama_lower in ['tv', 'televizyon']:
-                yasakli = ['battaniye', 'battanıye', 'ünite', 'unite', 'sehpa',
-                           'koltuk', 'kılıf', 'kumanda', 'askı', 'aparat', 'kablo',
-                           'atv', 'oyuncak', 'lisanslı', 'tvk']
-                for yasak in yasakli:
-                    df = df[~df['urun_ad'].str.contains(yasak, case=False, na=False)]
+            # --- Akıllı Sıralama (Relevance Scoring) ---
+            query_words = set(query.lower().split())
 
+            def calculate_relevance(row):
+                score = 0
+                urun_ad = str(row.get('urun_ad', '')).lower()
+
+                # Tam eşleşme (En yüksek puan)
+                if query.lower() in urun_ad:
+                    score += 100
+
+                # Kelime bazlı eşleşme
+                urun_words = set(urun_ad.split())
+                common_words = query_words.intersection(urun_words)
+                score += len(common_words) * 10
+
+                # Stok puanı (Bonus)
+                stok = row.get('stok_adet', 0)
+                if stok > 0:
+                    score += 5
+
+                return score
+
+            df['alaka'] = df.apply(calculate_relevance, axis=1)
+
+            # TV Filtresi (sadece bağımsız kelime olarak "tv" veya "televizyon" varsa)
+            query_words_set = set(query.lower().split())
+            if query_words_set.intersection({'tv', 'televizyon'}):
+                df = df[~df['urun_ad'].str.contains(RE_TV_NEGATIF, na=False, regex=True)]
+
+            # Kısa sorgularda alakasızları (substring) temizle
+            if len(query) <= 2:
+                df = df[df['alaka'] > 0]
+
+            # Hem alakaya hem de stok durumuna göre sırala
+            df = df.sort_values(by=['alaka', 'stok_adet'], ascending=[False, False])
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
             return df
 
-        # Sonuç yoksa boş DataFrame
+        # RPC Çağrısı (Zaman aşımı kontrolü ile)
+        try:
+            result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
+            if result.data:
+                return process_results(result.data, optimize_sorgu)
+        except Exception as e:
+            if not ("timeout" in str(e).lower() or "57014" in str(e)):
+                st.error(f"Beklenmeyen Hata: {e}")
+
+        # Hata kontrolü (result nesnesi üzerinden)
+        if 'result' in locals() and getattr(result, 'error', None):
+            err_msg = str(result.error)
+            if not ("timeout" in err_msg.lower() or "57014" in err_msg):
+                st.error(f"Arama hatası (RPC): {result.error}")
+
+        # ---- FALLBACK SEARCH (Google-like) ----
+        # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
+        kategoriler = {
+            'klima', 'televizyon', 'tv', 'telefon', 'supurge', 'buzdolabi',
+            'camasir', 'bulasik', 'makine', 'makinesi', 'makinası', 'ucretsiz', 'teslimat',
+            'btu', 'inv', 'inverter'
+        }
+        sorgu_kelimeleri = optimize_sorgu.split()
+        yeni_sorgu_kelimeleri = [w for w in sorgu_kelimeleri if w not in kategoriler]
+
+        if 0 < len(yeni_sorgu_kelimeleri) < len(sorgu_kelimeleri):
+            yeni_sorgu = " ".join(yeni_sorgu_kelimeleri)
+            try:
+                fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
+                if fallback_result.data:
+                    return process_results(fallback_result.data, optimize_sorgu)
+            except: pass
+
+        # 2. Kelimeleri Tek Tek Dene (Eğer çok kelimeliyse ve sonuç yoksa)
+        if len(sorgu_kelimeleri) > 1:
+            for w in sorgu_kelimeleri:
+                if len(w) >= 3 and w not in kategoriler:
+                    try:
+                        fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': w}).execute()
+                        if fallback_result.data:
+                            return process_results(fallback_result.data, optimize_sorgu)
+                    except: pass
+
+        # 3. Kapasite temizleyip tekrar dene (Örn: "18000" -> "18")
+        if "000" in optimize_sorgu:
+            yeni_sorgu = optimize_sorgu.replace("000", "").strip()
+            if len(yeni_sorgu) >= 2:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': yeni_sorgu}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # 4. İlk Kelimeyi Dene (Marka odaklı)
+        if len(sorgu_kelimeleri) > 1:
+            ilk_kelime = sorgu_kelimeleri[0]
+            if len(ilk_kelime) >= 3 and ilk_kelime not in kategoriler:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': ilk_kelime}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # 5. En Uzun Kelimeyi Dene (Son çare)
+        if len(sorgu_kelimeleri) > 1:
+            en_uzun_kelime = max(sorgu_kelimeleri, key=len)
+            if len(en_uzun_kelime) >= 4:
+                try:
+                    fallback_result = client.rpc('hizli_urun_ara', {'arama_terimi': en_uzun_kelime}).execute()
+                    if fallback_result.data:
+                        return process_results(fallback_result.data, optimize_sorgu)
+                except: pass
+
+        # Timeout uyarısı (Eğer buraya kadar gelip sonuç yoksa ve timeout olmuşsa)
+        st.warning("🔍 Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
         return pd.DataFrame()
 
     except Exception as e:
@@ -356,6 +447,131 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
         pass
 
 
+@st.cache_data(ttl=3600)
+def get_populer_terimler():
+    """En çok aranan ve sonuç getiren terimleri getir"""
+    try:
+        client = get_supabase_client()
+        if not client: return []
+
+        # Son 30 günün en çok aranan 10 terimi (en az 1 sonuç getirmiş olanlar)
+        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        result = client.table('arama_log')\
+            .select('arama_terimi, arama_sayisi')\
+            .gte('tarih', baslangic)\
+            .gt('sonuc_sayisi', 0)\
+            .order('arama_sayisi', desc=True)\
+            .limit(10)\
+            .execute()
+
+        if result.data:
+            return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))[:10]
+    except:
+        pass
+    return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
+
+
+def _get_oneri_listesi_impl():
+    """Autocomplete için ürün kod + isimlerini veritabanından getir"""
+    debug_info = []
+    try:
+        client = get_supabase_client()
+        if not client:
+            return [], ["Supabase client oluşturulamadı"]
+
+        # 1. YENI: Performanslı RPC (get_tum_urunler) ile tüm benzersiz ürünleri çek
+        # Limit 20000 yapılarak tüm ürünlerin gelmesi sağlanır.
+        try:
+            result = client.rpc('get_tum_urunler', {'result_limit': 20000}).execute()
+            if result.data:
+                seen = set()
+                liste = []
+                for r in result.data:
+                    kod = (r.get('urun_kod') or '').strip()
+                    ad = (r.get('urun_ad') or '').strip()
+                    if not ad:
+                        continue
+                    # "KOD - AD" formatı (kod varsa)
+                    if kod:
+                        key = f"{kod} - {ad}"
+                    else:
+                        key = ad
+                    if key not in seen:
+                        seen.add(key)
+                        liste.append(key)
+
+                if liste:
+                    debug_info.append(f"RPC (get_tum_urunler) OK: {len(liste)} ürün")
+                    # Tüm listeyi döndür (istemci tarafında filtrelenecek)
+                    return sorted(liste)[:20000], debug_info
+
+            debug_info.append("RPC (get_tum_urunler) sonuç boş, fallback'e geçiliyor")
+        except Exception as e:
+            debug_info.append(f"RPC (get_tum_urunler) hata: {e}")
+
+        # 2. Fallback: Eski yöntem (stok_gunluk tablosundan limitli çekim)
+        # Eğer yeni RPC henüz DB'de yoksa burası çalışır.
+        try:
+            result = client.table('stok_gunluk')\
+                .select('urun_kod, urun_ad')\
+                .limit(10000)\
+                .execute()
+            if result.data:
+                seen = set()
+                liste = []
+                for r in result.data:
+                    kod = (r.get('urun_kod') or '').strip()
+                    ad = (r.get('urun_ad') or '').strip()
+                    if not ad:
+                        continue
+                    if kod:
+                        key = f"{kod} - {ad}"
+                    else:
+                        key = ad
+                    if key not in seen:
+                        seen.add(key)
+                        liste.append(key)
+                if liste:
+                    debug_info.append(f"Fallback Tablo OK: {len(liste)} ürün")
+                    return sorted(liste)[:5000], debug_info
+        except Exception as e:
+            debug_info.append(f"Fallback Tablo hata: {e}")
+
+        # 3. Fallback: Sadece ürün adları (Eski RPC)
+        try:
+            result = client.rpc('get_urun_adlari', {'result_limit': 5000}).execute()
+            if result.data:
+                liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
+                debug_info.append(f"Fallback Eski RPC OK: {len(liste)} ürün")
+                return liste, debug_info
+        except Exception as e:
+            debug_info.append(f"Fallback Eski RPC hata: {e}")
+
+        # 4. Son fallback: arama_log'dan popüler terimleri kullan
+        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        result = client.table('arama_log')\
+            .select('arama_terimi, arama_sayisi')\
+            .gte('tarih', baslangic)\
+            .gt('sonuc_sayisi', 0)\
+            .order('arama_sayisi', desc=True)\
+            .limit(50)\
+            .execute()
+        if result.data:
+            liste = list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
+            debug_info.append(f"Fallback arama_log: {len(liste)} terim")
+            return liste, debug_info
+    except Exception as e:
+        debug_info.append(f"Genel hata: {e}")
+    return [], debug_info
+
+@st.cache_data(ttl=300)
+def get_oneri_listesi():
+    """Cached wrapper"""
+    liste, _ = _get_oneri_listesi_impl()
+    return liste
+
+
+
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
     # Hata varsa (None) sessizce çık - hata mesajı zaten basıldı
@@ -363,7 +579,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         return
 
     sonuc_sayisi = 0 if df.empty else len(df['urun_kod'].unique())
-    log_arama(arama_text, sonuc_sayisi)
+
+    # Arka planda logla (UI bloklamaması için)
+    threading.Thread(target=log_arama, args=(arama_text, sonuc_sayisi), daemon=True).start()
 
     # Sonuç yoksa (empty) kullanıcıya bildir
     if df.empty:
@@ -388,18 +606,22 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     )
     urunler = urunler.sort_values('sira').drop('sira', axis=1)
 
-    st.success(f"**{len(urunler)}** farklı ürün bulundu")
+    # Performans için sonuçları sınırla
+    top_n = 40
+    gosterilecek_urunler = urunler.head(top_n)
 
-    for _, urun in urunler.iterrows():
+    if len(urunler) > top_n:
+        st.info(f"🔍 Toplam {len(urunler)} ürün bulundu, en alakalı {top_n} ürün gösteriliyor.")
+    else:
+        st.success(f"**{len(urunler)}** farklı ürün bulundu")
+
+    for _, urun in gosterilecek_urunler.iterrows():
         urun_kod = urun['urun_kod']
         urun_ad = urun['urun_ad'] if urun['urun_ad'] else urun_kod
         stoklu_magaza = int(urun['stoklu_magaza'])
 
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].sort_values('stok_adet', ascending=False)
-
-        # Toplam stok ve fiyat hesapla
-        toplam_stok = int(urun_df_stoklu['stok_adet'].sum()) if not urun_df_stoklu.empty else 0
 
         # Fiyatı ürün seviyesinde al (ilk geçerli fiyat)
         ham_fiyat = urun_df_stoklu['birim_fiyat'].dropna()
@@ -411,31 +633,23 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
             fiyat_str = ""
 
         icon = "📦" if stoklu_magaza > 0 else "❌"
-        fiyat_badge = f"  •  🏷️ {fiyat_str}" if fiyat_str else ""
-        stok_badge = f"  •  {toplam_stok}" if toplam_stok > 0 else ""
-        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}{stok_badge}"
+        fiyat_badge = f"  ⸱  {fiyat_str}" if fiyat_str else ""
+        baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}"
 
         with st.expander(baslik, expanded=False):
-            # Fiyat + Toplam stok badge'leri (expander açılınca görünür)
-            badges_html = ""
+            # Fiyat badge (expander içi üstte)
             if fiyat_str:
-                badges_html += f"""
-                <div style="background: linear-gradient(135deg, #00b894, #00cec9); color: white; padding: 8px 16px; border-radius: 10px;
-                            display: inline-block; font-weight: 600; margin-right: 8px; margin-bottom: 12px;">
+                st.markdown(f"""
+                <div style="display:inline-block; background:linear-gradient(135deg,#00b894,#00cec9);
+                     color:white; padding:6px 16px; border-radius:20px; font-weight:700;
+                     font-size:1.1rem; margin-bottom:12px;">
                     🏷️ {fiyat_str}
-                </div>"""
-            if toplam_stok > 0:
-                toplam_seviye, _, toplam_renk = get_stok_seviye(toplam_stok)
-                badges_html += f"""
-                <div style="background: {toplam_renk}; color: white; padding: 8px 16px; border-radius: 10px;
-                            display: inline-block; font-weight: 600; margin-bottom: 12px;">
-                    📊 Toplam Bölge Stok: {toplam_stok}
-                </div>"""
-            if badges_html:
-                st.markdown(badges_html, unsafe_allow_html=True)
+                </div>
+                """, unsafe_allow_html=True)
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
+                html_cards = []
                 for _, row in urun_df_stoklu.iterrows():
                     try:
                         seviye, _, renk = get_stok_seviye(row['stok_adet'])
@@ -453,6 +667,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     lat = row.get('latitude')
                     lon = row.get('longitude')
 
+                    harita_ikonu = ""
                     if lat and lon:
                         harita_ikonu = (
                             f'<a href="https://www.google.com/maps?q={lat},{lon}" '
@@ -462,10 +677,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             'title="Yol tarifi al">'
                             '📍 Yol tarifi</a>'
                         )
-                    else:
-                        harita_ikonu = ""
 
-                    st.markdown(f"""
+                    html_cards.append(f"""
                     <div style="
                         background: linear-gradient(135deg, {renk}22 0%, {renk}11 100%);
                         border-left: 4px solid {renk};
@@ -488,10 +701,11 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                             </div>
                         </div>
                         <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
-                            {seviye}
+                            {adet} Adet
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """)
+                st.markdown("".join(html_cards), unsafe_allow_html=True)
 
 
 # ============================================================================
@@ -514,6 +728,7 @@ def main():
 
     # Arama kutusu
     col1, col2 = st.columns([5, 1])
+
     with col1:
         arama_text = st.text_input(
             "Arama",
@@ -524,12 +739,85 @@ def main():
     with col2:
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
+    # Autocomplete önerileri (client-side, performans dostu)
+    oneriler = get_oneri_listesi()
+    if oneriler:
+        import json
+        import streamlit.components.v1 as components
+        _ac_data = json.dumps(oneriler, ensure_ascii=False)
+        _ac_js = """
+<script>
+(function(){
+try{
+var S=__DATA__;
+var pd=window.parent.document;
+var inp=pd.querySelector('input[placeholder*="Ürün kodu"]');
+if(!inp)return;
+var old=pd.getElementById('ac-dd');if(old)old.remove();
+if(inp._acIn)inp.removeEventListener('input',inp._acIn);
+if(inp._acFo)inp.removeEventListener('focus',inp._acFo);
+if(inp._acKu)inp.removeEventListener('keyup',inp._acKu);
+
+var dd=pd.createElement('div');dd.id='ac-dd';
+dd.style.cssText='display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);max-height:280px;overflow-y:auto;z-index:9999;';
+var wr=inp.closest('[data-testid="stTextInput"]')||inp.parentElement;
+wr.style.position='relative';wr.appendChild(dd);
+
+dd.addEventListener('click',function(e){
+  var it=e.target.closest('[data-t]');if(!it)return;
+  var t=it.getAttribute('data-t');
+  var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+  st.call(inp,t);
+  inp.dispatchEvent(new Event('input',{bubbles:true}));
+  setTimeout(function(){inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();},50);
+  dd.style.display='none';
+});
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function show(v){
+  if(v.length<2){dd.style.display='none';return;}
+  var lv=v.toLowerCase();
+  var m=S.filter(function(s){return s.toLowerCase().indexOf(lv)!==-1;}).slice(0,8);
+  if(!m.length){dd.style.display='none';return;}
+  dd.innerHTML=m.map(function(s){
+    return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
+    +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+    +'<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span></div>';
+  }).join('');
+  dd.style.display='block';
+}
+
+inp._acIn=function(e){show(e.target.value);};
+inp._acFo=function(){if(inp.value.length>=2)show(inp.value);};
+inp._acKu=function(){show(inp.value);};
+inp.addEventListener('input',inp._acIn);
+inp.addEventListener('focus',inp._acFo);
+inp.addEventListener('keyup',inp._acKu);
+pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==inp)dd.style.display='none';});
+}catch(e){}
+})();
+</script>""".replace('__DATA__', _ac_data)
+        components.html(_ac_js, height=0, scrolling=False)
+
+    # Popüler Aramalar (Yatay kaydırmalı pill butonlar)
+    def set_search_term(term):
+        st.session_state.arama_input = term
+
+    populer = get_populer_terimler()
+
+    if populer:
+        st.markdown('<div class="popular-title">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
+        cols_pop = st.columns(len(populer))
+        for i, p in enumerate(populer):
+            cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_term, args=(p,))
+
     if arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
             df = ara_urun(arama_text)
             goster_sonuclar(df, arama_text)
     elif arama_text and len(arama_text) < 2:
         st.info("En az 2 karakter girin.")
+
 
 
 # ============================================================================
@@ -541,15 +829,12 @@ def admin_panel():
     import hashlib
     from io import BytesIO
 
-    admin_pass = os.environ.get('ADMIN_PASSWORD')
+    admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD')
+
     if not admin_pass:
-        try:
-            admin_pass = st.secrets["ADMIN_PASSWORD"]
-        except Exception:
-            admin_pass = None
-    if not admin_pass:
-        st.error("ADMIN_PASSWORD ayarlanmamış.")
+        st.error("Admin şifresi ayarlanmamış! Lütfen çevre değişkenlerini kontrol edin.")
         return
+
     today = datetime.now().strftime('%Y-%m-%d')
     valid_token = hashlib.md5(f"{admin_pass}{today}".encode()).hexdigest()[:16]
 
