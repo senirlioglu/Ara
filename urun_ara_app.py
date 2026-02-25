@@ -480,15 +480,26 @@ def _get_oneri_listesi_impl():
             return [], ["Supabase client oluşturulamadı"]
 
         # 1. stok_gunluk'dan urun_kod + urun_ad çek (kod ile de aranabilsin)
+        # Pagination ile tüm ürünleri çek (her sayfada 10000 satır)
         try:
-            result = client.table('stok_gunluk')\
-                .select('urun_kod, urun_ad')\
-                .limit(10000)\
-                .execute()
-            if result.data:
+            all_data = []
+            page_size = 10000
+            offset = 0
+            for _ in range(10):  # Max 100K satır
+                result = client.table('stok_gunluk')\
+                    .select('urun_kod, urun_ad')\
+                    .range(offset, offset + page_size - 1)\
+                    .execute()
+                if not result.data:
+                    break
+                all_data.extend(result.data)
+                if len(result.data) < page_size:
+                    break
+                offset += page_size
+            if all_data:
                 seen = set()
                 liste = []
-                for r in result.data:
+                for r in all_data:
                     kod = (r.get('urun_kod') or '').strip()
                     ad = (r.get('urun_ad') or '').strip()
                     if not ad:
@@ -729,10 +740,25 @@ if(inp._acIn)inp.removeEventListener('input',inp._acIn);
 if(inp._acFo)inp.removeEventListener('focus',inp._acFo);
 if(inp._acKu)inp.removeEventListener('keyup',inp._acKu);
 
+/* Türkçe karakter normalize fonksiyonu */
+var trMap={'İ':'i','I':'i','ı':'i','Ğ':'g','ğ':'g','Ü':'u','ü':'u','Ş':'s','ş':'s','Ö':'o','ö':'o','Ç':'c','ç':'c','Â':'a','â':'a','Î':'i','î':'i','Û':'u','û':'u'};
+function trNorm(s){
+  var r='';
+  for(var i=0;i<s.length;i++){r+=(trMap[s[i]]||s[i]);}
+  return r.toLowerCase();
+}
+/* Ürün listesini önceden normalize et (performans) */
+var SN=S.map(function(s){return trNorm(s);});
+
 var dd=pd.createElement('div');dd.id='ac-dd';
-dd.style.cssText='display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);max-height:280px;overflow-y:auto;z-index:9999;';
+dd.style.cssText='display:none;position:absolute;left:0;right:0;top:100%;background:white;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;box-shadow:0 4px 12px rgba(0,0,0,0.15);max-height:60vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;z-index:9999;';
 var wr=inp.closest('[data-testid="stTextInput"]')||inp.parentElement;
 wr.style.position='relative';wr.appendChild(dd);
+
+/* Touch scroll düzeltmesi - yatay kaydırmayı engelle */
+dd.addEventListener('touchmove',function(e){
+  if(dd.scrollHeight>dd.clientHeight){e.stopPropagation();}
+},{passive:true});
 
 dd.addEventListener('click',function(e){
   var it=e.target.closest('[data-t]');if(!it)return;
@@ -747,15 +773,19 @@ dd.addEventListener('click',function(e){
 function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 function show(v){
   if(v.length<2){dd.style.display='none';return;}
-  var lv=v.toLowerCase();
-  var m=S.filter(function(s){return s.toLowerCase().indexOf(lv)!==-1;}).slice(0,8);
+  var lv=trNorm(v);
+  var m=[];
+  for(var i=0;i<SN.length&&m.length<12;i++){
+    if(SN[i].indexOf(lv)!==-1)m.push(S[i]);
+  }
   if(!m.length){dd.style.display='none';return;}
   dd.innerHTML=m.map(function(s){
-    return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
+    return '<div data-t="'+esc(s)+'" style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;-webkit-tap-highlight-color:rgba(102,126,234,0.1);" ontouchstart="this.style.background=\'#f5f5fa\'" ontouchend="this.style.background=\'white\'" onmouseover="this.style.background=\'#f5f5fa\'" onmouseout="this.style.background=\'white\'">'
     +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
     +'<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span></div>';
   }).join('');
   dd.style.display='block';
+  dd.scrollTop=0;
 }
 
 inp._acIn=function(e){show(e.target.value);};
