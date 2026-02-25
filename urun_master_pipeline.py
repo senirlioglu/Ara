@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import unicodedata
 from pathlib import Path
 
@@ -70,20 +71,34 @@ def get_supabase_client():
     return create_client(url, key)
 
 
-def _fetch_urunler_raw(client, page_size: int = 50000, max_scan_rows: int = 900000):
+def _fetch_page_with_retry(client, offset: int, page_size: int, max_retries: int = 3):
+    """Tek bir sayfayı retry ile çek."""
+    for attempt in range(max_retries):
+        try:
+            result = client.table('stok_gunluk')\
+                .select('urun_kod, urun_ad')\
+                .range(offset, offset + page_size - 1)\
+                .execute()
+            return result.data or []
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                print(f"  Sayfa offset={offset} hata: {e}. {wait}s bekleyip tekrar deneniyor...")
+                time.sleep(wait)
+            else:
+                raise
+
+
+def _fetch_urunler_raw(client, page_size: int = 5000, max_scan_rows: int = 900000):
     """stok_gunluk kaynağından ürün satırlarını sayfalı çek."""
     rows_out = []
     for offset in range(0, max_scan_rows, page_size):
-        result = client.table('stok_gunluk')\
-            .select('urun_kod, urun_ad')\
-            .range(offset, offset + page_size - 1)\
-            .execute()
-
-        rows = result.data or []
+        rows = _fetch_page_with_retry(client, offset, page_size)
         if not rows:
             break
 
         rows_out.extend(rows)
+        print(f"  Sayfa OK: offset={offset}, satır={len(rows)}, toplam={len(rows_out)}")
         if len(rows) < page_size:
             break
 
