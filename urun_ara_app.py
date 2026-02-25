@@ -290,11 +290,6 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
-        # Öneri seçiminden gelen ürün kodunu tespit et ("KOD - Ad" formatı)
-        oneri_kod = None
-        if ' - ' in arama_raw:
-            oneri_kod = arama_raw.split(' - ', 1)[0].strip().lower()
-
         def process_results(data, query):
             df = pd.DataFrame(data)
             df.columns = [col.replace('out_', '') for col in df.columns]
@@ -336,12 +331,6 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             # Hem alakaya hem de stok durumuna göre sırala
             df = df.sort_values(by=['alaka', 'stok_adet'], ascending=[False, False])
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
-
-            # Öneri seçiminden gelen ürünü en başa taşı (vectorized)
-            if oneri_kod and 'urun_kod' in df.columns:
-                eslesme = df['urun_kod'].str.strip().str.lower() == oneri_kod
-                df = pd.concat([df[eslesme], df[~eslesme]], ignore_index=True)
-
             return df
 
         # RPC Çağrısı (Zaman aşımı kontrolü ile)
