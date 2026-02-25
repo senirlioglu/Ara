@@ -9,8 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
-# Expose port (Railway uses $PORT)
-EXPOSE 8501
+# Make start script executable
+RUN chmod +x start.sh
 
-# Run Streamlit on Railway's PORT
-CMD streamlit run urun_ara_app.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false
+# Run Streamlit via start script
+CMD ["./start.sh"]
