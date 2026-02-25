@@ -472,62 +472,48 @@ def get_populer_terimler():
 
 
 def _get_oneri_listesi_impl():
-    """Autocomplete için ürün kod + isimlerini veritabanından getir"""
+    """Autocomplete için ürün kod + isimlerini veritabanından getir.
+
+    PostgreSQL'de DISTINCT yapılır → sadece ~5-6K benzersiz ürün gelir.
+    800K satır çekmek yerine DB tarafında filtreleme → çok hızlı.
+    """
     debug_info = []
     try:
         client = get_supabase_client()
         if not client:
             return [], ["Supabase client oluşturulamadı"]
 
-        # 1. stok_gunluk'dan urun_kod + urun_ad çek (kod ile de aranabilsin)
-        # Pagination ile tüm ürünleri çek (her sayfada 10000 satır)
+        # 1. RPC: DB'de DISTINCT yapılır, sadece benzersiz ürün kod+ad gelir
         try:
-            all_data = []
-            page_size = 10000
-            offset = 0
-            for _ in range(10):  # Max 100K satır
-                result = client.table('stok_gunluk')\
-                    .select('urun_kod, urun_ad')\
-                    .range(offset, offset + page_size - 1)\
-                    .execute()
-                if not result.data:
-                    break
-                all_data.extend(result.data)
-                if len(result.data) < page_size:
-                    break
-                offset += page_size
-            if all_data:
+            result = client.rpc('get_urun_kod_adlari').execute()
+            if result.data:
                 seen = set()
                 liste = []
-                for r in all_data:
+                for r in result.data:
                     kod = (r.get('urun_kod') or '').strip()
                     ad = (r.get('urun_ad') or '').strip()
                     if not ad:
                         continue
-                    # "KOD - AD" formatı (kod varsa)
-                    if kod:
-                        key = f"{kod} - {ad}"
-                    else:
-                        key = ad
+                    key = f"{kod} - {ad}" if kod else ad
                     if key not in seen:
                         seen.add(key)
                         liste.append(key)
                 if liste:
-                    debug_info.append(f"Tablo sorgusu OK: {len(liste)} ürün")
-                    return sorted(liste)[:5000], debug_info
-            debug_info.append("Tablo sorgusu sonuç boş")
+                    debug_info.append(f"RPC kod+ad OK: {len(liste)} ürün")
+                    return sorted(liste), debug_info
+            debug_info.append("RPC kod+ad sonuç boş")
         except Exception as e:
-            debug_info.append(f"Tablo sorgusu hata: {e}")
+            debug_info.append(f"RPC kod+ad hata: {e}")
 
-        # 2. Fallback: Sadece ürün adları (RPC)
+        # 2. Fallback: Sadece ürün adları (eski RPC)
         try:
             result = client.rpc('get_urun_adlari', {'result_limit': 5000}).execute()
             if result.data:
                 liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
-                debug_info.append(f"RPC OK: {len(liste)} ürün")
+                debug_info.append(f"RPC ad OK: {len(liste)} ürün")
                 return liste, debug_info
         except Exception as e:
-            debug_info.append(f"RPC hata: {e}")
+            debug_info.append(f"RPC ad hata: {e}")
 
         # 3. Son fallback: arama_log'dan popüler terimleri kullan
         baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -546,9 +532,9 @@ def _get_oneri_listesi_impl():
         debug_info.append(f"Genel hata: {e}")
     return [], debug_info
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=86400)  # 24 saat cache - günde 1 kez DB'ye gider
 def get_oneri_listesi():
-    """Cached wrapper"""
+    """Cached wrapper - 5-6K benzersiz ürün, 24 saat geçerli"""
     liste, _ = _get_oneri_listesi_impl()
     return liste
 
