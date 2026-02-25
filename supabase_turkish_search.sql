@@ -313,7 +313,7 @@ SELECT * FROM autocomplete_products('bil');
 CREATE INDEX IF NOT EXISTS idx_stok_gunluk_kod_ad ON stok_gunluk(urun_kod, urun_ad);
 
 -- Tum urunleri kod ve ad olarak getiren RPC (Limit arttirildi)
-CREATE OR REPLACE FUNCTION get_tum_urunler(result_limit INTEGER DEFAULT 20000)
+CREATE OR REPLACE FUNCTION get_tum_urunler(result_limit INTEGER DEFAULT 50000)
 RETURNS TABLE (urun_kod TEXT, urun_ad TEXT) AS $$
 BEGIN
     RETURN QUERY
@@ -322,6 +322,7 @@ BEGIN
         sg.urun_ad::TEXT
     FROM stok_gunluk sg
     WHERE sg.urun_ad IS NOT NULL AND sg.urun_ad != ''
+    ORDER BY sg.urun_ad::TEXT
     LIMIT result_limit;
 END;
 $$ LANGUAGE plpgsql;

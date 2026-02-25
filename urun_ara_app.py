@@ -480,9 +480,9 @@ def _get_oneri_listesi_impl():
             return [], ["Supabase client oluşturulamadı"]
 
         # 1. YENI: Performanslı RPC (get_tum_urunler) ile tüm benzersiz ürünleri çek
-        # Limit 20000 yapılarak tüm ürünlerin gelmesi sağlanır.
+        # Limit 50000 yapılarak tüm ürünlerin gelmesi sağlanır.
         try:
-            result = client.rpc('get_tum_urunler', {'result_limit': 20000}).execute()
+            result = client.rpc('get_tum_urunler', {'result_limit': 50000}).execute()
             if result.data:
                 seen = set()
                 liste = []
@@ -503,7 +503,7 @@ def _get_oneri_listesi_impl():
                 if liste:
                     debug_info.append(f"RPC (get_tum_urunler) OK: {len(liste)} ürün")
                     # Tüm listeyi döndür (istemci tarafında filtrelenecek)
-                    return sorted(liste)[:20000], debug_info
+                    return sorted(liste)[:50000], debug_info
 
             debug_info.append("RPC (get_tum_urunler) sonuç boş, fallback'e geçiliyor")
         except Exception as e:
