@@ -71,41 +71,50 @@ def get_supabase_client():
     return create_client(url, key)
 
 
-def _fetch_page_with_retry(client, offset: int, page_size: int, max_retries: int = 3):
-    """Tek bir sayfayı retry ile çek."""
+def _fetch_page_with_retry(client, last_id: int, page_size: int, max_retries: int = 5):
+    """Tek bir sayfayı cursor-based pagination + retry ile çek."""
     for attempt in range(max_retries):
         try:
             result = client.table('stok_gunluk')\
-                .select('urun_kod, urun_ad')\
-                .range(offset, offset + page_size - 1)\
+                .select('id, urun_kod, urun_ad')\
+                .order('id')\
+                .gt('id', last_id)\
+                .limit(page_size)\
                 .execute()
             return result.data or []
         except Exception as e:
             if attempt < max_retries - 1:
                 wait = 2 ** (attempt + 1)
-                print(f"  Sayfa offset={offset} hata: {e}. {wait}s bekleyip tekrar deneniyor...")
+                print(f"  Sayfa last_id={last_id} hata: {e}. {wait}s bekleyip tekrar deneniyor...")
                 time.sleep(wait)
             else:
                 raise
 
 
-def _fetch_urunler_raw(client, page_size: int = 5000, max_scan_rows: int = 900000):
-    """stok_gunluk kaynağından ürün satırlarını sayfalı çek."""
+def _fetch_urunler_raw(client, page_size: int = 5000, max_rows: int = 900000):
+    """stok_gunluk kaynağından ürün satırlarını cursor-based pagination ile çek."""
     rows_out = []
-    for offset in range(0, max_scan_rows, page_size):
-        rows = _fetch_page_with_retry(client, offset, page_size)
+    last_id = 0
+    page_num = 0
+
+    while len(rows_out) < max_rows:
+        rows = _fetch_page_with_retry(client, last_id, page_size)
         if not rows:
             break
 
+        last_id = rows[-1]['id']
         rows_out.extend(rows)
-        print(f"  Sayfa OK: offset={offset}, satır={len(rows)}, toplam={len(rows_out)}")
+        page_num += 1
+        print(f"  Sayfa {page_num} OK: last_id={last_id}, satır={len(rows)}, toplam={len(rows_out)}")
         if len(rows) < page_size:
             break
+        time.sleep(0.3)
 
     if not rows_out:
         return pd.DataFrame(columns=['urun_kod', 'urun_ad'])
 
     df = pd.DataFrame(rows_out)
+    df.drop(columns=['id'], errors='ignore', inplace=True)
     if 'urun_kod' not in df.columns:
         df['urun_kod'] = ''
     if 'urun_ad' not in df.columns:
