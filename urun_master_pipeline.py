@@ -71,12 +71,13 @@ def get_supabase_client():
     return create_client(url, key)
 
 
-def _fetch_page_with_retry(client, offset: int, page_size: int, max_retries: int = 3):
+def _fetch_page_with_retry(client, offset: int, page_size: int, max_retries: int = 5):
     """Tek bir sayfayı retry ile çek."""
     for attempt in range(max_retries):
         try:
             result = client.table('stok_gunluk')\
                 .select('urun_kod, urun_ad')\
+                .order('urun_kod')\
                 .range(offset, offset + page_size - 1)\
                 .execute()
             return result.data or []
@@ -89,7 +90,7 @@ def _fetch_page_with_retry(client, offset: int, page_size: int, max_retries: int
                 raise
 
 
-def _fetch_urunler_raw(client, page_size: int = 5000, max_scan_rows: int = 900000):
+def _fetch_urunler_raw(client, page_size: int = 2000, max_scan_rows: int = 900000):
     """stok_gunluk kaynağından ürün satırlarını sayfalı çek."""
     rows_out = []
     for offset in range(0, max_scan_rows, page_size):
@@ -101,6 +102,8 @@ def _fetch_urunler_raw(client, page_size: int = 5000, max_scan_rows: int = 90000
         print(f"  Sayfa OK: offset={offset}, satır={len(rows)}, toplam={len(rows_out)}")
         if len(rows) < page_size:
             break
+        # Supabase rate limit ve timeout'u önlemek için sayfalar arası bekleme
+        time.sleep(0.5)
 
     if not rows_out:
         return pd.DataFrame(columns=['urun_kod', 'urun_ad'])
