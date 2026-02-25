@@ -474,7 +474,7 @@ def get_populer_terimler():
 
 
 def _get_oneri_listesi_impl():
-    """Autocomplete için ürün kodu + adı önerilerini dosyadan getir."""
+    """Autocomplete için ürün kodu + adı önerilerini data/oneri_listesi.json dosyasından getir."""
     debug_info = []
     try:
         oneri_json_path = Path('data/oneri_listesi.json')

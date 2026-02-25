@@ -70,8 +70,8 @@ def get_supabase_client():
     return create_client(url, key)
 
 
-def _fetch_urunler(client, page_size: int = 50000, max_scan_rows: int = 900000):
-    """stok_gunluk kaynağından ürünleri sayfalı çek (frekans için tekrarlar korunur)."""
+def _fetch_urunler_with_frequency(client, page_size: int = 50000, max_scan_rows: int = 900000):
+    """stok_gunluk kaynağından ürünleri sayfalı çek; frekans hesapları için tekrarlar korunur."""
     rows_out = []
     for offset in range(0, max_scan_rows, page_size):
         result = client.table('stok_gunluk')\
@@ -110,7 +110,7 @@ def build_and_save_urun_master() -> tuple[int, int]:
         (master_satir_sayisi, oneri_sayisi)
     """
     client = get_supabase_client()
-    raw_df = _fetch_urunler(client)
+    raw_df = _fetch_urunler_with_frequency(client)
     if raw_df.empty:
         raise RuntimeError('Ürün verisi bulunamadı')
 
