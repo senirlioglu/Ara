@@ -474,9 +474,11 @@ def get_populer_terimler():
 def _get_oneri_listesi_impl():
     """Autocomplete için ürün kod + isimlerini veritabanından getir.
 
-    PostgreSQL'de DISTINCT yapılır → sadece ~5-6K benzersiz ürün gelir.
-    800K satır çekmek yerine DB tarafında filtreleme → çok hızlı.
+    PostgreSQL'de DISTINCT yapılır → benzersiz ürün kod+ad gelir.
+    Client-side JS autocomplete max ~5000 kayıt kaldırır;
+    fazlası components.html payload'ını şişirip tarayıcıyı kilitler.
     """
+    MAX_AUTOCOMPLETE = 5000          # JS payload sınırı
     debug_info = []
     try:
         client = get_supabase_client()
@@ -499,8 +501,13 @@ def _get_oneri_listesi_impl():
                         seen.add(key)
                         liste.append(key)
                 if liste:
-                    debug_info.append(f"RPC kod+ad OK: {len(liste)} ürün")
-                    return sorted(liste), debug_info
+                    liste = sorted(liste)
+                    if len(liste) > MAX_AUTOCOMPLETE:
+                        debug_info.append(f"RPC kod+ad: {len(liste)} ürün → {MAX_AUTOCOMPLETE} ile sınırlandı")
+                        liste = liste[:MAX_AUTOCOMPLETE]
+                    else:
+                        debug_info.append(f"RPC kod+ad OK: {len(liste)} ürün")
+                    return liste, debug_info
             debug_info.append("RPC kod+ad sonuç boş")
         except Exception as e:
             debug_info.append(f"RPC kod+ad hata: {e}")
@@ -790,7 +797,7 @@ inp.addEventListener('input',inp._acIn);
 inp.addEventListener('focus',inp._acFo);
 inp.addEventListener('keyup',inp._acKu);
 pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==inp)dd.style.display='none';});
-}catch(e){}
+}catch(e){console.warn('Autocomplete hata:',e);}
 })();
 </script>""".replace('__DATA__', _ac_data)
         components.html(_ac_js, height=0, scrolling=False)
