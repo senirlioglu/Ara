@@ -70,8 +70,8 @@ def get_supabase_client():
     return create_client(url, key)
 
 
-def _fetch_distinct_urunler(client, page_size: int = 50000, max_scan_rows: int = 900000):
-    """stok_gunluk kaynağından tüm ürünleri sayfalı çek."""
+def _fetch_urunler_raw(client, page_size: int = 50000, max_scan_rows: int = 900000):
+    """stok_gunluk kaynağından ürün satırlarını sayfalı çek."""
     rows_out = []
     for offset in range(0, max_scan_rows, page_size):
         result = client.table('stok_gunluk')\
@@ -100,7 +100,7 @@ def _fetch_distinct_urunler(client, page_size: int = 50000, max_scan_rows: int =
     df['urun_ad'] = df['urun_ad'].fillna('').astype(str).str.strip()
     df = df[df['urun_ad'] != '']
 
-    return df.drop_duplicates(subset=['urun_kod', 'urun_ad']).reset_index(drop=True)
+    return df.reset_index(drop=True)
 
 
 def build_and_save_urun_master() -> tuple[int, int]:
@@ -110,30 +110,39 @@ def build_and_save_urun_master() -> tuple[int, int]:
         (master_satir_sayisi, oneri_sayisi)
     """
     client = get_supabase_client()
-    df = _fetch_distinct_urunler(client)
-    if df.empty:
+    raw_df = _fetch_urunler_raw(client)
+    if raw_df.empty:
         raise RuntimeError('Ürün verisi bulunamadı')
 
-    df['urun_ad_normalized'] = df['urun_ad'].map(normalize_urun_ad)
+    # Master: kimlik güvenli tablo (kod + ad)
+    master_df = raw_df.drop_duplicates(subset=['urun_kod', 'urun_ad']).reset_index(drop=True)
+    master_df['urun_ad_normalized'] = master_df['urun_ad'].map(normalize_urun_ad)
 
-    # Öneri kaynağı: isim bazlı unique (kod-ad master korunur)
+    # Öneri kaynağı: kod + ad bazında frekans (ham satırdan)
     oneri_df = (
-        df.groupby(['urun_ad', 'urun_ad_normalized'], as_index=False)
+        raw_df.groupby(['urun_kod', 'urun_ad'], as_index=False)
         .size()
         .rename(columns={'size': 'frekans'})
-        .sort_values(['frekans', 'urun_ad'], ascending=[False, True])
+        .sort_values(['frekans', 'urun_ad', 'urun_kod'], ascending=[False, True, True])
     )
 
-    oneri_listesi = oneri_df['urun_ad'].drop_duplicates().tolist()
+    def _format_oneri(row) -> str:
+        kod = str(row['urun_kod']).strip()
+        ad = str(row['urun_ad']).strip()
+        if kod:
+            return f"{kod} - {ad}"
+        return ad
+
+    oneri_listesi = oneri_df.apply(_format_oneri, axis=1).drop_duplicates().tolist()
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(MASTER_PARQUET, index=False)
-    df.to_json(MASTER_JSON, orient='records', force_ascii=False)
+    master_df.to_parquet(MASTER_PARQUET, index=False)
+    master_df.to_json(MASTER_JSON, orient='records', force_ascii=False)
 
     with ONERI_JSON.open('w', encoding='utf-8') as f:
         json.dump(oneri_listesi, f, ensure_ascii=False)
 
-    return len(df), len(oneri_listesi)
+    return len(master_df), len(oneri_listesi)
 
 
 if __name__ == '__main__':
