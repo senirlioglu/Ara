@@ -15,11 +15,13 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import json
 import unicodedata
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
 import threading
+from pathlib import Path
 
 # --- Performans için Önceden Derlenmiş Regexler ---
 RE_TV_NEGATIF = re.compile(
@@ -472,113 +474,39 @@ def get_populer_terimler():
 
 
 def _get_oneri_listesi_impl():
-    """Autocomplete için ürün kod + isimlerini veritabanından getir"""
+    """Autocomplete için ürün isimlerini dosya tabanlı ürün master'dan getir."""
     debug_info = []
     try:
-        client = get_supabase_client()
-        if not client:
-            return [], ["Supabase client oluşturulamadı"]
-
-        # 1. YENI: Performanslı RPC (get_tum_urunler) ile tüm benzersiz ürünleri çek
-        # 810k+ satırda ilk sayfaya takılmamak için limit yüksek tutulur.
-        # DB fonksiyonu DISTINCT dönüyorsa veri boyutu yine düşük kalır.
-        try:
-            result = client.rpc('get_tum_urunler', {'result_limit': 1000000}).execute()
-            if result.data:
-                seen = set()
-                liste = []
-                for r in result.data:
-                    kod = (r.get('urun_kod') or '').strip()
-                    ad = (r.get('urun_ad') or '').strip()
-                    if not ad:
-                        continue
-                    # "KOD - AD" formatı (kod varsa)
-                    if kod:
-                        key = f"{kod} - {ad}"
-                    else:
-                        key = ad
-                    if key not in seen:
-                        seen.add(key)
-                        liste.append(key)
-
+        oneri_json_path = Path('data/oneri_listesi.json')
+        if oneri_json_path.exists():
+            with oneri_json_path.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                liste = [x for x in data if isinstance(x, str) and x.strip()]
                 if liste:
-                    debug_info.append(f"RPC (get_tum_urunler) OK: {len(liste)} ürün")
-                    # Tüm listeyi döndür (istemci tarafında filtrelenecek)
-                    return sorted(liste), debug_info
+                    debug_info.append(f"oneri_listesi.json OK: {len(liste)} öneri")
+                    return liste, debug_info
 
-            debug_info.append("RPC (get_tum_urunler) sonuç boş, fallback'e geçiliyor")
-        except Exception as e:
-            debug_info.append(f"RPC (get_tum_urunler) hata: {e}")
-
-        # 2. Fallback: Eski yöntem (stok_gunluk tablosundan sayfalı çekim)
-        # Eğer yeni RPC henüz DB'de yoksa burası çalışır.
-        try:
-            seen = set()
-            liste = []
-            page_size = 50000
-            # 810k satıra kadar tam taramaya izin ver (sayfalı).
-            # Böylece nadir ürün isimleri de öneri havuzuna girebilir.
-            max_scan_rows = 900000
-            for offset in range(0, max_scan_rows, page_size):
-                result = client.table('stok_gunluk')\
-                    .select('urun_kod, urun_ad')\
-                    .range(offset, offset + page_size - 1)\
-                    .execute()
-
-                rows = result.data or []
-                if not rows:
-                    break
-
-                for r in rows:
-                    kod = (r.get('urun_kod') or '').strip()
-                    ad = (r.get('urun_ad') or '').strip()
-                    if not ad:
-                        continue
-                    key = f"{kod} - {ad}" if kod else ad
-                    if key not in seen:
-                        seen.add(key)
-                        liste.append(key)
-
-                # Son sayfadaysak döngüyü bitir.
-                if len(rows) < page_size:
-                    break
-
-            if liste:
-                debug_info.append(
-                    f"Fallback Tablo OK: {len(liste)} ürün (scan <= {max_scan_rows} satır)"
-                )
-                return sorted(liste), debug_info
-        except Exception as e:
-            debug_info.append(f"Fallback Tablo hata: {e}")
-
-        # 3. Fallback: Sadece ürün adları (Eski RPC)
-        try:
-            result = client.rpc('get_urun_adlari', {'result_limit': 5000}).execute()
+        # Düşük maliyetli son fallback: arama_log'dan popüler terimler
+        client = get_supabase_client()
+        if client:
+            baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+            result = client.table('arama_log')\
+                .select('arama_terimi, arama_sayisi')\
+                .gte('tarih', baslangic)\
+                .gt('sonuc_sayisi', 0)\
+                .order('arama_sayisi', desc=True)\
+                .limit(50)\
+                .execute()
             if result.data:
-                liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
-                debug_info.append(f"Fallback Eski RPC OK: {len(liste)} ürün")
+                liste = list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
+                debug_info.append(f"Fallback arama_log: {len(liste)} terim")
                 return liste, debug_info
-        except Exception as e:
-            debug_info.append(f"Fallback Eski RPC hata: {e}")
-
-        # 4. Son fallback: arama_log'dan popüler terimleri kullan
-        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        result = client.table('arama_log')\
-            .select('arama_terimi, arama_sayisi')\
-            .gte('tarih', baslangic)\
-            .gt('sonuc_sayisi', 0)\
-            .order('arama_sayisi', desc=True)\
-            .limit(50)\
-            .execute()
-        if result.data:
-            liste = list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
-            debug_info.append(f"Fallback arama_log: {len(liste)} terim")
-            return liste, debug_info
     except Exception as e:
         debug_info.append(f"Genel hata: {e}")
     return [], debug_info
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def get_oneri_listesi():
     """Cached wrapper"""
     liste, _ = _get_oneri_listesi_impl()
