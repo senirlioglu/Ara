@@ -16,3 +16,6 @@ httpx>=0.25.0
 
 # Goruntu isleme (icon uretimi icin)
 Pillow>=10.0.0
+
+# Parquet yazimi (urun_master_pipeline)
+pyarrow>=14.0.0
