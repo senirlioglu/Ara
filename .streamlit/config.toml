@@ -4,15 +4,14 @@
 [server]
 # Sunucu ayarlari
 headless = true
-port = 8501
+address = "0.0.0.0"
 enableCORS = false
-enableXsrfProtection = true
+enableXsrfProtection = false
 enableStaticServing = true
 
 [browser]
 # Tarayici ayarlari
 gatherUsageStats = false
-serverAddress = "0.0.0.0"
 
 [theme]
 # Tema ayarlari - Koyu mavi tonlari
