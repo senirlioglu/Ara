@@ -283,9 +283,13 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # Sayıysa normalize yapma
+        # Başta ürün kodu varsa sadece onu kullan ("25006169 - ÜRÜN ADI" gibi)
         arama_raw = arama_text.strip()
-        if arama_raw.isdigit():
+        kod_prefix_match = re.match(r'^\s*(\d{5,})\s*(?:-|–)\s*', arama_raw)
+
+        if kod_prefix_match:
+            optimize_sorgu = kod_prefix_match.group(1)
+        elif arama_raw.isdigit():
             optimize_sorgu = arama_raw
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
@@ -693,9 +697,12 @@ wr.style.position='relative';wr.appendChild(dd);
 
 dd.addEventListener('click',function(e){
   var it=e.target.closest('[data-t]');if(!it)return;
-  var t=it.getAttribute('data-t');
+  var t=it.getAttribute('data-t') || '';
+  var sep=t.indexOf(' - ');
+  var kod=(sep>-1 ? t.slice(0,sep).trim() : t.trim());
+  kod=kod.replace(/\D/g,'');
   var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-  st.call(inp,t);
+  st.call(inp,kod);
   inp.dispatchEvent(new Event('input',{bubbles:true}));
   setTimeout(function(){inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();},50);
   dd.style.display='none';
@@ -793,11 +800,13 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         for i, p in enumerate(populer):
             cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_term, args=(p,))
 
-    if arama_text and len(arama_text) >= 2:
+    do_search = bool(ara_btn)
+
+    if do_search and arama_text and len(arama_text) >= 2:
         with st.spinner("Aranıyor..."):
             df = ara_urun(arama_text)
             goster_sonuclar(df, arama_text)
-    elif arama_text and len(arama_text) < 2:
+    elif do_search and arama_text and len(arama_text) < 2:
         st.info("En az 2 karakter girin.")
 
 
