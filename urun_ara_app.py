@@ -480,10 +480,10 @@ def _get_oneri_listesi_impl():
             return [], ["Supabase client oluşturulamadı"]
 
         # 1. YENI: Performanslı RPC (get_tum_urunler) ile tüm benzersiz ürünleri çek
-        # 810k+ satırdan gelen tekrarlar yüzünden bazı ürünler kaçabiliyor.
-        # Daha yüksek limit ile ilk sayfaya takılma riskini azalt.
+        # 810k+ satırda ilk sayfaya takılmamak için limit yüksek tutulur.
+        # DB fonksiyonu DISTINCT dönüyorsa veri boyutu yine düşük kalır.
         try:
-            result = client.rpc('get_tum_urunler', {'result_limit': 250000}).execute()
+            result = client.rpc('get_tum_urunler', {'result_limit': 1000000}).execute()
             if result.data:
                 seen = set()
                 liste = []
@@ -516,7 +516,9 @@ def _get_oneri_listesi_impl():
             seen = set()
             liste = []
             page_size = 50000
-            max_scan_rows = 300000
+            # 810k satıra kadar tam taramaya izin ver (sayfalı).
+            # Böylece nadir ürün isimleri de öneri havuzuna girebilir.
+            max_scan_rows = 900000
             for offset in range(0, max_scan_rows, page_size):
                 result = client.table('stok_gunluk')\
                     .select('urun_kod, urun_ad')\
@@ -536,10 +538,6 @@ def _get_oneri_listesi_impl():
                     if key not in seen:
                         seen.add(key)
                         liste.append(key)
-
-                # Benzersiz ürün sayısına ulaşıldıysa daha fazla okumaya gerek yok.
-                if len(liste) >= 20000:
-                    break
 
                 # Son sayfadaysak döngüyü bitir.
                 if len(rows) < page_size:
@@ -816,15 +814,27 @@ function show(v){
     var ad=it.nAd, kod=it.nKod;
     if(!ad && !kod) return -1;
     if(ad===q) return 1000;
-    if(ad.indexOf(q+' ')===0) return 900;
-    if(ad.indexOf(' '+q)!==-1) return 800;
-    if(ad.indexOf(q)!==-1) return 700;
+    if(ad.indexOf(q)===0) return 920;
+
+    var isShort=q.length<=2;
     var adWords=ad.split(' ');
     for(var i=0;i<adWords.length;i++){
-      if(adWords[i].indexOf(q)===0) return 650;
+      if(adWords[i].indexOf(q)===0) return 820;
     }
-    if(kod && kod.indexOf(q)===0) return 300;
-    if(kod && kod.indexOf(q)!==-1) return 200;
+
+    // Kısa sorgularda (ke/ac gibi) gürültüyü azalt:
+    // sadece kelime başlangıcı eşleşmelerini göster.
+    if(!isShort && ad.indexOf(q)!==-1) return 560;
+
+    if(kod && kod.indexOf(q)===0) return isShort ? 280 : 320;
+    if(!isShort && kod && kod.indexOf(q)!==-1) return 180;
+
+    // Kısa sorguda alakasız ortadan-eşleşmeleri bastır.
+    if(isShort){
+      var compact=ad.replace(/\s+/g,'');
+      if(compact.indexOf(q)===0) return 700;
+    }
+
     return -1;
   }
 
