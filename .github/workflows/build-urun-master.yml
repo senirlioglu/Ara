@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 */6 * * *'
+  push:
+    branches:
+      - 'iokvoq-codex/fix-autocomplete-and-search-suggestions'
 
 permissions:
   contents: write
