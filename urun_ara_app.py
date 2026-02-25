@@ -293,7 +293,7 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         # Öneri seçiminden gelen ürün kodunu tespit et ("KOD - Ad" formatı)
         oneri_kod = None
         if ' - ' in arama_raw:
-            oneri_kod = arama_raw.split(' - ', 1)[0].strip()
+            oneri_kod = arama_raw.split(' - ', 1)[0].strip().lower()
 
         def process_results(data, query):
             df = pd.DataFrame(data)
@@ -305,11 +305,6 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             def calculate_relevance(row):
                 score = 0
                 urun_ad = str(row.get('urun_ad', '')).lower()
-                urun_kod = str(row.get('urun_kod', '')).strip()
-
-                # Öneri seçiminden gelen ürün kodu tam eşleşme (en yüksek öncelik)
-                if oneri_kod and urun_kod.lower() == oneri_kod.lower():
-                    score += 500
 
                 # Tam eşleşme (En yüksek puan)
                 if query.lower() in urun_ad:
@@ -341,6 +336,12 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             # Hem alakaya hem de stok durumuna göre sırala
             df = df.sort_values(by=['alaka', 'stok_adet'], ascending=[False, False])
             df = df.drop_duplicates(subset=['magaza_kod', 'urun_kod'])
+
+            # Öneri seçiminden gelen ürünü en başa taşı (vectorized)
+            if oneri_kod and 'urun_kod' in df.columns:
+                eslesme = df['urun_kod'].str.strip().str.lower() == oneri_kod
+                df = pd.concat([df[eslesme], df[~eslesme]], ignore_index=True)
+
             return df
 
         # RPC Çağrısı (Zaman aşımı kontrolü ile)
