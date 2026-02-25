@@ -541,12 +541,13 @@ def _get_oneri_listesi_impl():
 
 def _cache_gunluk_key():
     """Her gün saat 10:00'dan sonra yeni key üretir → cache otomatik yenilenir.
-    Stoklar 9-10 gibi yüklendiği için 10:00'da taze veri çekilir."""
+    Stoklar 9-10 gibi yüklendiği için 10:00'da taze veri çekilir.
+    _v2: 15K→5K limit düzeltmesi sonrası eski cache'i kırmak için."""
     now = datetime.now()
     if now.hour >= 10:
-        return now.strftime('%Y-%m-%d')
+        return now.strftime('%Y-%m-%d') + "_v2"
     else:
-        return (now - timedelta(days=1)).strftime('%Y-%m-%d')
+        return (now - timedelta(days=1)).strftime('%Y-%m-%d') + "_v2"
 
 @st.cache_data(ttl=86400)
 def get_oneri_listesi(_gun_key: str = None):
