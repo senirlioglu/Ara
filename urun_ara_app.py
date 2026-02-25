@@ -532,9 +532,18 @@ def _get_oneri_listesi_impl():
         debug_info.append(f"Genel hata: {e}")
     return [], debug_info
 
-@st.cache_data(ttl=86400)  # 24 saat cache - günde 1 kez DB'ye gider
-def get_oneri_listesi():
-    """Cached wrapper - 5-6K benzersiz ürün, 24 saat geçerli"""
+def _cache_gunluk_key():
+    """Her gün saat 10:00'dan sonra yeni key üretir → cache otomatik yenilenir.
+    Stoklar 9-10 gibi yüklendiği için 10:00'da taze veri çekilir."""
+    now = datetime.now()
+    if now.hour >= 10:
+        return now.strftime('%Y-%m-%d')
+    else:
+        return (now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+@st.cache_data(ttl=86400)
+def get_oneri_listesi(_gun_key: str = None):
+    """Cached wrapper - her gün 10:00'da otomatik yenilenir"""
     liste, _ = _get_oneri_listesi_impl()
     return liste
 
@@ -708,7 +717,7 @@ def main():
         ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
     # Autocomplete önerileri (client-side, performans dostu)
-    oneriler = get_oneri_listesi()
+    oneriler = get_oneri_listesi(_gun_key=_cache_gunluk_key())
     if oneriler:
         import json
         import streamlit.components.v1 as components
