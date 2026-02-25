@@ -474,7 +474,7 @@ def get_populer_terimler():
 
 
 def _get_oneri_listesi_impl():
-    """Autocomplete için ürün isimlerini dosya tabanlı ürün master'dan getir."""
+    """Autocomplete için ürün önerilerini dosya tabanlı kaynaktan getir."""
     debug_info = []
     try:
         oneri_json_path = Path('data/oneri_listesi.json')
@@ -486,24 +486,10 @@ def _get_oneri_listesi_impl():
                 if liste:
                     debug_info.append(f"oneri_listesi.json OK: {len(liste)} öneri")
                     return liste, debug_info
-
-        # Düşük maliyetli son fallback: arama_log'dan popüler terimler
-        client = get_supabase_client()
-        if client:
-            baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-            result = client.table('arama_log')\
-                .select('arama_terimi, arama_sayisi')\
-                .gte('tarih', baslangic)\
-                .gt('sonuc_sayisi', 0)\
-                .order('arama_sayisi', desc=True)\
-                .limit(50)\
-                .execute()
-            if result.data:
-                liste = list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
-                debug_info.append(f"Fallback arama_log: {len(liste)} terim")
-                return liste, debug_info
     except Exception as e:
         debug_info.append(f"Genel hata: {e}")
+
+    debug_info.append('oneri_listesi.json bulunamadı veya geçersiz')
     return [], debug_info
 
 @st.cache_data(ttl=3600)
