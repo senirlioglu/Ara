@@ -480,9 +480,10 @@ def _get_oneri_listesi_impl():
             return [], ["Supabase client oluşturulamadı"]
 
         # 1. YENI: Performanslı RPC (get_tum_urunler) ile tüm benzersiz ürünleri çek
-        # Limit 50000 yapılarak tüm ürünlerin gelmesi sağlanır.
+        # 810k+ satırdan gelen tekrarlar yüzünden bazı ürünler kaçabiliyor.
+        # Daha yüksek limit ile ilk sayfaya takılma riskini azalt.
         try:
-            result = client.rpc('get_tum_urunler', {'result_limit': 50000}).execute()
+            result = client.rpc('get_tum_urunler', {'result_limit': 250000}).execute()
             if result.data:
                 seen = set()
                 liste = []
@@ -503,37 +504,52 @@ def _get_oneri_listesi_impl():
                 if liste:
                     debug_info.append(f"RPC (get_tum_urunler) OK: {len(liste)} ürün")
                     # Tüm listeyi döndür (istemci tarafında filtrelenecek)
-                    return sorted(liste)[:50000], debug_info
+                    return sorted(liste), debug_info
 
             debug_info.append("RPC (get_tum_urunler) sonuç boş, fallback'e geçiliyor")
         except Exception as e:
             debug_info.append(f"RPC (get_tum_urunler) hata: {e}")
 
-        # 2. Fallback: Eski yöntem (stok_gunluk tablosundan limitli çekim)
+        # 2. Fallback: Eski yöntem (stok_gunluk tablosundan sayfalı çekim)
         # Eğer yeni RPC henüz DB'de yoksa burası çalışır.
         try:
-            result = client.table('stok_gunluk')\
-                .select('urun_kod, urun_ad')\
-                .limit(10000)\
-                .execute()
-            if result.data:
-                seen = set()
-                liste = []
-                for r in result.data:
+            seen = set()
+            liste = []
+            page_size = 50000
+            max_scan_rows = 300000
+            for offset in range(0, max_scan_rows, page_size):
+                result = client.table('stok_gunluk')\
+                    .select('urun_kod, urun_ad')\
+                    .range(offset, offset + page_size - 1)\
+                    .execute()
+
+                rows = result.data or []
+                if not rows:
+                    break
+
+                for r in rows:
                     kod = (r.get('urun_kod') or '').strip()
                     ad = (r.get('urun_ad') or '').strip()
                     if not ad:
                         continue
-                    if kod:
-                        key = f"{kod} - {ad}"
-                    else:
-                        key = ad
+                    key = f"{kod} - {ad}" if kod else ad
                     if key not in seen:
                         seen.add(key)
                         liste.append(key)
-                if liste:
-                    debug_info.append(f"Fallback Tablo OK: {len(liste)} ürün")
-                    return sorted(liste)[:5000], debug_info
+
+                # Benzersiz ürün sayısına ulaşıldıysa daha fazla okumaya gerek yok.
+                if len(liste) >= 20000:
+                    break
+
+                # Son sayfadaysak döngüyü bitir.
+                if len(rows) < page_size:
+                    break
+
+            if liste:
+                debug_info.append(
+                    f"Fallback Tablo OK: {len(liste)} ürün (scan <= {max_scan_rows} satır)"
+                )
+                return sorted(liste), debug_info
         except Exception as e:
             debug_info.append(f"Fallback Tablo hata: {e}")
 
@@ -774,10 +790,52 @@ dd.addEventListener('click',function(e){
 });
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function norm(s){
+  var map={'İ':'i','I':'i','ı':'i','Ğ':'g','ğ':'g','Ü':'u','ü':'u','Ş':'s','ş':'s','Ö':'o','ö':'o','Ç':'c','ç':'c'};
+  var out='';
+  for(var i=0;i<s.length;i++){out+=map[s[i]]||s[i];}
+  if(out.normalize){out=out.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+  return out.toLowerCase().replace(/\s+/g,' ').trim();
+}
+
+var IDX=S.map(function(raw){
+  var sep=raw.indexOf(' - ');
+  var kod=sep>-1?raw.slice(0,sep):'';
+  var ad=sep>-1?raw.slice(sep+3):raw;
+  var nKod=norm(kod);
+  var nAd=norm(ad);
+  return {raw:raw,kod:kod,ad:ad,nKod:nKod,nAd:nAd};
+});
+
 function show(v){
   if(v.length<2){dd.style.display='none';return;}
-  var lv=v.toLowerCase();
-  var m=S.filter(function(s){return s.toLowerCase().indexOf(lv)!==-1;}).slice(0,8);
+  var q=norm(v);
+  if(!q){dd.style.display='none';return;}
+
+  function score(it){
+    var ad=it.nAd, kod=it.nKod;
+    if(!ad && !kod) return -1;
+    if(ad===q) return 1000;
+    if(ad.indexOf(q+' ')===0) return 900;
+    if(ad.indexOf(' '+q)!==-1) return 800;
+    if(ad.indexOf(q)!==-1) return 700;
+    var adWords=ad.split(' ');
+    for(var i=0;i<adWords.length;i++){
+      if(adWords[i].indexOf(q)===0) return 650;
+    }
+    if(kod && kod.indexOf(q)===0) return 300;
+    if(kod && kod.indexOf(q)!==-1) return 200;
+    return -1;
+  }
+
+  var m=[];
+  for(var i=0;i<IDX.length;i++){
+    var it=IDX[i];
+    var sc=score(it);
+    if(sc>0){m.push({s:it.raw,sc:sc});}
+  }
+  m.sort(function(a,b){return b.sc-a.sc || a.s.length-b.s.length;});
+  m=m.slice(0,12).map(function(x){return x.s;});
   if(!m.length){dd.style.display='none';return;}
   dd.innerHTML=m.map(function(s){
     return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
