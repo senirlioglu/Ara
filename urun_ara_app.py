@@ -290,6 +290,11 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
+        # Öneri seçiminden gelen ürün kodunu tespit et ("KOD - Ad" formatı)
+        oneri_kod = None
+        if ' - ' in arama_raw:
+            oneri_kod = arama_raw.split(' - ', 1)[0].strip()
+
         def process_results(data, query):
             df = pd.DataFrame(data)
             df.columns = [col.replace('out_', '') for col in df.columns]
@@ -300,6 +305,11 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             def calculate_relevance(row):
                 score = 0
                 urun_ad = str(row.get('urun_ad', '')).lower()
+                urun_kod = str(row.get('urun_kod', '')).strip()
+
+                # Öneri seçiminden gelen ürün kodu tam eşleşme (en yüksek öncelik)
+                if oneri_kod and urun_kod.lower() == oneri_kod.lower():
+                    score += 500
 
                 # Tam eşleşme (En yüksek puan)
                 if query.lower() in urun_ad:
