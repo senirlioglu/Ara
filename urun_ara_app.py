@@ -15,11 +15,13 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import json
 import unicodedata
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
 import threading
+from pathlib import Path
 
 # --- Performans için Önceden Derlenmiş Regexler ---
 RE_TV_NEGATIF = re.compile(
@@ -149,14 +151,12 @@ def get_stok_seviye(adet: int) -> tuple:
     """Stok seviyesi, css class ve renk döndür"""
     if adet is None or adet <= 0:
         return "Yok", "stok-yok", "#9e9e9e"
-    elif adet == 1:
-        return "Kritik", "stok-kritik", "#ff4444"
+    elif adet <= 2:
+        return "Düşük", "stok-dusuk", "#e74c3c"
     elif adet <= 5:
-        return "Düşük", "stok-dusuk", "#ff9800"
-    elif adet <= 10:
-        return "Normal", "stok-normal", "#4caf50"
+        return "Orta", "stok-orta", "#f39c12"
     else:
-        return "Yüksek", "stok-yuksek", "#2196f3"
+        return "Yüksek", "stok-yuksek", "#27ae60"
 
 
 def temizle_ve_kok_bul(text: str) -> str:
@@ -268,10 +268,39 @@ YAZIM_DUZELTME = {
 # URUN ARAMA (SERVER-SIDE)
 # ============================================================================
 
+@st.cache_data(ttl=3600)
+def _build_oneri_lookup():
+    """Öneri listesinden ad→kod reverse lookup tablosu oluştur"""
+    lookup = {}
+    try:
+        oneri_path = Path('data/oneri_listesi.json')
+        if oneri_path.exists():
+            with oneri_path.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            for entry in data:
+                if isinstance(entry, str) and ' - ' in entry:
+                    parts = entry.split(' - ', 1)
+                    kod = parts[0].strip()
+                    ad = parts[1].strip()
+                    if kod.isdigit() and ad:
+                        lookup[ad.lower()] = kod
+    except Exception:
+        pass
+    return lookup
+
+
+def _oneri_ad_to_kod(arama_text: str) -> str:
+    """Dropdown'dan gelen ürün adını koda çevir. Bulamazsa boş string döner."""
+    lookup = _build_oneri_lookup()
+    return lookup.get(arama_text.strip().lower(), '')
+
+
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
     SERVER-SIDE SEARCH - Tüm arama SQL'de yapılır.
     Python sadece normalize + negatif filtre uygular.
+
+    Query Router: Kod araması (exact) vs Metin araması (relevance) ayrımı yapar.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -281,12 +310,24 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # Sayıysa normalize yapma
+        # Başta ürün kodu varsa sadece onu kullan ("25006169 - ÜRÜN ADI" gibi)
         arama_raw = arama_text.strip()
-        if arama_raw.isdigit():
+        kod_prefix_match = re.match(r'^\s*(\d{5,})\s*(?:-|–)\s*', arama_raw)
+
+        if kod_prefix_match:
+            optimize_sorgu = kod_prefix_match.group(1)
+        elif arama_raw.isdigit():
             optimize_sorgu = arama_raw
         else:
-            optimize_sorgu = temizle_ve_kok_bul(arama_raw)
+            # Öneri listesinden seçilen ürün adını koda çevir (reverse lookup)
+            resolved_kod = _oneri_ad_to_kod(arama_raw)
+            if resolved_kod:
+                optimize_sorgu = resolved_kod
+            else:
+                optimize_sorgu = temizle_ve_kok_bul(arama_raw)
+
+        # --- Query Router: Kod mu, metin mi? ---
+        is_kod_araması = optimize_sorgu.isdigit() and len(optimize_sorgu) >= 7
 
         def process_results(data, query):
             df = pd.DataFrame(data)
@@ -298,8 +339,18 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             def calculate_relevance(row):
                 score = 0
                 urun_ad = str(row.get('urun_ad', '')).lower()
+                urun_kod = str(row.get('urun_kod', ''))
 
-                # Tam eşleşme (En yüksek puan)
+                # Kod eşleşme (en yüksek öncelik)
+                if query.isdigit():
+                    if urun_kod == query:
+                        score += 1000
+                    elif urun_kod.startswith(query):
+                        score += 600
+                    elif len(query) >= 6 and query in urun_kod:
+                        score += 200
+
+                # Tam eşleşme (metin)
                 if query.lower() in urun_ad:
                     score += 100
 
@@ -335,7 +386,15 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         try:
             result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
             if result.data:
-                return process_results(result.data, optimize_sorgu)
+                df = process_results(result.data, optimize_sorgu)
+
+                # Kod araması: exact varsa SADECE exact dön
+                if is_kod_araması and not df.empty:
+                    exact = df[df['urun_kod'].astype(str) == optimize_sorgu]
+                    if not exact.empty:
+                        return exact
+
+                return df
         except Exception as e:
             if not ("timeout" in str(e).lower() or "57014" in str(e)):
                 st.error(f"Beklenmeyen Hata: {e}")
@@ -345,6 +404,11 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             err_msg = str(result.error)
             if not ("timeout" in err_msg.lower() or "57014" in err_msg):
                 st.error(f"Arama hatası (RPC): {result.error}")
+
+        # Kod aramasında fallback yapma - kod ya var ya yok
+        if is_kod_araması:
+            st.warning("Bu ürün kodu bulunamadı. Kodu kontrol edip tekrar deneyin.")
+            return pd.DataFrame()
 
         # ---- FALLBACK SEARCH (Google-like) ----
         # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
@@ -405,7 +469,7 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                 except: pass
 
         # Timeout uyarısı (Eğer buraya kadar gelip sonuç yoksa ve timeout olmuşsa)
-        st.warning("🔍 Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
+        st.warning("Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
         return pd.DataFrame()
 
     except Exception as e:
@@ -465,106 +529,35 @@ def get_populer_terimler():
             .execute()
 
         if result.data:
-            return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))[:10]
+            # Saf ürün kodlarını filtrele (kullanıcıya anlamsız)
+            terimler = [r['arama_terimi'] for r in result.data
+                        if not r['arama_terimi'].strip().isdigit()]
+            return list(dict.fromkeys(terimler))[:10]
     except:
         pass
     return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
 
 
 def _get_oneri_listesi_impl():
-    """Autocomplete için ürün kod + isimlerini veritabanından getir"""
+    """Autocomplete için ürün önerilerini dosya tabanlı kaynaktan getir."""
     debug_info = []
     try:
-        client = get_supabase_client()
-        if not client:
-            return [], ["Supabase client oluşturulamadı"]
-
-        # 1. YENI: Performanslı RPC (get_tum_urunler) ile tüm benzersiz ürünleri çek
-        # Limit 50000 yapılarak tüm ürünlerin gelmesi sağlanır.
-        try:
-            result = client.rpc('get_tum_urunler', {'result_limit': 50000}).execute()
-            if result.data:
-                seen = set()
-                liste = []
-                for r in result.data:
-                    kod = (r.get('urun_kod') or '').strip()
-                    ad = (r.get('urun_ad') or '').strip()
-                    if not ad:
-                        continue
-                    # "KOD - AD" formatı (kod varsa)
-                    if kod:
-                        key = f"{kod} - {ad}"
-                    else:
-                        key = ad
-                    if key not in seen:
-                        seen.add(key)
-                        liste.append(key)
-
+        oneri_json_path = Path('data/oneri_listesi.json')
+        if oneri_json_path.exists():
+            with oneri_json_path.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                liste = [x for x in data if isinstance(x, str) and x.strip()]
                 if liste:
-                    debug_info.append(f"RPC (get_tum_urunler) OK: {len(liste)} ürün")
-                    # Tüm listeyi döndür (istemci tarafında filtrelenecek)
-                    return sorted(liste)[:50000], debug_info
-
-            debug_info.append("RPC (get_tum_urunler) sonuç boş, fallback'e geçiliyor")
-        except Exception as e:
-            debug_info.append(f"RPC (get_tum_urunler) hata: {e}")
-
-        # 2. Fallback: Eski yöntem (stok_gunluk tablosundan limitli çekim)
-        # Eğer yeni RPC henüz DB'de yoksa burası çalışır.
-        try:
-            result = client.table('stok_gunluk')\
-                .select('urun_kod, urun_ad')\
-                .limit(10000)\
-                .execute()
-            if result.data:
-                seen = set()
-                liste = []
-                for r in result.data:
-                    kod = (r.get('urun_kod') or '').strip()
-                    ad = (r.get('urun_ad') or '').strip()
-                    if not ad:
-                        continue
-                    if kod:
-                        key = f"{kod} - {ad}"
-                    else:
-                        key = ad
-                    if key not in seen:
-                        seen.add(key)
-                        liste.append(key)
-                if liste:
-                    debug_info.append(f"Fallback Tablo OK: {len(liste)} ürün")
-                    return sorted(liste)[:5000], debug_info
-        except Exception as e:
-            debug_info.append(f"Fallback Tablo hata: {e}")
-
-        # 3. Fallback: Sadece ürün adları (Eski RPC)
-        try:
-            result = client.rpc('get_urun_adlari', {'result_limit': 5000}).execute()
-            if result.data:
-                liste = [r['urun_ad'] for r in result.data if r.get('urun_ad')]
-                debug_info.append(f"Fallback Eski RPC OK: {len(liste)} ürün")
-                return liste, debug_info
-        except Exception as e:
-            debug_info.append(f"Fallback Eski RPC hata: {e}")
-
-        # 4. Son fallback: arama_log'dan popüler terimleri kullan
-        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        result = client.table('arama_log')\
-            .select('arama_terimi, arama_sayisi')\
-            .gte('tarih', baslangic)\
-            .gt('sonuc_sayisi', 0)\
-            .order('arama_sayisi', desc=True)\
-            .limit(50)\
-            .execute()
-        if result.data:
-            liste = list(dict.fromkeys([r['arama_terimi'] for r in result.data]))
-            debug_info.append(f"Fallback arama_log: {len(liste)} terim")
-            return liste, debug_info
+                    debug_info.append(f"oneri_listesi.json OK: {len(liste)} öneri")
+                    return liste, debug_info
     except Exception as e:
         debug_info.append(f"Genel hata: {e}")
+
+    debug_info.append('oneri_listesi.json bulunamadı veya geçersiz')
     return [], debug_info
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def get_oneri_listesi():
     """Cached wrapper"""
     liste, _ = _get_oneri_listesi_impl()
@@ -581,11 +574,26 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     sonuc_sayisi = 0 if df.empty else len(df['urun_kod'].unique())
 
     # Arka planda logla (UI bloklamaması için)
-    threading.Thread(target=log_arama, args=(arama_text, sonuc_sayisi), daemon=True).start()
+    # Kod aramasını ürün adına çevir (popüler aramalar çöplüğünü önler)
+    log_terimi = arama_text
+    if arama_text.strip().isdigit():
+        # Kod araması → sonuçlardan ürün adını al
+        if not df.empty and 'urun_ad' in df.columns:
+            log_terimi = str(df.iloc[0]['urun_ad']).strip()
+    threading.Thread(target=log_arama, args=(log_terimi, sonuc_sayisi), daemon=True).start()
 
     # Sonuç yoksa (empty) kullanıcıya bildir
     if df.empty:
-        st.warning(f"'{arama_text}' için sonuç bulunamadı.")
+        arama_raw = arama_text.strip()
+        # "KOD - AD" formatını temizle
+        if ' - ' in arama_raw:
+            parts = arama_raw.split(' - ', 1)
+            if parts[0].strip().isdigit():
+                arama_raw = parts[0].strip()
+        if arama_raw.isdigit() and len(arama_raw) >= 7:
+            st.warning(f"Ürün kodu **{arama_raw}** sistemde kayıtlı ancak şu an hiçbir mağazada stok bilgisi bulunamadı.")
+        else:
+            st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
     # Pandas Gruplama - SQL'den dönen sırayı koru
@@ -623,6 +631,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].sort_values('stok_adet', ascending=False)
 
+        # Toplam bölge stoku
+        toplam_stok = int(urun_df_stoklu['stok_adet'].sum()) if not urun_df_stoklu.empty else 0
+
         # Fiyatı ürün seviyesinde al (ilk geçerli fiyat)
         ham_fiyat = urun_df_stoklu['birim_fiyat'].dropna()
         ham_fiyat = ham_fiyat[ham_fiyat > 0]
@@ -637,15 +648,18 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}"
 
         with st.expander(baslik, expanded=False):
-            # Fiyat badge (expander içi üstte)
+            # Üst bilgi satırı: Fiyat + Toplam Bölge Stoku
+            badges_html = ""
             if fiyat_str:
-                st.markdown(f"""
-                <div style="display:inline-block; background:linear-gradient(135deg,#00b894,#00cec9);
+                badges_html += f"""<div style="display:inline-block; background:linear-gradient(135deg,#00b894,#00cec9);
                      color:white; padding:6px 16px; border-radius:20px; font-weight:700;
-                     font-size:1.1rem; margin-bottom:12px;">
-                    🏷️ {fiyat_str}
-                </div>
-                """, unsafe_allow_html=True)
+                     font-size:1.05rem;">🏷️ {fiyat_str}</div>"""
+            if toplam_stok > 0:
+                badges_html += f"""<div style="display:inline-block; background:linear-gradient(135deg,#6c5ce7,#a29bfe);
+                     color:white; padding:6px 16px; border-radius:20px; font-weight:700;
+                     font-size:1.05rem; margin-left:8px;">📊 Toplam Bölge Stok: {toplam_stok}</div>"""
+            if badges_html:
+                st.markdown(f'<div style="margin-bottom:12px;">{badges_html}</div>', unsafe_allow_html=True)
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
@@ -656,7 +670,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     except:
                         seviye, renk = "Normal", "#3498db"
 
-                    adet = int(row['stok_adet'])
                     magaza_ad = row['magaza_ad'] or row['magaza_kod']
 
                     # Güvenli Veri Çekme
@@ -700,8 +713,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                                 <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
                             </div>
                         </div>
-                        <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
-                            {adet} Adet
+                        <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.85rem;">
+                            {seviye}
                         </div>
                     </div>
                     """)
@@ -726,18 +739,18 @@ def main():
         st.info("Lütfen ayarları kontrol edin.")
         return
 
-    # Arama kutusu
-    col1, col2 = st.columns([5, 1])
-
-    with col1:
-        arama_text = st.text_input(
-            "Arama",
-            placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
-            label_visibility="collapsed",
-            key="arama_input"
-        )
-    with col2:
-        ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
+    # Arama kutusu (form ile - her tuşta DB çağrısı yok, sadece Enter/buton)
+    with st.form("arama_form", clear_on_submit=False):
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            arama_text = st.text_input(
+                "Arama",
+                placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
+                label_visibility="collapsed",
+                key="arama_input"
+            )
+        with col2:
+            ara_btn = st.form_submit_button("🔍 Ara", use_container_width=True, type="primary")
 
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
@@ -765,24 +778,88 @@ wr.style.position='relative';wr.appendChild(dd);
 
 dd.addEventListener('click',function(e){
   var it=e.target.closest('[data-t]');if(!it)return;
-  var t=it.getAttribute('data-t');
+  var t=it.getAttribute('data-t') || '';
+  var sep=t.indexOf(' - ');
+  var ad=(sep>-1 ? t.slice(sep+3).trim() : t.trim());
+  var kod=(sep>-1 ? t.slice(0,sep).trim() : '');
+  // Input'a ürün adını yaz (kullanıcı kodu görmesin)
   var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-  st.call(inp,t);
+  st.call(inp,ad);
+  // Seçilen kodu gizli attribute'ta sakla
+  inp.setAttribute('data-selected-kod', kod);
   inp.dispatchEvent(new Event('input',{bubbles:true}));
   setTimeout(function(){inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();},50);
   dd.style.display='none';
 });
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function norm(s){
+  var map={'İ':'i','I':'i','ı':'i','Ğ':'g','ğ':'g','Ü':'u','ü':'u','Ş':'s','ş':'s','Ö':'o','ö':'o','Ç':'c','ç':'c'};
+  var out='';
+  for(var i=0;i<s.length;i++){out+=map[s[i]]||s[i];}
+  if(out.normalize){out=out.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+  return out.toLowerCase().replace(/\s+/g,' ').trim();
+}
+
+var IDX=S.map(function(raw){
+  var sep=raw.indexOf(' - ');
+  var kod=sep>-1?raw.slice(0,sep):'';
+  var ad=sep>-1?raw.slice(sep+3):raw;
+  var nKod=norm(kod);
+  var nAd=norm(ad);
+  return {raw:raw,kod:kod,ad:ad,nKod:nKod,nAd:nAd};
+});
+
 function show(v){
   if(v.length<2){dd.style.display='none';return;}
-  var lv=v.toLowerCase();
-  var m=S.filter(function(s){return s.toLowerCase().indexOf(lv)!==-1;}).slice(0,8);
+  var q=norm(v);
+  if(!q){dd.style.display='none';return;}
+
+  function score(it){
+    var ad=it.nAd, kod=it.nKod;
+    if(!ad && !kod) return -1;
+    if(ad===q) return 1000;
+    if(ad.indexOf(q)===0) return 920;
+
+    var isShort=q.length<=2;
+    var adWords=ad.split(' ');
+    for(var i=0;i<adWords.length;i++){
+      if(adWords[i].indexOf(q)===0) return 820;
+    }
+
+    // Kısa sorgularda (ke/ac gibi) gürültüyü azalt:
+    // sadece kelime başlangıcı eşleşmelerini göster.
+    if(!isShort && ad.indexOf(q)!==-1) return 560;
+
+    if(kod && kod.indexOf(q)===0) return isShort ? 280 : 320;
+    if(!isShort && kod && kod.indexOf(q)!==-1) return 180;
+
+    // Kısa sorguda alakasız ortadan-eşleşmeleri bastır.
+    if(isShort){
+      var compact=ad.replace(/\s+/g,'');
+      if(compact.indexOf(q)===0) return 700;
+    }
+
+    return -1;
+  }
+
+  var m=[];
+  for(var i=0;i<IDX.length;i++){
+    var it=IDX[i];
+    var sc=score(it);
+    if(sc>0){m.push({s:it.raw,sc:sc});}
+  }
+  m.sort(function(a,b){return b.sc-a.sc || a.s.length-b.s.length;});
+  m=m.slice(0,12).map(function(x){return x.s;});
   if(!m.length){dd.style.display='none';return;}
   dd.innerHTML=m.map(function(s){
+    var sep=s.indexOf(' - ');
+    var kod=(sep>-1 ? s.slice(0,sep).trim() : '');
+    var ad=(sep>-1 ? s.slice(sep+3).trim() : s);
+    var label=(kod ? '<span style="color:#999;font-size:0.8rem;min-width:68px;">'+esc(kod)+'</span><span style="color:#999;padding:0 4px;">-</span><span style="color:#333;font-size:0.92rem;">'+esc(ad)+'</span>' : '<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span>');
     return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
     +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
-    +'<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span></div>';
+    +label+'</div>';
   }).join('');
   dd.style.display='block';
 }
@@ -800,8 +877,9 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         components.html(_ac_js, height=0, scrolling=False)
 
     # Popüler Aramalar (Yatay kaydırmalı pill butonlar)
-    def set_search_term(term):
+    def set_search_and_run(term):
         st.session_state.arama_input = term
+        st.session_state._pop_arama = term
 
     populer = get_populer_terimler()
 
@@ -809,14 +887,21 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         st.markdown('<div class="popular-title">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
         cols_pop = st.columns(len(populer))
         for i, p in enumerate(populer):
-            cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_term, args=(p,))
+            cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_and_run, args=(p,))
 
-    if arama_text and len(arama_text) >= 2:
+    # Popüler pill tıklayınca da arama yap
+    if st.session_state.get('_pop_arama'):
+        pop_term = st.session_state.pop('_pop_arama')
         with st.spinner("Aranıyor..."):
-            df = ara_urun(arama_text)
-            goster_sonuclar(df, arama_text)
-    elif arama_text and len(arama_text) < 2:
-        st.info("En az 2 karakter girin.")
+            df = ara_urun(pop_term)
+            goster_sonuclar(df, pop_term)
+    elif ara_btn:
+        if arama_text and len(arama_text) >= 2:
+            with st.spinner("Aranıyor..."):
+                df = ara_urun(arama_text)
+                goster_sonuclar(df, arama_text)
+        elif arama_text:
+            st.info("En az 2 karakter girin.")
 
 
 

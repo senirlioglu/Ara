@@ -41,3 +41,27 @@ Streamlit Cloud'da:
 2. Bu klasordeki tum dosyalari repo'ya yukleyin
 3. Settings -> Pages -> Source: "Deploy from a branch" -> Branch: `main` -> `/ (root)`
 4. URL'niz: `https://USERNAME.github.io/urun-ara-launcher/`
+
+## Ürün master otomasyonu (GitHub üzerinde)
+
+`urun_master_pipeline.py` GitHub Actions ile otomatik çalıştırılabilir.
+
+### Workflow
+
+- Dosya: `.github/workflows/build-urun-master.yml`
+- Tetikleme:
+  - Manuel (`workflow_dispatch`)
+  - Her 6 saatte bir (`schedule`)
+- Çıktı dosyaları:
+  - `data/urun_master.parquet`
+  - `data/urun_master.json`
+  - `data/oneri_listesi.json`
+
+### Gerekli Secrets
+
+Repository Settings → Secrets and variables → Actions altında:
+
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+
+Workflow bu değerlerle pipeline'ı çalıştırır. `data/` altında değişiklik varsa otomatik commit + push yapar.

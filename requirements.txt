@@ -16,3 +16,6 @@ httpx>=0.25.0
 
 # Goruntu isleme (icon uretimi icin)
 Pillow>=10.0.0
+
+# Parquet yazimi
+pyarrow>=16.0.0
