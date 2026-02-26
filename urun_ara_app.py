@@ -285,15 +285,13 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # Öneri seçiminden gelen "KOD - AD" formatını tespit et
+        # Başta ürün kodu varsa sadece onu kullan ("25006169 - ÜRÜN ADI" gibi)
         arama_raw = arama_text.strip()
-        if ' - ' in arama_raw:
-            parts = arama_raw.split(' - ', 1)
-            if parts[0].strip().isdigit():
-                arama_raw = parts[0].strip()  # Kodla ara
+        kod_prefix_match = re.match(r'^\s*(\d{5,})\s*(?:-|–)\s*', arama_raw)
 
-        # Sayıysa normalize yapma
-        if arama_raw.isdigit():
+        if kod_prefix_match:
+            optimize_sorgu = kod_prefix_match.group(1)
+        elif arama_raw.isdigit():
             optimize_sorgu = arama_raw
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
@@ -736,9 +734,12 @@ wr.style.position='relative';wr.appendChild(dd);
 
 dd.addEventListener('click',function(e){
   var it=e.target.closest('[data-t]');if(!it)return;
-  var t=it.getAttribute('data-t');
+  var t=it.getAttribute('data-t') || '';
+  var sep=t.indexOf(' - ');
+  var kod=(sep>-1 ? t.slice(0,sep).trim() : t.trim());
+  kod=kod.replace(/\D/g,'');
   var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-  st.call(inp,t);
+  st.call(inp,kod);
   inp.dispatchEvent(new Event('input',{bubbles:true}));
   setTimeout(function(){inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();},50);
   dd.style.display='none';
