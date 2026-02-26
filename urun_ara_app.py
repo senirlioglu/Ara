@@ -270,6 +270,33 @@ YAZIM_DUZELTME = {
 # URUN ARAMA (SERVER-SIDE)
 # ============================================================================
 
+@st.cache_data(ttl=3600)
+def _build_oneri_lookup():
+    """Öneri listesinden ad→kod reverse lookup tablosu oluştur"""
+    lookup = {}
+    try:
+        oneri_path = Path('data/oneri_listesi.json')
+        if oneri_path.exists():
+            with oneri_path.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            for entry in data:
+                if isinstance(entry, str) and ' - ' in entry:
+                    parts = entry.split(' - ', 1)
+                    kod = parts[0].strip()
+                    ad = parts[1].strip()
+                    if kod.isdigit() and ad:
+                        lookup[ad.lower()] = kod
+    except Exception:
+        pass
+    return lookup
+
+
+def _oneri_ad_to_kod(arama_text: str) -> str:
+    """Dropdown'dan gelen ürün adını koda çevir. Bulamazsa boş string döner."""
+    lookup = _build_oneri_lookup()
+    return lookup.get(arama_text.strip().lower(), '')
+
+
 def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
     SERVER-SIDE SEARCH - Tüm arama SQL'de yapılır.
@@ -294,7 +321,12 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         elif arama_raw.isdigit():
             optimize_sorgu = arama_raw
         else:
-            optimize_sorgu = temizle_ve_kok_bul(arama_raw)
+            # Öneri listesinden seçilen ürün adını koda çevir (reverse lookup)
+            resolved_kod = _oneri_ad_to_kod(arama_raw)
+            if resolved_kod:
+                optimize_sorgu = resolved_kod
+            else:
+                optimize_sorgu = temizle_ve_kok_bul(arama_raw)
 
         # --- Query Router: Kod mu, metin mi? ---
         is_kod_araması = optimize_sorgu.isdigit() and len(optimize_sorgu) >= 7
@@ -499,7 +531,10 @@ def get_populer_terimler():
             .execute()
 
         if result.data:
-            return list(dict.fromkeys([r['arama_terimi'] for r in result.data]))[:10]
+            # Saf ürün kodlarını filtrele (kullanıcıya anlamsız)
+            terimler = [r['arama_terimi'] for r in result.data
+                        if not r['arama_terimi'].strip().isdigit()]
+            return list(dict.fromkeys(terimler))[:10]
     except:
         pass
     return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
@@ -541,7 +576,13 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     sonuc_sayisi = 0 if df.empty else len(df['urun_kod'].unique())
 
     # Arka planda logla (UI bloklamaması için)
-    threading.Thread(target=log_arama, args=(arama_text, sonuc_sayisi), daemon=True).start()
+    # Kod aramasını ürün adına çevir (popüler aramalar çöplüğünü önler)
+    log_terimi = arama_text
+    if arama_text.strip().isdigit():
+        # Kod araması → sonuçlardan ürün adını al
+        if not df.empty and 'urun_ad' in df.columns:
+            log_terimi = str(df.iloc[0]['urun_ad']).strip()
+    threading.Thread(target=log_arama, args=(log_terimi, sonuc_sayisi), daemon=True).start()
 
     # Sonuç yoksa (empty) kullanıcıya bildir
     if df.empty:
@@ -736,10 +777,13 @@ dd.addEventListener('click',function(e){
   var it=e.target.closest('[data-t]');if(!it)return;
   var t=it.getAttribute('data-t') || '';
   var sep=t.indexOf(' - ');
-  var kod=(sep>-1 ? t.slice(0,sep).trim() : t.trim());
-  kod=kod.replace(/\D/g,'');
+  var ad=(sep>-1 ? t.slice(sep+3).trim() : t.trim());
+  var kod=(sep>-1 ? t.slice(0,sep).trim() : '');
+  // Input'a ürün adını yaz (kullanıcı kodu görmesin)
   var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-  st.call(inp,kod);
+  st.call(inp,ad);
+  // Seçilen kodu gizli attribute'ta sakla
+  inp.setAttribute('data-selected-kod', kod);
   inp.dispatchEvent(new Event('input',{bubbles:true}));
   setTimeout(function(){inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();},50);
   dd.style.display='none';
@@ -806,9 +850,11 @@ function show(v){
   m=m.slice(0,12).map(function(x){return x.s;});
   if(!m.length){dd.style.display='none';return;}
   dd.innerHTML=m.map(function(s){
+    var sep=s.indexOf(' - ');
+    var displayText=(sep>-1 ? s.slice(sep+3).trim() : s);
     return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
     +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
-    +'<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span></div>';
+    +'<span style="color:#333;font-size:0.92rem;">'+esc(displayText)+'</span></div>';
   }).join('');
   dd.style.display='block';
 }
