@@ -519,8 +519,8 @@ def get_populer_terimler():
         client = get_supabase_client()
         if not client: return []
 
-        # Son 30 günün en çok aranan 10 terimi (en az 1 sonuç getirmiş olanlar)
-        baslangic = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        # Son 3 günün en çok aranan 10 terimi (en az 1 sonuç getirmiş olanlar)
+        baslangic = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
         result = client.table('arama_log')\
             .select('arama_terimi, arama_sayisi')\
             .gte('tarih', baslangic)\
