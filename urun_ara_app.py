@@ -851,10 +851,12 @@ function show(v){
   if(!m.length){dd.style.display='none';return;}
   dd.innerHTML=m.map(function(s){
     var sep=s.indexOf(' - ');
-    var displayText=(sep>-1 ? s.slice(sep+3).trim() : s);
+    var kod=(sep>-1 ? s.slice(0,sep).trim() : '');
+    var ad=(sep>-1 ? s.slice(sep+3).trim() : s);
+    var label=(kod ? '<span style="color:#999;font-size:0.8rem;min-width:68px;">'+esc(kod)+'</span><span style="color:#999;padding:0 4px;">-</span><span style="color:#333;font-size:0.92rem;">'+esc(ad)+'</span>' : '<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span>');
     return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
     +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
-    +'<span style="color:#333;font-size:0.92rem;">'+esc(displayText)+'</span></div>';
+    +label+'</div>';
   }).join('');
   dd.style.display='block';
 }
