@@ -239,7 +239,21 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- 9. ÖRNEK VERİ EKLE (Test için)
+-- 9. AUTOCOMPLETE İÇİN DISTINCT ÜRÜN ADLARI (Performanslı)
+CREATE OR REPLACE FUNCTION get_urun_adlari(result_limit INTEGER DEFAULT 500)
+RETURNS TABLE (urun_ad TEXT) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT DISTINCT sg.urun_ad::TEXT
+    FROM stok_gunluk sg
+    WHERE sg.urun_ad IS NOT NULL AND sg.urun_ad != ''
+    ORDER BY sg.urun_ad::TEXT
+    LIMIT result_limit;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- 10. ÖRNEK VERİ EKLE (Test için)
 INSERT INTO products (name, description, category, price, stock) VALUES
     ('Ekmek', 'Taze günlük ekmek', 'Gıda', 5.00, 100),
     ('Ekmeği', 'Kepekli ekmek çeşidi', 'Gıda', 7.50, 50),
@@ -290,3 +304,25 @@ SELECT * FROM autocomplete_products('bil');
 --    - Trigram indexler fuzzy search hızlandırıyor
 --    - LIMIT ile sonuç sayısı sınırlanıyor
 -- ============================================================================
+
+-- ============================================================================
+-- 11. INDEX VE RPC EKLEMELERI (Performans Optimizasyonu - 2024 Update)
+-- ============================================================================
+
+-- Distinct sorgusu icin index (Hizli unique urun listesi icin)
+CREATE INDEX IF NOT EXISTS idx_stok_gunluk_kod_ad ON stok_gunluk(urun_kod, urun_ad);
+
+-- Tum urunleri kod ve ad olarak getiren RPC (Limit arttirildi)
+CREATE OR REPLACE FUNCTION get_tum_urunler(result_limit INTEGER DEFAULT 50000)
+RETURNS TABLE (urun_kod TEXT, urun_ad TEXT) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT DISTINCT
+        COALESCE(sg.urun_kod, '')::TEXT,
+        sg.urun_ad::TEXT
+    FROM stok_gunluk sg
+    WHERE sg.urun_ad IS NOT NULL AND sg.urun_ad != ''
+    ORDER BY sg.urun_ad::TEXT
+    LIMIT result_limit;
+END;
+$$ LANGUAGE plpgsql;
