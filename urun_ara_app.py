@@ -274,6 +274,8 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
     """
     SERVER-SIDE SEARCH - Tüm arama SQL'de yapılır.
     Python sadece normalize + negatif filtre uygular.
+
+    Query Router: Kod araması (exact) vs Metin araması (relevance) ayrımı yapar.
     """
     if not arama_text or len(arama_text) < 2:
         return None
@@ -283,12 +285,21 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         if not client:
             return None
 
-        # Sayıysa normalize yapma
+        # Öneri seçiminden gelen "KOD - AD" formatını tespit et
         arama_raw = arama_text.strip()
+        if ' - ' in arama_raw:
+            parts = arama_raw.split(' - ', 1)
+            if parts[0].strip().isdigit():
+                arama_raw = parts[0].strip()  # Kodla ara
+
+        # Sayıysa normalize yapma
         if arama_raw.isdigit():
             optimize_sorgu = arama_raw
         else:
             optimize_sorgu = temizle_ve_kok_bul(arama_raw)
+
+        # --- Query Router: Kod mu, metin mi? ---
+        is_kod_araması = optimize_sorgu.isdigit() and len(optimize_sorgu) >= 7
 
         def process_results(data, query):
             df = pd.DataFrame(data)
@@ -300,8 +311,18 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             def calculate_relevance(row):
                 score = 0
                 urun_ad = str(row.get('urun_ad', '')).lower()
+                urun_kod = str(row.get('urun_kod', ''))
 
-                # Tam eşleşme (En yüksek puan)
+                # Kod eşleşme (en yüksek öncelik)
+                if query.isdigit():
+                    if urun_kod == query:
+                        score += 1000
+                    elif urun_kod.startswith(query):
+                        score += 600
+                    elif len(query) >= 6 and query in urun_kod:
+                        score += 200
+
+                # Tam eşleşme (metin)
                 if query.lower() in urun_ad:
                     score += 100
 
@@ -337,7 +358,15 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         try:
             result = client.rpc('hizli_urun_ara', {'arama_terimi': optimize_sorgu}).execute()
             if result.data:
-                return process_results(result.data, optimize_sorgu)
+                df = process_results(result.data, optimize_sorgu)
+
+                # Kod araması: exact varsa SADECE exact dön
+                if is_kod_araması and not df.empty:
+                    exact = df[df['urun_kod'].astype(str) == optimize_sorgu]
+                    if not exact.empty:
+                        return exact
+
+                return df
         except Exception as e:
             if not ("timeout" in str(e).lower() or "57014" in str(e)):
                 st.error(f"Beklenmeyen Hata: {e}")
@@ -347,6 +376,11 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
             err_msg = str(result.error)
             if not ("timeout" in err_msg.lower() or "57014" in err_msg):
                 st.error(f"Arama hatası (RPC): {result.error}")
+
+        # Kod aramasında fallback yapma - kod ya var ya yok
+        if is_kod_araması:
+            st.warning("Bu ürün kodu bulunamadı. Kodu kontrol edip tekrar deneyin.")
+            return pd.DataFrame()
 
         # ---- FALLBACK SEARCH (Google-like) ----
         # 1. Kategori temizleyip tekrar dene (Örn: "Seg klima" -> "Seg")
@@ -407,7 +441,7 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                 except: pass
 
         # Timeout uyarısı (Eğer buraya kadar gelip sonuç yoksa ve timeout olmuşsa)
-        st.warning("🔍 Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
+        st.warning("Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
         return pd.DataFrame()
 
     except Exception as e:
@@ -513,7 +547,16 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
     # Sonuç yoksa (empty) kullanıcıya bildir
     if df.empty:
-        st.warning(f"'{arama_text}' için sonuç bulunamadı.")
+        arama_raw = arama_text.strip()
+        # "KOD - AD" formatını temizle
+        if ' - ' in arama_raw:
+            parts = arama_raw.split(' - ', 1)
+            if parts[0].strip().isdigit():
+                arama_raw = parts[0].strip()
+        if arama_raw.isdigit() and len(arama_raw) >= 7:
+            st.warning(f"Ürün kodu **{arama_raw}** sistemde kayıtlı ancak şu an hiçbir mağazada stok bilgisi bulunamadı.")
+        else:
+            st.warning(f"'{arama_text}' için sonuç bulunamadı.")
         return
 
     # Pandas Gruplama - SQL'den dönen sırayı koru
@@ -654,18 +697,18 @@ def main():
         st.info("Lütfen ayarları kontrol edin.")
         return
 
-    # Arama kutusu
-    col1, col2 = st.columns([5, 1])
-
-    with col1:
-        arama_text = st.text_input(
-            "Arama",
-            placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
-            label_visibility="collapsed",
-            key="arama_input"
-        )
-    with col2:
-        ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
+    # Arama kutusu (form ile - her tuşta DB çağrısı yok, sadece Enter/buton)
+    with st.form("arama_form", clear_on_submit=False):
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            arama_text = st.text_input(
+                "Arama",
+                placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
+                label_visibility="collapsed",
+                key="arama_input"
+            )
+        with col2:
+            ara_btn = st.form_submit_button("🔍 Ara", use_container_width=True, type="primary")
 
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
@@ -782,8 +825,9 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         components.html(_ac_js, height=0, scrolling=False)
 
     # Popüler Aramalar (Yatay kaydırmalı pill butonlar)
-    def set_search_term(term):
+    def set_search_and_run(term):
         st.session_state.arama_input = term
+        st.session_state._pop_arama = term
 
     populer = get_populer_terimler()
 
@@ -791,14 +835,21 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         st.markdown('<div class="popular-title">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
         cols_pop = st.columns(len(populer))
         for i, p in enumerate(populer):
-            cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_term, args=(p,))
+            cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_and_run, args=(p,))
 
-    if arama_text and len(arama_text) >= 2:
+    # Popüler pill tıklayınca da arama yap
+    if st.session_state.get('_pop_arama'):
+        pop_term = st.session_state.pop('_pop_arama')
         with st.spinner("Aranıyor..."):
-            df = ara_urun(arama_text)
-            goster_sonuclar(df, arama_text)
-    elif arama_text and len(arama_text) < 2:
-        st.info("En az 2 karakter girin.")
+            df = ara_urun(pop_term)
+            goster_sonuclar(df, pop_term)
+    elif ara_btn:
+        if arama_text and len(arama_text) >= 2:
+            with st.spinner("Aranıyor..."):
+                df = ara_urun(arama_text)
+                goster_sonuclar(df, arama_text)
+        elif arama_text:
+            st.info("En az 2 karakter girin.")
 
 
 
