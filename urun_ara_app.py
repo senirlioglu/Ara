@@ -151,14 +151,12 @@ def get_stok_seviye(adet: int) -> tuple:
     """Stok seviyesi, css class ve renk döndür"""
     if adet is None or adet <= 0:
         return "Yok", "stok-yok", "#9e9e9e"
-    elif adet == 1:
-        return "Kritik", "stok-kritik", "#ff4444"
+    elif adet <= 2:
+        return "Düşük", "stok-dusuk", "#e74c3c"
     elif adet <= 5:
-        return "Düşük", "stok-dusuk", "#ff9800"
-    elif adet <= 10:
-        return "Normal", "stok-normal", "#4caf50"
+        return "Orta", "stok-orta", "#f39c12"
     else:
-        return "Yüksek", "stok-yuksek", "#2196f3"
+        return "Yüksek", "stok-yuksek", "#27ae60"
 
 
 def temizle_ve_kok_bul(text: str) -> str:
@@ -633,6 +631,9 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         urun_df = df[df['urun_kod'] == urun_kod].copy()
         urun_df_stoklu = urun_df[urun_df['stok_adet'] > 0].sort_values('stok_adet', ascending=False)
 
+        # Toplam bölge stoku
+        toplam_stok = int(urun_df_stoklu['stok_adet'].sum()) if not urun_df_stoklu.empty else 0
+
         # Fiyatı ürün seviyesinde al (ilk geçerli fiyat)
         ham_fiyat = urun_df_stoklu['birim_fiyat'].dropna()
         ham_fiyat = ham_fiyat[ham_fiyat > 0]
@@ -647,15 +648,18 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         baslik = f"{icon} {urun_kod}  •  {urun_ad[:40]}  •  🏪 {stoklu_magaza} mağaza{fiyat_badge}"
 
         with st.expander(baslik, expanded=False):
-            # Fiyat badge (expander içi üstte)
+            # Üst bilgi satırı: Fiyat + Toplam Bölge Stoku
+            badges_html = ""
             if fiyat_str:
-                st.markdown(f"""
-                <div style="display:inline-block; background:linear-gradient(135deg,#00b894,#00cec9);
+                badges_html += f"""<div style="display:inline-block; background:linear-gradient(135deg,#00b894,#00cec9);
                      color:white; padding:6px 16px; border-radius:20px; font-weight:700;
-                     font-size:1.1rem; margin-bottom:12px;">
-                    🏷️ {fiyat_str}
-                </div>
-                """, unsafe_allow_html=True)
+                     font-size:1.05rem;">🏷️ {fiyat_str}</div>"""
+            if toplam_stok > 0:
+                badges_html += f"""<div style="display:inline-block; background:linear-gradient(135deg,#6c5ce7,#a29bfe);
+                     color:white; padding:6px 16px; border-radius:20px; font-weight:700;
+                     font-size:1.05rem; margin-left:8px;">📊 Toplam Bölge Stok: {toplam_stok}</div>"""
+            if badges_html:
+                st.markdown(f'<div style="margin-bottom:12px;">{badges_html}</div>', unsafe_allow_html=True)
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
@@ -666,7 +670,6 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     except:
                         seviye, renk = "Normal", "#3498db"
 
-                    adet = int(row['stok_adet'])
                     magaza_ad = row['magaza_ad'] or row['magaza_kod']
 
                     # Güvenli Veri Çekme
@@ -710,8 +713,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                                 <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
                             </div>
                         </div>
-                        <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
-                            {adet} Adet
+                        <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.85rem;">
+                            {seviye}
                         </div>
                     </div>
                     """)
