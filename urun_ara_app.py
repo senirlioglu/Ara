@@ -17,6 +17,7 @@ import os
 import re
 import json
 import unicodedata
+import html
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
@@ -670,11 +671,13 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     except:
                         seviye, renk = "Normal", "#3498db"
 
-                    magaza_ad = row['magaza_ad'] or row['magaza_kod']
+                    magaza_ad = html.escape(str(row['magaza_ad'] or row['magaza_kod']))
 
                     # Güvenli Veri Çekme
-                    sm = row.get('sm_kod') or "-"
-                    bs = row.get('bs_kod') or "-"
+                    sm = html.escape(str(row.get('sm_kod') or "-"))
+                    bs = html.escape(str(row.get('bs_kod') or "-"))
+                    magaza_kod = html.escape(str(row.get('magaza_kod') or "-"))
+                    seviye_escaped = html.escape(str(seviye))
 
                     # Harita Linki
                     lat = row.get('latitude')
@@ -682,14 +685,20 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
                     harita_ikonu = ""
                     if lat and lon:
-                        harita_ikonu = (
-                            f'<a href="https://www.google.com/maps?q={lat},{lon}" '
-                            'target="_blank" '
-                            'style="text-decoration:none; margin-left:8px; padding:4px 8px; '
-                            'border-radius:12px; background:#eef2ff; color:#374151; font-size:0.78rem;" '
-                            'title="Yol tarifi al">'
-                            '📍 Yol tarifi</a>'
-                        )
+                        try:
+                            lat_f = float(lat)
+                            lon_f = float(lon)
+                            harita_ikonu = (
+                                f'<a href="https://www.google.com/maps?q={lat_f},{lon_f}" '
+                                'target="_blank" '
+                                'rel="noopener noreferrer" '
+                                'style="text-decoration:none; margin-left:8px; padding:4px 8px; '
+                                'border-radius:12px; background:#eef2ff; color:#374151; font-size:0.78rem;" '
+                                'title="Yol tarifi al">'
+                                '📍 Yol tarifi</a>'
+                            )
+                        except (TypeError, ValueError):
+                            harita_ikonu = ""
 
                     html_cards.append(f"""
                     <div style="
@@ -710,11 +719,11 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                                 {harita_ikonu}
                             </div>
                             <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
-                                <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{row.get('magaza_kod')}</i>
+                                <b>SM:</b> {sm}  •  <b>BS:</b> {bs}  •  <i>{magaza_kod}</i>
                             </div>
                         </div>
                         <div style="background: {renk}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.85rem;">
-                            {seviye}
+                            {seviye_escaped}
                         </div>
                     </div>
                     """)
@@ -911,7 +920,6 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 def admin_panel():
     """Admin paneli - arama analitikleri"""
-    import hashlib
     from io import BytesIO
 
     admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD')
@@ -920,15 +928,6 @@ def admin_panel():
         st.error("Admin şifresi ayarlanmamış! Lütfen çevre değişkenlerini kontrol edin.")
         return
 
-    today = datetime.now().strftime('%Y-%m-%d')
-    valid_token = hashlib.md5(f"{admin_pass}{today}".encode()).hexdigest()[:16]
-
-    params = st.query_params
-    url_token = params.get("token", "")
-
-    if url_token == valid_token:
-        st.session_state.admin_auth = True
-
     if not st.session_state.get('admin_auth', False):
         st.title("🔐 Admin Girişi")
         password = st.text_input("Şifre:", type="password")
@@ -936,7 +935,6 @@ def admin_panel():
             if password == admin_pass:
                 st.session_state.admin_auth = True
                 st.query_params["admin"] = "true"
-                st.query_params["token"] = valid_token
                 st.rerun()
             else:
                 st.error("Yanlış şifre!")
