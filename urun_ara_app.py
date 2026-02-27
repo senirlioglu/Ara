@@ -957,6 +957,7 @@ def admin_panel():
     gun_sayisi = st.selectbox("Dönem:", [7, 14, 30], format_func=lambda x: f"Son {x} gün")
 
     try:
+        today = datetime.now().strftime('%Y-%m-%d')
         baslangic = (datetime.now() - timedelta(days=gun_sayisi)).strftime('%Y-%m-%d')
 
         # Tüm veriyi çek (sayfalama ile)
