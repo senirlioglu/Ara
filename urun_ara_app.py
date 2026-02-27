@@ -835,78 +835,195 @@ def load_urun_master_df():
 
 def parse_poster_text(raw_text):
     """
-    Afiş metninden ürün adayı terimleri çıkar.
-    Model numaraları, ürün kodları ve ürün isimlerini tespit eder.
+    Akıllı afiş metni ayrıştırıcı.
+    Fiyat satırlarını ayraç olarak kullanarak metni ürün bloklarına böler.
+    Her bloktan model no, açıklama, marka ve arama terimleri çıkarır.
+
+    Returns: list of dict {model, description, brand, search_queries: [...]}
     """
     lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
 
-    # Skip patterns (marketing, disclaimers)
+    # Disclaimer / marketing skip
     skip_re = re.compile(
         r'(^\*\s*(kampanya|yasal|ürün stok|bu afiş)|'
-        r'peşin fiyatına|taksit|0850\s|444\s|'
+        r'peşin fiyatına|PEŞiN|TAKSiT|taksit|0850\s|444\s|'
         r'kampanya kazanımı|detaylar\s|www\.|\.com\.tr|'
-        r'kredi kart|banka\s|ekstre|hadi\s)',
+        r'kredi kart|banka\s|ekstre|hadi\s|DAHiLi UYDU|'
+        r'^\*\s*\d+\s*yıl garanti|USB\s|'
+        r'^\d+x$|^\d+\s*si\s*\d+)',
         re.IGNORECASE
     )
 
-    # Model number pattern (alphanumeric with optional dashes)
-    model_re = re.compile(r'\b([A-Za-z]+[\-]?[0-9]+[A-Za-z0-9\-]*)\b')
+    # Fiyat pattern: "22.999", "11.999", "9.599", "55", "799", etc.
+    price_re = re.compile(r'^[\*\s]*(\d{1,3}(?:\.\d{3})*(?:,\d+)?)\s*(TL)?\s*(?:Adet)?$', re.IGNORECASE)
 
-    # Price pattern
-    price_re = re.compile(r'^\d{1,3}(\.\d{3})*(,\d+)?\s*(TL)?$')
+    # Spec-only lines (measurements, capacity, etc.)
+    spec_only_re = re.compile(
+        r'^[\d\.\,\s\"\'\*°\~\-]+$|'
+        r'^\d+\s*(cm|mm|inch|inç|"|\'|W|w|kg|lt|ml|mAh|mAH|MP|mp|GB|RAM|ROM|LM)\s*$|'
+        r'^\d+\s*GB\s*(RAM|ROM)$|'
+        r'^\d+[,\.]\d+\s*inç|'
+        r'^Smart$|^Türkiye Garantisi$|'
+        r'^Kablosuz Bağlantı$|^USB Power Supply$',
+        re.IGNORECASE
+    )
 
-    # Product category/brand keywords
-    product_kw = [
-        'tv', 'telefon', 'tablet', 'laptop', 'klima', 'buzdolabi', 'camasir',
-        'bulasik', 'supurge', 'ampul', 'hoparlor', 'hoparlör', 'kulaklik',
-        'kulaklık', 'klavye', 'mouse', 'gimbal', 'bluetooth', 'samsung',
-        'philips', 'vestel', 'arcelik', 'arçelik', 'beko', 'led', 'qled',
-        'oled', 'smart', 'android', 'whale', 'galaxy', 'iphone', 'xiaomi',
-        'robot', 'ütü', 'utu', 'fırın', 'firin', 'ocak', 'aspiratör',
-        'pil', 'şarj', 'sarj', 'kablo', 'adaptör', 'monitor', 'kamera',
-        'drone', 'termos', 'vantilatör', 'saat', 'kulaklık', 'hoparlör',
-        'deterjan', 'mama', 'bezi', 'kahve', 'nescafe', 'çay', 'cay',
-    ]
+    # Gömülü fiyat pattern: satır içinde fiyat bul (örn: "* 2 yıl garanti 22.999")
+    embedded_price_re = re.compile(r'(\d{1,3}(?:\.\d{3})+)')
 
-    candidates = []
-
+    # ── 1. Satırları filtrele ve fiyatlarla ürün bloklarına böl ──
+    # ÖNEMLİ: Fiyat kontrolü, spec kontrolünden ÖNCE yapılmalı
+    filtered = []
     for line in lines:
+        if len(line) < 2:
+            continue
+
+        # Fiyat satırı mı? (ÖNCE kontrol et - spec_only ile çakışmasın)
+        if price_re.match(line):
+            filtered.append({'type': 'price', 'text': line})
+            continue
+
+        # Skip satırlarında gömülü fiyat var mı?
         if skip_re.search(line):
-            continue
-        if len(line) < 3:
-            continue
-        if price_re.match(line.strip()):
-            continue
-        if re.match(r'^[\d\.\,\s\"\'\*°]+$', line):
+            if embedded_price_re.search(line):
+                filtered.append({'type': 'price', 'text': line})
             continue
 
-        # Model numbers in line
-        models = model_re.findall(line)
-        for m in models:
-            if len(m) >= 5 and any(c.isdigit() for c in m) and any(c.isalpha() for c in m):
-                candidates.append(m.upper())
+        if spec_only_re.match(line):
+            continue
 
-        # Product name lines
-        line_norm = temizle_ve_kok_bul(line)
-        if any(kw in line_norm for kw in product_kw):
-            clean = re.sub(r'[\*\•\■\●]', '', line).strip()
-            if clean and 3 < len(clean) < 100:
-                candidates.append(clean)
+        filtered.append({'type': 'text', 'text': line})
 
-    # Deduplicate
-    seen = set()
-    unique = []
-    for c in candidates:
-        key = temizle_ve_kok_bul(c)
-        if key not in seen and len(key) > 2:
-            seen.add(key)
-            unique.append(c)
+    # ── 2. Fiyat satırlarını ayraç olarak kullan: bloklar oluştur ──
+    blocks = []
+    current_block = []
+    for item in filtered:
+        if item['type'] == 'price':
+            if current_block:
+                blocks.append(current_block)
+                current_block = []
+        else:
+            current_block.append(item['text'])
+    if current_block:
+        blocks.append(current_block)
 
-    return unique
+    # (Bloklar fiyat ayraçları ile oluşturuldu - agresif ikincil bölme yapmıyoruz)
+
+    # ── 3. Her bloktan ürün bilgisi çıkar ──
+    # Model regex: hem harf-önce (HL50QFP) hem rakam-önce (65HYN3405) destekle
+    model_re = re.compile(r'\b([A-Za-z0-9]{2,}[\-][A-Za-z0-9]{2,}(?:[\-][A-Za-z0-9]+)*|[A-Za-z]+\d[A-Za-z0-9]*|\d+[A-Za-z]+[A-Za-z0-9]*)\b')
+
+    brands = {
+        'samsung', 'philips', 'vestel', 'arcelik', 'beko', 'xiaomi', 'oppo',
+        'realme', 'tcl', 'lg', 'sony', 'bosch', 'siemens', 'onvo', 'piranha',
+        'trax', 'hyundai', 'hi-level', 'hi level', 'nordmende', 'fobem',
+        'apple', 'iphone', 'huawei', 'honor', 'whale', 'elitled',
+    }
+
+    products = []
+    for block in blocks:
+        block_text = ' '.join(block)
+        block_norm = temizle_ve_kok_bul(block_text)
+
+        # Model numaraları bul
+        all_models = model_re.findall(block_text)
+        valid_models = []
+        for m in all_models:
+            m_upper = m.upper()
+            # En az 4 karakter, hem harf hem rakam içermeli
+            if len(m) >= 4 and any(c.isdigit() for c in m) and any(c.isalpha() for c in m):
+                # Marka isimleri model olarak sayılmasın
+                if m.lower() not in brands and m_upper not in ('SMART', 'ANDROID', 'FRAMELESS', 'WHALE', 'GALAXY'):
+                    valid_models.append(m_upper)
+
+        # Marka bul
+        found_brand = ''
+        for b in brands:
+            if b in block_norm:
+                found_brand = b.upper()
+                break
+
+        # Açıklama oluştur
+        desc_parts = [l for l in block if len(l) > 2 and not re.match(r'^\d+$', l)]
+        description = ' '.join(desc_parts)
+
+        # ── 4. Sayısal ürün kodları tespit et (ör: "2380", "9946") ──
+        numeric_codes = []
+        for line in block:
+            num_match = re.match(r'^(\d{3,5})\s+\S', line)
+            if num_match:
+                numeric_codes.append(num_match.group(1))
+
+        # ── 5. Çoklu arama terimleri oluştur (farklı stratejiler) ──
+        search_queries = []
+
+        # Strateji 1: Model numarası (tireli ve tiresiz)
+        for model in valid_models:
+            search_queries.append(model)
+            no_dash = model.replace('-', '')
+            if no_dash != model:
+                search_queries.append(no_dash)
+            # Rakam-önce model: ön rakamları ayır → "65HYN3405" → "HYN3405"
+            stripped = re.sub(r'^\d+', '', model)
+            if stripped and len(stripped) >= 4 and stripped != model:
+                search_queries.append(stripped)
+
+        # Strateji 2: Sayısal kodlar (ör: "2380")
+        for code in numeric_codes:
+            search_queries.append(code)
+
+        # Strateji 3: Blok metni kısa ise direkt ara
+        if 3 < len(block_norm) < 60:
+            search_queries.append(block_text)
+
+        # Strateji 4: Marka + model
+        if found_brand and valid_models:
+            search_queries.append(f"{found_brand} {valid_models[0]}")
+
+        # Strateji 5: Bilinen ürün kalıpları (spesifik → ÖNCE aranmalı)
+        # "GALAXY A16", "IPHONE 15" gibi marka-model kombinasyonları
+        known_patterns = [
+            r'GALAXY\s+[A-Z]?\d+[A-Za-z]*',
+            r'IPHONE\s+\d+\s*\w*',
+            r'REDMI\s+\w+\s*\d*',
+        ]
+        for pat in known_patterns:
+            pm = re.search(pat, block_text, re.IGNORECASE)
+            if pm:
+                search_queries.insert(0, pm.group())  # EN BAŞA ekle
+
+        # Strateji 6: Kategori bazlı aramalar (genel → en son)
+        categories = ['cep telefon', 'telefon', 'hoparlor', 'kulaklik',
+                      'klavye mouse', 'klavye', 'gimbal', 'ampul', 'tv',
+                      'tablet', 'saat']
+        found_cats = []
+        for cat in categories:
+            if cat in block_norm:
+                found_cats.append(cat)
+
+        for cat in found_cats:
+            if found_brand:
+                search_queries.append(f"{cat} {found_brand}")
+            for model in valid_models:
+                search_queries.append(f"{cat} {model}")
+            search_queries.append(cat)
+
+        if search_queries:
+            products.append({
+                'model': valid_models[0] if valid_models else '',
+                'brand': found_brand,
+                'description': description[:120],
+                'search_queries': list(dict.fromkeys(search_queries)),  # dedupe
+            })
+
+    return products
 
 
 def search_urun_master_local(query, urun_df):
-    """urun_master DataFrame'de ürün ara. En iyi eşleşmeleri döndür."""
+    """
+    Gelişmiş ürün eşleştirme: fuzzy matching + çoklu strateji.
+    Returns: list of {urun_kod, urun_ad, score, match_type}
+    """
     if urun_df.empty or not query:
         return []
 
@@ -914,49 +1031,152 @@ def search_urun_master_local(query, urun_df):
     if not query_norm or len(query_norm) < 2:
         return []
 
-    results = []
+    # Tiresiz versiyon
+    query_no_dash = query_norm.replace('-', '')
+    # Kelimeler
+    words = [w for w in query_norm.split() if len(w) > 1]
 
-    # 1. Exact code match
+    results = []
+    seen_codes = set()
+
+    def add_result(row, score, mtype):
+        kod = row['urun_kod']
+        if kod not in seen_codes:
+            seen_codes.add(kod)
+            results.append({
+                'urun_kod': kod,
+                'urun_ad': row['urun_ad'],
+                'score': min(score, 100),
+                'match_type': mtype
+            })
+
+    # ── Strateji 1: Exact product code match ──
     mask = urun_df['urun_kod'] == query_norm
     for _, row in urun_df[mask].iterrows():
-        results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': 1000})
+        add_result(row, 100, 'kod_eslesme')
     if results:
         return results[:5]
 
-    # 2. Full query as substring in product name
-    mask = urun_df['urun_ad_normalized'].str.contains(query_norm, na=False, regex=False)
-    matched = urun_df[mask]
-    for _, row in matched.head(10).iterrows():
-        s = 500 if query_norm == row['urun_ad_normalized'] else 400
-        results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': s})
+    # ── Strateji 2: Tam substring eşleşme (tireli + tiresiz) ──
+    for q in [query_norm, query_no_dash]:
+        if len(q) < 3:
+            continue
+        mask = urun_df['urun_ad_normalized'].str.contains(q, na=False, regex=False)
+        matched = urun_df[mask]
+        if not matched.empty:
+            # Model no aramasında daha yüksek skor (kısa, spesifik sorgu)
+            is_model = len(q.split()) == 1 and any(c.isdigit() for c in q) and any(c.isalpha() for c in q)
+            for _, row in matched.head(10).iterrows():
+                s = 95 if q == row['urun_ad_normalized'] else (90 if is_model else 85)
+                add_result(row, s, 'tam_eslesme')
+
     if results:
         return sorted(results, key=lambda x: -x['score'])[:5]
 
-    # 3. All words match
-    words = [w for w in query_norm.split() if len(w) > 1]
-    if words and len(words) <= 8:
+    # ── Strateji 3: Tüm kelimeler eşleşme (kök toleranslı) ──
+    if words and len(words) <= 10:
+        # Kelime sınırı kontrolü: "tv" "cetvelli" içinde eşleşmesin
+        def words_match(text, search_words):
+            if pd.isna(text):
+                return False
+            text_words = str(text).split()
+            for sw in search_words:
+                # Kısa kelimeler (<=3) tam kelime eşleşme gerektirir
+                if len(sw) <= 3:
+                    if sw not in text_words:
+                        return False
+                else:
+                    if sw not in str(text):
+                        return False
+            return True
+
         mask = urun_df['urun_ad_normalized'].apply(
-            lambda x: all(w in str(x) for w in words) if pd.notna(x) else False
+            lambda x: words_match(x, words)
         )
         for _, row in urun_df[mask].head(10).iterrows():
-            results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': 200})
+            add_result(row, 75, 'kelime_eslesme')
+
+        # Kök toleranslı: kelimenin ilk 3+ harfi yeterli (seti→set, hoparlör→hoparl)
+        if not results and len(words) >= 2:
+            stems = [w[:max(3, len(w)-2)] for w in words if len(w) > 2]
+            if stems:
+                mask = urun_df['urun_ad_normalized'].apply(
+                    lambda x: all(any(s in part for part in str(x).split()) for s in stems) if pd.notna(x) else False
+                )
+                for _, row in urun_df[mask].head(10).iterrows():
+                    add_result(row, 65, 'kok_eslesme')
+
     if results:
         return sorted(results, key=lambda x: -x['score'])[:5]
 
-    # 4. Any word matches (longest word first for precision)
+    # ── Strateji 4: Fuzzy matching (rapidfuzz) ──
+    try:
+        from rapidfuzz import fuzz, process as rfprocess
+        choices = urun_df['urun_ad_normalized'].dropna().tolist()
+        indices = urun_df['urun_ad_normalized'].dropna().index.tolist()
+
+        # token_set_ratio: kelime sırasından bağımsız fuzzy eşleşme
+        fuzzy_results = rfprocess.extract(
+            query_norm, choices,
+            scorer=fuzz.token_set_ratio,
+            limit=10,
+            score_cutoff=60
+        )
+
+        for match_text, score, idx_in_list in fuzzy_results:
+            real_idx = indices[idx_in_list]
+            row = urun_df.loc[real_idx]
+            # Fuzzy skor 0-60 aralığına ölçekle
+            add_result(row, int(score * 0.55), 'fuzzy')
+
+    except ImportError:
+        pass
+
+    if results:
+        return sorted(results, key=lambda x: -x['score'])[:5]
+
+    # ── Strateji 5: En uzun/spesifik kelimeyle arama (fallback) ──
     words_sorted = sorted([w for w in query_norm.split() if len(w) > 2], key=len, reverse=True)
     for word in words_sorted[:3]:
-        mask = urun_df['urun_ad_normalized'].str.contains(word, na=False, regex=False)
-        for _, row in urun_df[mask].head(5).iterrows():
-            results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': 50})
-        if results:
-            break
+        # Kısa kelimeler (<=3 harf) için kelime sınırı kullan (\b)
+        if len(word) <= 3:
+            pattern = r'\b' + re.escape(word) + r'\b'
+            mask = urun_df['urun_ad_normalized'].str.contains(pattern, na=False, regex=True)
+        else:
+            mask = urun_df['urun_ad_normalized'].str.contains(word, na=False, regex=False)
+        matched = urun_df[mask]
+        if not matched.empty and len(matched) < 50:  # Çok geniş sonuçları atla
+            for _, row in matched.head(5).iterrows():
+                add_result(row, 30, 'kelime_fallback')
+            if results:
+                break
 
     return sorted(results, key=lambda x: -x['score'])[:5]
 
 
+def search_product_multi_strategy(product_block, urun_df):
+    """
+    Bir ürün bloğu için çoklu sorgu stratejisi uygula.
+    Her stratejiyi dene, en iyi sonuçları birleştir.
+    Aynı ürün birden fazla sorgudan gelirse en yüksek skoru al.
+    Returns: list of {urun_kod, urun_ad, score, match_type}
+    """
+    best_by_code = {}  # urun_kod → best match dict
+
+    for query in product_block.get('search_queries', []):
+        matches = search_urun_master_local(query, urun_df)
+        for m in matches:
+            kod = m['urun_kod']
+            if kod not in best_by_code or m['score'] > best_by_code[kod]['score']:
+                best_by_code[kod] = m
+
+    all_results = list(best_by_code.values())
+    all_results.sort(key=lambda x: -x['score'])
+    return all_results[:8]
+
+
 def admin_poster_yonetimi():
-    """Afiş oluşturma ve yönetim arayüzü"""
+    """Afiş oluşturma ve yönetim arayüzü - gelişmiş eşleştirme"""
     st.subheader("Afiş Yönetimi")
 
     urun_df = load_urun_master_df()
@@ -981,8 +1201,6 @@ def admin_poster_yonetimi():
             horizontal=True
         )
 
-        search_terms = []
-
         if input_method.startswith("Metin"):
             poster_text = st.text_area(
                 "Afiş metnini yapıştırın:",
@@ -992,12 +1210,22 @@ def admin_poster_yonetimi():
             )
 
             if st.button("Ürünleri Tespit Et", type="primary", key="btn_detect") and poster_text:
-                candidates = parse_poster_text(poster_text)
-                if candidates:
-                    st.session_state['poster_candidates'] = candidates
-                    st.info(f"{len(candidates)} aday terim tespit edildi. Eşleştirme yapılıyor...")
+                with st.spinner("Metin analiz ediliyor..."):
+                    product_blocks = parse_poster_text(poster_text)
+                if product_blocks:
+                    st.session_state['poster_blocks'] = product_blocks
+                    # Her blok için eşleştirme yap
+                    with st.spinner(f"{len(product_blocks)} ürün eşleştiriliyor..."):
+                        match_results = []
+                        for block in product_blocks:
+                            matches = search_product_multi_strategy(block, urun_df)
+                            match_results.append({
+                                'block': block,
+                                'matches': matches
+                            })
+                        st.session_state['poster_match_results'] = match_results
                 else:
-                    st.warning("Metinden ürün adayı tespit edilemedi. Manuel giriş deneyin.")
+                    st.warning("Metinden ürün tespit edilemedi.")
 
         elif input_method.startswith("Excel"):
             excel_file = st.file_uploader("Excel dosyası:", type=['xlsx', 'xls'], key="poster_excel")
@@ -1009,7 +1237,15 @@ def admin_poster_yonetimi():
                     match_col = st.selectbox("Eşleşme için sütun:", col_options)
                     if st.button("Ürünleri Eşleştir", type="primary", key="btn_excel_match"):
                         terms = excel_df[match_col].dropna().astype(str).tolist()
-                        st.session_state['poster_candidates'] = [t.strip() for t in terms if t.strip()]
+                        blocks = [{'model': '', 'brand': '', 'description': t.strip(),
+                                   'search_queries': [t.strip()]} for t in terms if t.strip()]
+                        st.session_state['poster_blocks'] = blocks
+                        with st.spinner("Eşleştiriliyor..."):
+                            match_results = []
+                            for block in blocks:
+                                matches = search_product_multi_strategy(block, urun_df)
+                                match_results.append({'block': block, 'matches': matches})
+                            st.session_state['poster_match_results'] = match_results
                 except Exception as e:
                     st.error(f"Excel okuma hatası: {e}")
 
@@ -1022,62 +1258,82 @@ def admin_poster_yonetimi():
             )
             if st.button("Ara", type="primary", key="btn_manual_match") and manual_text:
                 terms = [l.strip() for l in manual_text.split('\n') if l.strip()]
-                st.session_state['poster_candidates'] = terms
+                blocks = [{'model': '', 'brand': '', 'description': t,
+                           'search_queries': [t]} for t in terms]
+                st.session_state['poster_blocks'] = blocks
+                with st.spinner("Eşleştiriliyor..."):
+                    match_results = []
+                    for block in blocks:
+                        matches = search_product_multi_strategy(block, urun_df)
+                        match_results.append({'block': block, 'matches': matches})
+                    st.session_state['poster_match_results'] = match_results
 
-        # === Eşleştirme ve İnceleme ===
-        if 'poster_candidates' in st.session_state and st.session_state['poster_candidates']:
-            candidates = st.session_state['poster_candidates']
-
-            # Eşleştirme yap (cache results in session)
-            if 'poster_match_results' not in st.session_state or st.session_state.get('_candidates_changed'):
-                all_matches = []
-                for candidate in candidates:
-                    matches = search_urun_master_local(candidate, urun_df)
-                    all_matches.append({
-                        'search_term': candidate,
-                        'matches': matches
-                    })
-                st.session_state['poster_match_results'] = all_matches
-                st.session_state['_candidates_changed'] = False
-
+        # === Eşleştirme Sonuçları ve İnceleme ===
+        if 'poster_match_results' in st.session_state:
             match_results = st.session_state['poster_match_results']
             found_count = sum(1 for r in match_results if r['matches'])
+            total = len(match_results)
 
             st.markdown("---")
-            st.markdown(f"#### Eşleşme Sonuçları ({found_count}/{len(match_results)} eşleşme)")
-            st.markdown("Doğru eşleşmeleri isaretleyin, yanlışları düzenleyin:")
+
+            # Güven skoru renkleri
+            def score_badge(score):
+                if score >= 80:
+                    return f'<span style="background:#27ae60;color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;">%{score}</span>'
+                elif score >= 50:
+                    return f'<span style="background:#f39c12;color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;">%{score}</span>'
+                else:
+                    return f'<span style="background:#e74c3c;color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;">%{score}</span>'
+
+            st.markdown(
+                f"#### Eşleşme Sonuçları: {found_count}/{total} ürün bulundu",
+                unsafe_allow_html=True
+            )
 
             selected_products = []
 
             for i, result in enumerate(match_results):
-                term = result['search_term']
+                block = result['block']
                 matches = result['matches']
+                desc = block.get('description', '')[:60]
+                model = block.get('model', '')
+                brand = block.get('brand', '')
+
+                header = model or desc
+                if brand and model:
+                    header = f"{brand} {model}"
 
                 if matches:
                     best = matches[0]
+                    badge = score_badge(best['score'])
+
                     with st.container():
-                        col_check, col_info, col_edit = st.columns([0.08, 0.55, 0.37])
+                        st.markdown(
+                            f"**{i+1}. {header}** {badge} &nbsp; `{best['match_type']}`",
+                            unsafe_allow_html=True
+                        )
+
+                        col_check, col_info, col_label = st.columns([0.06, 0.6, 0.34])
                         with col_check:
-                            checked = st.checkbox("", key=f"sel_{i}", value=True)
+                            checked = st.checkbox("", key=f"sel_{i}", value=(best['score'] >= 50))
                         with col_info:
-                            st.markdown(f"**{term}**")
                             if len(matches) > 1:
-                                options = [f"[{m['urun_kod']}] {m['urun_ad']}" for m in matches]
+                                options = [f"[{m['urun_kod']}] {m['urun_ad']} (%{m['score']})" for m in matches]
                                 selected_idx = st.selectbox(
                                     "Eşleşme:",
                                     range(len(options)),
-                                    format_func=lambda x: options[x],
-                                    key=f"match_select_{i}",
+                                    format_func=lambda x, opts=options: opts[x],
+                                    key=f"match_sel_{i}",
                                     label_visibility="collapsed"
                                 )
                                 best = matches[selected_idx]
                             else:
                                 st.caption(f"[{best['urun_kod']}] {best['urun_ad']}")
-                        with col_edit:
+                        with col_label:
                             custom_label = st.text_input(
-                                "Buton etiketi:",
+                                "Etiket:",
                                 value=best['urun_ad'][:50],
-                                key=f"label_{i}",
+                                key=f"lbl_{i}",
                                 label_visibility="collapsed"
                             )
 
@@ -1087,18 +1343,46 @@ def admin_poster_yonetimi():
                                 'search_query': best['urun_ad'],
                                 'urun_kod': best['urun_kod']
                             })
-                else:
-                    st.markdown(f"~~{term}~~ - *eşleşme bulunamadı*")
 
-            # Manuel ürün ekleme
-            st.markdown("---")
-            st.markdown("#### Eksik Ürün Ekle")
+                        st.markdown("<hr style='margin:4px 0;border:none;border-top:1px solid #eee;'>",
+                                    unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        f"**{i+1}. {header}** "
+                        f"<span style='color:#e74c3c;'>Eşleşme bulunamadı</span>",
+                        unsafe_allow_html=True
+                    )
+                    # Eşleşmeyen ürün için manuel arama
+                    manual_q = st.text_input(
+                        f"Manuel ara:",
+                        placeholder="Ürün adı veya kodu...",
+                        key=f"manual_{i}"
+                    )
+                    if manual_q and len(manual_q) >= 2:
+                        manual_matches = search_urun_master_local(manual_q, urun_df)
+                        if manual_matches:
+                            opts = [f"[{m['urun_kod']}] {m['urun_ad']}" for m in manual_matches]
+                            sel = st.selectbox("Seç:", range(len(opts)),
+                                               format_func=lambda x, o=opts: o[x],
+                                               key=f"msel_{i}")
+                            if st.checkbox("Ekle", key=f"madd_{i}"):
+                                m = manual_matches[sel]
+                                selected_products.append({
+                                    'label': m['urun_ad'][:50],
+                                    'search_query': m['urun_ad'],
+                                    'urun_kod': m['urun_kod']
+                                })
+                    st.markdown("<hr style='margin:4px 0;border:none;border-top:1px solid #eee;'>",
+                                unsafe_allow_html=True)
+
+            # Ek ürün ekleme
+            st.markdown("#### Ek Ürün Ekle")
             extra_query = st.text_input("Ürün ara:", placeholder="Ürün adı veya kodu...", key="extra_product")
             if extra_query and len(extra_query) >= 2:
                 extra_results = search_urun_master_local(extra_query, urun_df)
                 if extra_results:
                     for j, m in enumerate(extra_results[:5]):
-                        c1, c2 = st.columns([0.08, 0.92])
+                        c1, c2 = st.columns([0.06, 0.94])
                         with c1:
                             if st.checkbox("", key=f"extra_{j}"):
                                 selected_products.append({
@@ -1107,7 +1391,7 @@ def admin_poster_yonetimi():
                                     'urun_kod': m['urun_kod']
                                 })
                         with c2:
-                            st.caption(f"[{m['urun_kod']}] {m['urun_ad']}")
+                            st.caption(f"[{m['urun_kod']}] {m['urun_ad']} (%{m['score']})")
                 else:
                     st.caption("Sonuç bulunamadı")
 
@@ -1119,7 +1403,6 @@ def admin_poster_yonetimi():
                 if not selected_products:
                     st.error("En az 1 ürün seçin!")
                 else:
-                    # Save poster image
                     image_path = ""
                     if afis_resim:
                         poster_dir = Path('data/posters')
@@ -1138,7 +1421,6 @@ def admin_poster_yonetimi():
                         'products': selected_products
                     }
 
-                    # Load existing & append
                     poster_path = Path('data/posters.json')
                     posters = []
                     if poster_path.exists():
@@ -1155,8 +1437,7 @@ def admin_poster_yonetimi():
 
                     get_poster_list.clear()
 
-                    # Temizle
-                    for key in ['poster_candidates', 'poster_match_results', '_candidates_changed']:
+                    for key in ['poster_blocks', 'poster_match_results']:
                         st.session_state.pop(key, None)
 
                     st.success(f"Afiş kaydedildi! {len(selected_products)} ürün eklendi.")

@@ -19,3 +19,6 @@ Pillow>=10.0.0
 
 # Parquet yazimi
 pyarrow>=16.0.0
+
+# Fuzzy string matching (afis urun eslestirme)
+rapidfuzz>=3.0.0
