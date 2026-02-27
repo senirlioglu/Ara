@@ -115,6 +115,22 @@ st.markdown("""
     .streamlit-expanderHeader { background: white !important; border-radius: 12px !important; border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; padding: 0.75rem 1rem !important; font-weight: 500 !important; }
     .streamlit-expanderContent { background: white !important; border-radius: 0 0 12px 12px !important; border: none !important; padding: 0.5rem !important; }
 
+    /* Poster butonları - pill stili */
+    .stExpander [data-testid="stHorizontalBlock"] .stButton > button {
+        background: linear-gradient(135deg, #667eea22, #764ba222) !important;
+        color: #667eea !important;
+        border: 1px solid #667eea44 !important;
+        border-radius: 20px !important;
+        padding: 0.4rem 1rem !important;
+        font-size: 0.85rem !important;
+        font-weight: 600 !important;
+    }
+    .stExpander [data-testid="stHorizontalBlock"] .stButton > button:hover {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        color: white !important;
+        transform: none !important;
+    }
+
     @media (max-width: 768px) {
         .block-container { padding: 0.5rem !important; }
         [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
@@ -566,6 +582,220 @@ def get_oneri_listesi():
 
 
 
+# ============================================================================
+# AFİŞ SİSTEMİ - Tıklanabilir Ürün Alanları
+# ============================================================================
+
+@st.cache_data(ttl=600)
+def get_poster_list():
+    """Aktif afişleri yükle"""
+    try:
+        poster_path = Path('data/posters.json')
+        if poster_path.exists():
+            with poster_path.open('r', encoding='utf-8') as f:
+                posters = json.load(f)
+            return [p for p in posters if p.get('active', True)]
+    except Exception:
+        pass
+    return []
+
+
+def render_poster_viewer(poster):
+    """
+    Afiş'i tıklanabilir ürün alanları ile interaktif göster.
+    Ürüne tıklayınca arama inputuna yazar ve formu gönderir.
+    """
+    import base64
+    import streamlit.components.v1 as components
+
+    image_src = poster.get('image', '')
+
+    # Lokal dosya ise base64'e çevir
+    if image_src and not image_src.startswith(('http://', 'https://', 'data:')):
+        local_path = Path(image_src)
+        if local_path.exists():
+            with open(local_path, 'rb') as f:
+                img_data = base64.b64encode(f.read()).decode()
+            ext = local_path.suffix.lower().lstrip('.')
+            mime = 'image/jpeg' if ext in ('jpg', 'jpeg') else f'image/{ext}'
+            image_src = f'data:{mime};base64,{img_data}'
+        else:
+            image_src = ''
+
+    products = poster.get('products', [])
+    if not products:
+        return
+
+    # Hotspot HTML oluştur
+    hotspots_html = ''
+    for p in products:
+        label_esc = html.escape(p.get('label', p['search_query']))
+        query_esc = html.escape(p['search_query'])
+        hotspots_html += f'''
+        <div class="poster-hotspot"
+             data-search="{query_esc}"
+             style="
+                position: absolute;
+                left: {p['x_percent']}%;
+                top: {p['y_percent']}%;
+                width: {p['width_percent']}%;
+                height: {p['height_percent']}%;
+                cursor: pointer;
+                border: 2px dashed rgba(102,126,234,0.4);
+                border-radius: 8px;
+                transition: all 0.25s ease;
+                z-index: 10;
+                display: flex;
+                align-items: flex-end;
+                justify-content: center;
+             ">
+            <div class="hotspot-label" style="
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                color: white;
+                padding: 3px 10px;
+                border-radius: 10px;
+                font-size: 11px;
+                font-weight: 600;
+                white-space: nowrap;
+                margin-bottom: 4px;
+                opacity: 0.7;
+                transition: opacity 0.25s, transform 0.25s;
+                pointer-events: none;
+            ">{label_esc}</div>
+        </div>'''
+
+    # Eğer resim yoksa sadece ürün butonlarını göster
+    if not image_src:
+        return
+
+    poster_html = f'''
+    <style>
+        .poster-hotspot:hover {{
+            border-color: #667eea !important;
+            background: rgba(102,126,234,0.12) !important;
+            box-shadow: 0 0 12px rgba(102,126,234,0.3);
+        }}
+        .poster-hotspot:hover .hotspot-label {{
+            opacity: 1 !important;
+            transform: scale(1.05);
+        }}
+        .poster-hotspot:active {{
+            background: rgba(102,126,234,0.25) !important;
+        }}
+    </style>
+    <div id="poster-container" style="
+        position: relative;
+        display: inline-block;
+        width: 100%;
+        border-radius: 12px;
+        overflow: visible;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    ">
+        <img src="{image_src}" style="width:100%; display:block; border-radius:12px;" />
+        {hotspots_html}
+    </div>
+    <script>
+    (function() {{
+        try {{
+            var pd = window.parent.document;
+            var hotspots = document.querySelectorAll('.poster-hotspot');
+
+            hotspots.forEach(function(el) {{
+                el.addEventListener('click', function() {{
+                    var query = this.getAttribute('data-search');
+                    if (!query) return;
+
+                    // Arama input'una değer yaz (autocomplete ile aynı teknik)
+                    var inp = pd.querySelector('input[placeholder*="Ürün kodu"]');
+                    if (inp) {{
+                        var setter = Object.getOwnPropertyDescriptor(
+                            HTMLInputElement.prototype, 'value'
+                        ).set;
+                        setter.call(inp, query);
+                        inp.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        inp.dispatchEvent(new Event('change', {{bubbles: true}}));
+                    }}
+
+                    // Form submit butonunu tıkla
+                    setTimeout(function() {{
+                        var submitBtn = pd.querySelector(
+                            '[data-testid="stFormSubmitButton"] button'
+                        );
+                        if (submitBtn) {{
+                            submitBtn.click();
+                            // Sayfanın üstüne scroll
+                            setTimeout(function() {{
+                                pd.querySelector('[data-testid="stAppViewContainer"]')
+                                    .scrollTo({{top: 0, behavior: 'smooth'}});
+                            }}, 200);
+                        }}
+                    }}, 150);
+                }});
+            }});
+        }} catch(e) {{}}
+    }})();
+    </script>
+    '''
+
+    # Poster yüksekliğini resim oranına göre ayarla (mobil uyumlu)
+    components.html(poster_html, height=520, scrolling=False)
+
+
+def render_poster_section():
+    """Ana sayfada afiş bölümünü göster"""
+    posters = get_poster_list()
+    if not posters:
+        return
+
+    st.markdown(
+        '<div class="popular-title" style="margin-top:0.5rem;">📋 Aktüel Afişler</div>',
+        unsafe_allow_html=True
+    )
+
+    # Birden fazla afiş varsa tab ile göster
+    if len(posters) == 1:
+        poster = posters[0]
+        with st.expander(f"📌 {poster.get('title', 'Afiş')}", expanded=False):
+            render_poster_viewer(poster)
+            # Ürün listesini buton olarak da göster (erişilebilirlik)
+            products = poster.get('products', [])
+            if products:
+                st.markdown(
+                    '<div style="font-size:0.82rem;color:#888;margin:8px 0 4px;">Ürüne tıklayarak arayın:</div>',
+                    unsafe_allow_html=True
+                )
+                btn_cols = st.columns(min(len(products), 4))
+                for i, p in enumerate(products):
+                    col_idx = i % min(len(products), 4)
+                    if btn_cols[col_idx].button(
+                        p.get('label', p['search_query']),
+                        key=f"poster_{poster['id']}_{i}",
+                        use_container_width=True
+                    ):
+                        st.session_state.arama_input = p['search_query']
+                        st.session_state._poster_arama = p['search_query']
+    else:
+        for poster in posters:
+            with st.expander(f"📌 {poster.get('title', 'Afiş')}", expanded=False):
+                render_poster_viewer(poster)
+                products = poster.get('products', [])
+                if products:
+                    st.markdown(
+                        '<div style="font-size:0.82rem;color:#888;margin:8px 0 4px;">Ürüne tıklayarak arayın:</div>',
+                        unsafe_allow_html=True
+                    )
+                    btn_cols = st.columns(min(len(products), 4))
+                    for i, p in enumerate(products):
+                        col_idx = i % min(len(products), 4)
+                        if btn_cols[col_idx].button(
+                            p.get('label', p['search_query']),
+                            key=f"poster_{poster['id']}_{i}",
+                            use_container_width=True
+                        ):
+                            st.session_state.arama_input = p['search_query']
+                            st.session_state._poster_arama = p['search_query']
+
+
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
     """Sonuçları kartlar halinde göster"""
     # Hata varsa (None) sessizce çık - hata mesajı zaten basıldı
@@ -898,12 +1128,20 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         for i, p in enumerate(populer):
             cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_and_run, args=(p,))
 
-    # Popüler pill tıklayınca da arama yap
+    # Aktüel Afişler (tıklanabilir ürün alanları)
+    render_poster_section()
+
+    # Arama tetikleyicileri: Popüler pill / Poster buton / Ara butonu
     if st.session_state.get('_pop_arama'):
         pop_term = st.session_state.pop('_pop_arama')
         with st.spinner("Aranıyor..."):
             df = ara_urun(pop_term)
             goster_sonuclar(df, pop_term)
+    elif st.session_state.get('_poster_arama'):
+        poster_term = st.session_state.pop('_poster_arama')
+        with st.spinner("Aranıyor..."):
+            df = ara_urun(poster_term)
+            goster_sonuclar(df, poster_term)
     elif ara_btn:
         if arama_text and len(arama_text) >= 2:
             with st.spinner("Aranıyor..."):
