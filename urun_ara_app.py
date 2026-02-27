@@ -623,6 +623,23 @@ def render_poster_viewer(poster):
             image_src = ''
 
     products = poster.get('products', [])
+    has_coords = products and any('x_percent' in p for p in products)
+
+    # Eğer resim yoksa çık
+    if not image_src:
+        return
+
+    # Yeni format: koordinatsız afişler - sadece resmi göster
+    if not has_coords:
+        poster_html = f'''
+        <div style="width:100%; border-radius:12px; overflow:hidden; box-shadow:0 4px 15px rgba(0,0,0,0.1);">
+            <img src="{image_src}" style="width:100%; display:block; border-radius:12px;" />
+        </div>
+        '''
+        components.html(poster_html, height=520, scrolling=True)
+        return
+
+    # Eski format: koordinatlı hotspot'lar
     if not products:
         return
 
@@ -663,10 +680,6 @@ def render_poster_viewer(poster):
                 pointer-events: none;
             ">{label_esc}</div>
         </div>'''
-
-    # Eğer resim yoksa sadece ürün butonlarını göster
-    if not image_src:
-        return
 
     poster_html = f'''
     <style>
@@ -794,6 +807,404 @@ def render_poster_section():
                         ):
                             st.session_state.arama_input = p['search_query']
                             st.session_state._poster_arama = p['search_query']
+
+
+# ============================================================================
+# AFİŞ YÖNETİMİ - Ürün Tespiti ve Eşleştirme
+# ============================================================================
+
+@st.cache_data(ttl=3600)
+def load_urun_master_df():
+    """Ürün master verisini DataFrame olarak yükle (parquet > json)"""
+    try:
+        p = Path('data/urun_master.parquet')
+        if p.exists():
+            return pd.read_parquet(p)
+    except Exception:
+        pass
+    try:
+        p = Path('data/urun_master.json')
+        if p.exists():
+            with p.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            return pd.DataFrame(data)
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
+def parse_poster_text(raw_text):
+    """
+    Afiş metninden ürün adayı terimleri çıkar.
+    Model numaraları, ürün kodları ve ürün isimlerini tespit eder.
+    """
+    lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
+
+    # Skip patterns (marketing, disclaimers)
+    skip_re = re.compile(
+        r'(^\*\s*(kampanya|yasal|ürün stok|bu afiş)|'
+        r'peşin fiyatına|taksit|0850\s|444\s|'
+        r'kampanya kazanımı|detaylar\s|www\.|\.com\.tr|'
+        r'kredi kart|banka\s|ekstre|hadi\s)',
+        re.IGNORECASE
+    )
+
+    # Model number pattern (alphanumeric with optional dashes)
+    model_re = re.compile(r'\b([A-Za-z]+[\-]?[0-9]+[A-Za-z0-9\-]*)\b')
+
+    # Price pattern
+    price_re = re.compile(r'^\d{1,3}(\.\d{3})*(,\d+)?\s*(TL)?$')
+
+    # Product category/brand keywords
+    product_kw = [
+        'tv', 'telefon', 'tablet', 'laptop', 'klima', 'buzdolabi', 'camasir',
+        'bulasik', 'supurge', 'ampul', 'hoparlor', 'hoparlör', 'kulaklik',
+        'kulaklık', 'klavye', 'mouse', 'gimbal', 'bluetooth', 'samsung',
+        'philips', 'vestel', 'arcelik', 'arçelik', 'beko', 'led', 'qled',
+        'oled', 'smart', 'android', 'whale', 'galaxy', 'iphone', 'xiaomi',
+        'robot', 'ütü', 'utu', 'fırın', 'firin', 'ocak', 'aspiratör',
+        'pil', 'şarj', 'sarj', 'kablo', 'adaptör', 'monitor', 'kamera',
+        'drone', 'termos', 'vantilatör', 'saat', 'kulaklık', 'hoparlör',
+        'deterjan', 'mama', 'bezi', 'kahve', 'nescafe', 'çay', 'cay',
+    ]
+
+    candidates = []
+
+    for line in lines:
+        if skip_re.search(line):
+            continue
+        if len(line) < 3:
+            continue
+        if price_re.match(line.strip()):
+            continue
+        if re.match(r'^[\d\.\,\s\"\'\*°]+$', line):
+            continue
+
+        # Model numbers in line
+        models = model_re.findall(line)
+        for m in models:
+            if len(m) >= 5 and any(c.isdigit() for c in m) and any(c.isalpha() for c in m):
+                candidates.append(m.upper())
+
+        # Product name lines
+        line_norm = temizle_ve_kok_bul(line)
+        if any(kw in line_norm for kw in product_kw):
+            clean = re.sub(r'[\*\•\■\●]', '', line).strip()
+            if clean and 3 < len(clean) < 100:
+                candidates.append(clean)
+
+    # Deduplicate
+    seen = set()
+    unique = []
+    for c in candidates:
+        key = temizle_ve_kok_bul(c)
+        if key not in seen and len(key) > 2:
+            seen.add(key)
+            unique.append(c)
+
+    return unique
+
+
+def search_urun_master_local(query, urun_df):
+    """urun_master DataFrame'de ürün ara. En iyi eşleşmeleri döndür."""
+    if urun_df.empty or not query:
+        return []
+
+    query_norm = temizle_ve_kok_bul(query)
+    if not query_norm or len(query_norm) < 2:
+        return []
+
+    results = []
+
+    # 1. Exact code match
+    mask = urun_df['urun_kod'] == query_norm
+    for _, row in urun_df[mask].iterrows():
+        results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': 1000})
+    if results:
+        return results[:5]
+
+    # 2. Full query as substring in product name
+    mask = urun_df['urun_ad_normalized'].str.contains(query_norm, na=False, regex=False)
+    matched = urun_df[mask]
+    for _, row in matched.head(10).iterrows():
+        s = 500 if query_norm == row['urun_ad_normalized'] else 400
+        results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': s})
+    if results:
+        return sorted(results, key=lambda x: -x['score'])[:5]
+
+    # 3. All words match
+    words = [w for w in query_norm.split() if len(w) > 1]
+    if words and len(words) <= 8:
+        mask = urun_df['urun_ad_normalized'].apply(
+            lambda x: all(w in str(x) for w in words) if pd.notna(x) else False
+        )
+        for _, row in urun_df[mask].head(10).iterrows():
+            results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': 200})
+    if results:
+        return sorted(results, key=lambda x: -x['score'])[:5]
+
+    # 4. Any word matches (longest word first for precision)
+    words_sorted = sorted([w for w in query_norm.split() if len(w) > 2], key=len, reverse=True)
+    for word in words_sorted[:3]:
+        mask = urun_df['urun_ad_normalized'].str.contains(word, na=False, regex=False)
+        for _, row in urun_df[mask].head(5).iterrows():
+            results.append({'urun_kod': row['urun_kod'], 'urun_ad': row['urun_ad'], 'score': 50})
+        if results:
+            break
+
+    return sorted(results, key=lambda x: -x['score'])[:5]
+
+
+def admin_poster_yonetimi():
+    """Afiş oluşturma ve yönetim arayüzü"""
+    st.subheader("Afiş Yönetimi")
+
+    urun_df = load_urun_master_df()
+    if urun_df.empty:
+        st.error("Ürün master verisi yüklenemedi!")
+        return
+
+    tab_yeni, tab_mevcut = st.tabs(["Yeni Afiş", "Mevcut Afişler"])
+
+    with tab_yeni:
+        st.markdown("#### Yeni Afiş Oluştur")
+
+        afis_baslik = st.text_input("Afiş Başlığı:", placeholder="Örn: Aktüel Ürünler - 27 Şubat")
+        afis_resim = st.file_uploader("Afiş Resmi (opsiyonel):", type=['jpg', 'jpeg', 'png', 'webp'])
+
+        st.markdown("---")
+        st.markdown("#### Ürün Tespiti")
+
+        input_method = st.radio(
+            "Giriş yöntemi:",
+            ["Metin Yapıştır (PDF'ten kopyala)", "Excel Yükle", "Manuel Giriş"],
+            horizontal=True
+        )
+
+        search_terms = []
+
+        if input_method.startswith("Metin"):
+            poster_text = st.text_area(
+                "Afiş metnini yapıştırın:",
+                height=200,
+                placeholder="PDF'ten kopyaladığınız ürün bilgilerini buraya yapıştırın...",
+                key="poster_text_input"
+            )
+
+            if st.button("Ürünleri Tespit Et", type="primary", key="btn_detect") and poster_text:
+                candidates = parse_poster_text(poster_text)
+                if candidates:
+                    st.session_state['poster_candidates'] = candidates
+                    st.info(f"{len(candidates)} aday terim tespit edildi. Eşleştirme yapılıyor...")
+                else:
+                    st.warning("Metinden ürün adayı tespit edilemedi. Manuel giriş deneyin.")
+
+        elif input_method.startswith("Excel"):
+            excel_file = st.file_uploader("Excel dosyası:", type=['xlsx', 'xls'], key="poster_excel")
+            if excel_file:
+                try:
+                    excel_df = pd.read_excel(excel_file)
+                    st.dataframe(excel_df.head(10), use_container_width=True)
+                    col_options = list(excel_df.columns)
+                    match_col = st.selectbox("Eşleşme için sütun:", col_options)
+                    if st.button("Ürünleri Eşleştir", type="primary", key="btn_excel_match"):
+                        terms = excel_df[match_col].dropna().astype(str).tolist()
+                        st.session_state['poster_candidates'] = [t.strip() for t in terms if t.strip()]
+                except Exception as e:
+                    st.error(f"Excel okuma hatası: {e}")
+
+        else:  # Manuel giriş
+            manual_text = st.text_area(
+                "Ürün isimlerini/kodlarını alt alta yazın:",
+                height=150,
+                placeholder="WHALE TV\nGALAXY A16\nBluetooth Hoparlör\n...",
+                key="poster_manual_input"
+            )
+            if st.button("Ara", type="primary", key="btn_manual_match") and manual_text:
+                terms = [l.strip() for l in manual_text.split('\n') if l.strip()]
+                st.session_state['poster_candidates'] = terms
+
+        # === Eşleştirme ve İnceleme ===
+        if 'poster_candidates' in st.session_state and st.session_state['poster_candidates']:
+            candidates = st.session_state['poster_candidates']
+
+            # Eşleştirme yap (cache results in session)
+            if 'poster_match_results' not in st.session_state or st.session_state.get('_candidates_changed'):
+                all_matches = []
+                for candidate in candidates:
+                    matches = search_urun_master_local(candidate, urun_df)
+                    all_matches.append({
+                        'search_term': candidate,
+                        'matches': matches
+                    })
+                st.session_state['poster_match_results'] = all_matches
+                st.session_state['_candidates_changed'] = False
+
+            match_results = st.session_state['poster_match_results']
+            found_count = sum(1 for r in match_results if r['matches'])
+
+            st.markdown("---")
+            st.markdown(f"#### Eşleşme Sonuçları ({found_count}/{len(match_results)} eşleşme)")
+            st.markdown("Doğru eşleşmeleri isaretleyin, yanlışları düzenleyin:")
+
+            selected_products = []
+
+            for i, result in enumerate(match_results):
+                term = result['search_term']
+                matches = result['matches']
+
+                if matches:
+                    best = matches[0]
+                    with st.container():
+                        col_check, col_info, col_edit = st.columns([0.08, 0.55, 0.37])
+                        with col_check:
+                            checked = st.checkbox("", key=f"sel_{i}", value=True)
+                        with col_info:
+                            st.markdown(f"**{term}**")
+                            if len(matches) > 1:
+                                options = [f"[{m['urun_kod']}] {m['urun_ad']}" for m in matches]
+                                selected_idx = st.selectbox(
+                                    "Eşleşme:",
+                                    range(len(options)),
+                                    format_func=lambda x: options[x],
+                                    key=f"match_select_{i}",
+                                    label_visibility="collapsed"
+                                )
+                                best = matches[selected_idx]
+                            else:
+                                st.caption(f"[{best['urun_kod']}] {best['urun_ad']}")
+                        with col_edit:
+                            custom_label = st.text_input(
+                                "Buton etiketi:",
+                                value=best['urun_ad'][:50],
+                                key=f"label_{i}",
+                                label_visibility="collapsed"
+                            )
+
+                        if checked:
+                            selected_products.append({
+                                'label': custom_label,
+                                'search_query': best['urun_ad'],
+                                'urun_kod': best['urun_kod']
+                            })
+                else:
+                    st.markdown(f"~~{term}~~ - *eşleşme bulunamadı*")
+
+            # Manuel ürün ekleme
+            st.markdown("---")
+            st.markdown("#### Eksik Ürün Ekle")
+            extra_query = st.text_input("Ürün ara:", placeholder="Ürün adı veya kodu...", key="extra_product")
+            if extra_query and len(extra_query) >= 2:
+                extra_results = search_urun_master_local(extra_query, urun_df)
+                if extra_results:
+                    for j, m in enumerate(extra_results[:5]):
+                        c1, c2 = st.columns([0.08, 0.92])
+                        with c1:
+                            if st.checkbox("", key=f"extra_{j}"):
+                                selected_products.append({
+                                    'label': m['urun_ad'][:50],
+                                    'search_query': m['urun_ad'],
+                                    'urun_kod': m['urun_kod']
+                                })
+                        with c2:
+                            st.caption(f"[{m['urun_kod']}] {m['urun_ad']}")
+                else:
+                    st.caption("Sonuç bulunamadı")
+
+            # Kaydet
+            st.markdown("---")
+            st.info(f"Seçili ürün: **{len(selected_products)}**")
+
+            if st.button("Afişi Kaydet", type="primary", key="btn_save_poster"):
+                if not selected_products:
+                    st.error("En az 1 ürün seçin!")
+                else:
+                    # Save poster image
+                    image_path = ""
+                    if afis_resim:
+                        poster_dir = Path('data/posters')
+                        poster_dir.mkdir(parents=True, exist_ok=True)
+                        ext = afis_resim.name.rsplit('.', 1)[-1] if '.' in afis_resim.name else 'jpg'
+                        fname = f"afis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
+                        image_path = f"data/posters/{fname}"
+                        with open(image_path, 'wb') as f:
+                            f.write(afis_resim.getbuffer())
+
+                    new_poster = {
+                        'id': f"afis_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                        'title': afis_baslik or f"Afiş - {datetime.now().strftime('%d.%m.%Y')}",
+                        'image': image_path,
+                        'active': True,
+                        'products': selected_products
+                    }
+
+                    # Load existing & append
+                    poster_path = Path('data/posters.json')
+                    posters = []
+                    if poster_path.exists():
+                        try:
+                            with poster_path.open('r', encoding='utf-8') as f:
+                                posters = json.load(f)
+                        except Exception:
+                            pass
+
+                    posters.append(new_poster)
+
+                    with poster_path.open('w', encoding='utf-8') as f:
+                        json.dump(posters, f, ensure_ascii=False, indent=2)
+
+                    get_poster_list.clear()
+
+                    # Temizle
+                    for key in ['poster_candidates', 'poster_match_results', '_candidates_changed']:
+                        st.session_state.pop(key, None)
+
+                    st.success(f"Afiş kaydedildi! {len(selected_products)} ürün eklendi.")
+                    st.rerun()
+
+    with tab_mevcut:
+        st.markdown("#### Mevcut Afişler")
+        poster_path = Path('data/posters.json')
+        posters = []
+        if poster_path.exists():
+            try:
+                with poster_path.open('r', encoding='utf-8') as f:
+                    posters = json.load(f)
+            except Exception:
+                pass
+
+        if not posters:
+            st.info("Henüz afiş eklenmemiş.")
+        else:
+            for i, poster in enumerate(posters):
+                aktif = poster.get('active', True)
+                title = poster.get('title', 'Afiş')
+                urun_sayisi = len(poster.get('products', []))
+                icon = "ON" if aktif else "OFF"
+
+                with st.expander(f"[{icon}] {title} ({urun_sayisi} ürün)"):
+                    new_active = st.checkbox(
+                        "Aktif", value=aktif, key=f"active_{i}"
+                    )
+
+                    for j, p in enumerate(poster.get('products', [])):
+                        kod = p.get('urun_kod', '')
+                        st.text(f"  {j+1}. [{kod}] {p['label']}")
+
+                    col_del, col_toggle = st.columns(2)
+                    with col_del:
+                        if st.button("Sil", key=f"del_{i}"):
+                            posters.pop(i)
+                            with poster_path.open('w', encoding='utf-8') as f:
+                                json.dump(posters, f, ensure_ascii=False, indent=2)
+                            get_poster_list.clear()
+                            st.rerun()
+
+                    if new_active != aktif:
+                        posters[i]['active'] = new_active
+                        with poster_path.open('w', encoding='utf-8') as f:
+                            json.dump(posters, f, ensure_ascii=False, indent=2)
+                        get_poster_list.clear()
 
 
 def goster_sonuclar(df: pd.DataFrame, arama_text: str):
@@ -1185,121 +1596,120 @@ def admin_panel():
             dataframe.to_excel(writer, index=False, sheet_name='Veri')
         return output.getvalue()
 
-    st.title("📊 Arama Analitikleri")
+    st.title("Admin Paneli")
 
-    client = get_supabase_client()
-    if not client:
-        st.error("Veritabanı bağlantısı yok")
-        return
+    tab_analitik, tab_afis = st.tabs(["Analitikler", "Afiş Yönetimi"])
 
-    gun_sayisi = st.selectbox("Dönem:", [7, 14, 30], format_func=lambda x: f"Son {x} gün")
+    with tab_afis:
+        admin_poster_yonetimi()
 
-    try:
-        today = datetime.now().strftime('%Y-%m-%d')
-        baslangic = (datetime.now() - timedelta(days=gun_sayisi)).strftime('%Y-%m-%d')
-
-        # Tüm veriyi çek (sayfalama ile)
-        all_data = []
-        page_size = 1000
-        offset = 0
-        while True:
-            result = client.table('arama_log')\
-                .select('*')\
-                .gte('tarih', baslangic)\
-                .order('id', desc=True)\
-                .range(offset, offset + page_size - 1)\
-                .execute()
-            if not result.data:
-                break
-            all_data.extend(result.data)
-            if len(result.data) < page_size:
-                break
-            offset += page_size
-
-        if not all_data:
-            st.warning("Henüz veri yok")
-            return
-
-        df = pd.DataFrame(all_data)
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Toplam Arama", f"{df['arama_sayisi'].sum():,}")
-        with col2:
-            st.metric("Benzersiz Terim", f"{len(df['arama_terimi'].unique()):,}")
-        with col3:
-            sonucsuz = df[df['sonuc_sayisi'] == 0]['arama_sayisi'].sum()
-            st.metric("Sonuçsuz", f"{sonucsuz:,}")
-
-        st.markdown("---")
-
-        # ---- 🔥 EN ÇOK ARANANLAR ----
-        st.subheader("🔥 En Çok Arananlar")
-        top_full = df.groupby('arama_terimi').agg(
-            {'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}
-        ).reset_index()
-        top_full = top_full.sort_values('arama_sayisi', ascending=False)
-        top_full.columns = ['Terim', 'Arama', 'Sonuç']
-
-        st.dataframe(top_full.head(20), use_container_width=True, hide_index=True)
-
-        st.download_button(
-            "📥 Tümünü İndir (xlsx)",
-            data=df_to_xlsx(top_full),
-            file_name=f"en_cok_arananlar_{today}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="dl_top"
-        )
-
-        # ---- ❌ SONUÇ BULUNAMAYANLAR ----
-        st.subheader("❌ Sonuç Bulunamayanlar")
-        sonucsuz_full = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi').agg(
-            {'arama_sayisi': 'sum'}
-        ).reset_index()
-        sonucsuz_full = sonucsuz_full.sort_values('arama_sayisi', ascending=False)
-        sonucsuz_full.columns = ['Terim', 'Arama']
-
-        if sonucsuz_full.empty:
-            st.success("Tüm aramalarda sonuç bulunmuş!")
+    with tab_analitik:
+        client = get_supabase_client()
+        if not client:
+            st.error("Veritabanı bağlantısı yok")
         else:
-            st.dataframe(sonucsuz_full.head(20), use_container_width=True, hide_index=True)
+            gun_sayisi = st.selectbox("Dönem:", [7, 14, 30], format_func=lambda x: f"Son {x} gün")
 
-            st.download_button(
-                "📥 Tümünü İndir (xlsx)",
-                data=df_to_xlsx(sonucsuz_full),
-                file_name=f"sonucsuz_aramalar_{today}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_sonucsuz"
-            )
+            try:
+                today = datetime.now().strftime('%Y-%m-%d')
+                baslangic = (datetime.now() - timedelta(days=gun_sayisi)).strftime('%Y-%m-%d')
 
-        # ---- 🕐 BUGÜN ARANANLAR (son aranana göre sıralı) ----
-        st.subheader("🕐 Bugün Arananlar")
-        bugun = datetime.now().strftime('%Y-%m-%d')
-        bugun_full = df[df['tarih'] == bugun].copy()
+                all_data = []
+                page_size = 1000
+                offset = 0
+                while True:
+                    result = client.table('arama_log')\
+                        .select('*')\
+                        .gte('tarih', baslangic)\
+                        .order('id', desc=True)\
+                        .range(offset, offset + page_size - 1)\
+                        .execute()
+                    if not result.data:
+                        break
+                    all_data.extend(result.data)
+                    if len(result.data) < page_size:
+                        break
+                    offset += page_size
 
-        if bugun_full.empty:
-            st.info("Bugün henüz arama yapılmamış")
-        else:
-            # En son aranan en üstte
-            sort_col = 'son_arama_zamani' if 'son_arama_zamani' in bugun_full.columns else 'id'
-            bugun_full = bugun_full.sort_values(sort_col, ascending=False)
-            bugun_show = bugun_full[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].copy()
-            bugun_show.columns = ['Terim', 'Arama', 'Sonuç']
+                if not all_data:
+                    st.warning("Henüz veri yok")
+                else:
+                    df = pd.DataFrame(all_data)
 
-            st.dataframe(bugun_show.head(50), use_container_width=True, hide_index=True)
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Toplam Arama", f"{df['arama_sayisi'].sum():,}")
+                    with col2:
+                        st.metric("Benzersiz Terim", f"{len(df['arama_terimi'].unique()):,}")
+                    with col3:
+                        sonucsuz = df[df['sonuc_sayisi'] == 0]['arama_sayisi'].sum()
+                        st.metric("Sonuçsuz", f"{sonucsuz:,}")
 
-            st.download_button(
-                "📥 Tümünü İndir (xlsx)",
-                data=df_to_xlsx(bugun_show),
-                file_name=f"bugun_aramalar_{today}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_bugun"
-            )
+                    st.markdown("---")
 
-    except Exception as e:
-        st.error(f"Hata: {e}")
+                    st.subheader("En Çok Arananlar")
+                    top_full = df.groupby('arama_terimi').agg(
+                        {'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}
+                    ).reset_index()
+                    top_full = top_full.sort_values('arama_sayisi', ascending=False)
+                    top_full.columns = ['Terim', 'Arama', 'Sonuç']
 
-    if st.button("🚪 Çıkış"):
+                    st.dataframe(top_full.head(20), use_container_width=True, hide_index=True)
+
+                    st.download_button(
+                        "Tümünü İndir (xlsx)",
+                        data=df_to_xlsx(top_full),
+                        file_name=f"en_cok_arananlar_{today}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_top"
+                    )
+
+                    st.subheader("Sonuç Bulunamayanlar")
+                    sonucsuz_full = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi').agg(
+                        {'arama_sayisi': 'sum'}
+                    ).reset_index()
+                    sonucsuz_full = sonucsuz_full.sort_values('arama_sayisi', ascending=False)
+                    sonucsuz_full.columns = ['Terim', 'Arama']
+
+                    if sonucsuz_full.empty:
+                        st.success("Tüm aramalarda sonuç bulunmuş!")
+                    else:
+                        st.dataframe(sonucsuz_full.head(20), use_container_width=True, hide_index=True)
+
+                        st.download_button(
+                            "Tümünü İndir (xlsx)",
+                            data=df_to_xlsx(sonucsuz_full),
+                            file_name=f"sonucsuz_aramalar_{today}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_sonucsuz"
+                        )
+
+                    st.subheader("Bugün Arananlar")
+                    bugun = datetime.now().strftime('%Y-%m-%d')
+                    bugun_full = df[df['tarih'] == bugun].copy()
+
+                    if bugun_full.empty:
+                        st.info("Bugün henüz arama yapılmamış")
+                    else:
+                        sort_col = 'son_arama_zamani' if 'son_arama_zamani' in bugun_full.columns else 'id'
+                        bugun_full = bugun_full.sort_values(sort_col, ascending=False)
+                        bugun_show = bugun_full[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].copy()
+                        bugun_show.columns = ['Terim', 'Arama', 'Sonuç']
+
+                        st.dataframe(bugun_show.head(50), use_container_width=True, hide_index=True)
+
+                        st.download_button(
+                            "Tümünü İndir (xlsx)",
+                            data=df_to_xlsx(bugun_show),
+                            file_name=f"bugun_aramalar_{today}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_bugun"
+                        )
+
+            except Exception as e:
+                st.error(f"Hata: {e}")
+
+    if st.button("Çıkış"):
         st.session_state.admin_auth = False
         st.rerun()
 
