@@ -1072,7 +1072,17 @@ def admin_panel():
 
 if __name__ == "__main__":
     params = st.query_params
-    if params.get("admin") == "true":
+    mode = params.get("mode")
+
+    if params.get("admin") == "true" and mode == "poster":
+        # Poster admin panel
+        from poster.admin import poster_admin_page
+        poster_admin_page()
+    elif params.get("admin") == "true":
         admin_panel()
+    elif mode == "poster" or params.get("pick"):
+        # Poster viewer for store staff
+        from poster.viewer import poster_viewer_page
+        poster_viewer_page()
     else:
         main()
