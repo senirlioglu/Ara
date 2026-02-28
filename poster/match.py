@@ -1,79 +1,42 @@
-"""Auto-match poster items against the product master (stok_gunluk).
+"""PDF-first auto-match: PDF text → needles → score Excel rows → match.
 
-Strategy:
-  1. Exact match by urun_kodu
-  2. Fuzzy match by normalized description tokens
+Akış:
+  1. PDF sayfalarından ayırt edici anahtarlar çıkar (model kodları, 4-haneli kodlar,
+     marka isimleri, kategori kelimeleri)
+  2. Her Excel (poster_items) satırını bu needles'a karşı skorla
+  3. Yüksek skor → matched, orta → review, düşük → unmatched
+  4. search_term olarak Excel ÜRÜN KODU kullan (DB araması için)
 """
 
 from __future__ import annotations
 
 import re
-import unicodedata
-from difflib import SequenceMatcher
 from typing import Optional
 
-import pandas as pd
+import fitz  # PyMuPDF
 
 from poster.db import get_supabase, update_poster_item, get_poster_items
 
 
 # ---------------------------------------------------------------------------
-# Text normalisation (mirrors temizle_ve_kok_bul from main app)
+# Bilinen marka ve kategori sözlükleri
 # ---------------------------------------------------------------------------
 
-_TR_MAP = {
-    "İ": "i", "I": "i", "ı": "i",
-    "Ğ": "g", "ğ": "g",
-    "Ü": "u", "ü": "u",
-    "Ş": "s", "ş": "s",
-    "Ö": "o", "ö": "o",
-    "Ç": "c", "ç": "c",
-}
+BRANDS = [
+    "SAMSUNG", "LG", "SONY", "PHILIPS", "VESTEL", "TOSHIBA", "BEKO", "ARCELIK",
+    "ONVO", "NORDMENDE", "SEG", "GRUNDIG", "PIRANHA", "XIAOMI", "TCL", "HISENSE",
+    "BOSCH", "SIEMENS", "REGAL", "ALTUS", "PROFILO", "FAKIR", "ARZUM", "SINBO",
+    "KARACA", "KUMTEL", "LUXELL", "HOMEND", "KING", "FANTOM",
+]
 
-
-def _normalize(text: str) -> str:
-    if not text:
-        return ""
-    result = text
-    for tr, asc in _TR_MAP.items():
-        result = result.replace(tr, asc)
-    result = unicodedata.normalize("NFKD", result)
-    result = "".join(c for c in result if not unicodedata.combining(c))
-    result = result.lower()
-    result = result.replace("makinasi", "makine").replace("makinesi", "makine").replace("makina", "makine")
-    result = re.sub(r"\s+", " ", result).strip()
-    return result
-
-
-def _extract_tokens(text: str) -> set[str]:
-    """Extract meaningful tokens (brand, size, keywords) from a description."""
-    norm = _normalize(text)
-    # Remove common filler words
-    stopwords = {"ve", "ile", "icin", "adet", "li", "lu", "set", "takimi", "tl"}
-    tokens = {t for t in norm.split() if len(t) >= 2 and t not in stopwords}
-    return tokens
-
-
-def _fuzzy_score(desc_a: str, desc_b: str) -> float:
-    """Return 0-1 similarity between two product descriptions."""
-    norm_a = _normalize(desc_a)
-    norm_b = _normalize(desc_b)
-    if not norm_a or not norm_b:
-        return 0.0
-
-    # Token overlap (Jaccard)
-    tok_a = _extract_tokens(desc_a)
-    tok_b = _extract_tokens(desc_b)
-    if tok_a and tok_b:
-        jaccard = len(tok_a & tok_b) / len(tok_a | tok_b)
-    else:
-        jaccard = 0.0
-
-    # Sequence ratio
-    seq = SequenceMatcher(None, norm_a, norm_b).ratio()
-
-    # Weighted combination
-    return 0.6 * jaccard + 0.4 * seq
+CATEGORIES = [
+    "TV", "TELEVIZYON", "QLED", "OLED", "UHD", "ANDROID", "GOOGLE", "SMART",
+    "POWERBANK", "MOUSE", "KULAKLIK", "KULAKICI", "BLUETOOTH", "KABLOSUZ",
+    "UZATMA", "KABLO", "TYPE-C", "USB", "STAND", "TABLET", "TELEFON",
+    "MAGSAFE", "PRIZ", "TARAFTAR", "FRAMELESS", "4K",
+    "CAMASIR", "BULASIK", "BUZDOLABI", "KLIMA", "ASPIRATOR", "SUPURGE",
+    "FIRIN", "MIKRODALGA", "TOST", "WAFFLE", "BLENDER", "MIKSER",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -85,90 +48,154 @@ def _clean_code(x: str) -> str:
     if not x:
         return ""
     s = str(x).strip()
-    # Excel bazen "9035.0" gibi float string döndürür
     if s.endswith(".0") and s[:-2].isdigit():
         s = s[:-2]
     return s
 
 
 # ---------------------------------------------------------------------------
-# Master product fetch – only for the codes we actually need
+# STEP 1: PDF'den needle çıkarma
 # ---------------------------------------------------------------------------
 
-def _load_master_for_codes(codes: list[str]) -> pd.DataFrame:
-    """Fetch (urun_kod, urun_ad) from stok_gunluk only for the given codes.
+def extract_needles_from_pdf(pdf_bytes: bytes) -> dict:
+    """PDF'nin tüm sayfalarından eşleşme anahtarlarını çıkar.
 
-    Bu yaklaşım olmayan bir RPC'ye bağımlılığı ortadan kaldırır ve
-    sadece ihtiyaç duyulan kodları çeker (200'lik batch'ler halinde).
+    Returns:
+        {
+            "model_codes": ["70U8000F", "65VQ90F3UA", ...],
+            "code4": ["9035", "7658", ...],
+            "brands": ["SAMSUNG", "ONVO", ...],
+            "categories": ["TV", "POWERBANK", ...],
+            "page_texts": {1: "PAGE 1 FULL TEXT...", ...},  # 1-based
+        }
     """
-    client = get_supabase()
-    if not client:
-        return pd.DataFrame(columns=["urun_kod", "urun_ad"])
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    codes = [_clean_code(c) for c in codes if _clean_code(c)]
-    codes = list(dict.fromkeys(codes))  # unique, preserve order
-    if not codes:
-        return pd.DataFrame(columns=["urun_kod", "urun_ad"])
+    all_text_upper = ""
+    page_texts: dict[int, str] = {}
 
-    rows: list[dict] = []
-    BATCH = 200  # Supabase .in_() için güvenli üst sınır
-    for i in range(0, len(codes), BATCH):
-        batch = codes[i : i + BATCH]
-        try:
-            res = (
-                client.table("stok_gunluk")
-                .select("urun_kod, urun_ad")
-                .in_("urun_kod", batch)
-                .limit(50000)
-                .execute()
-            )
-            if res.data:
-                rows.extend(res.data)
-        except Exception:
-            pass
+    for i in range(len(doc)):
+        text = doc[i].get_text()
+        page_texts[i + 1] = text.upper()
+        all_text_upper += " " + text.upper()
 
-    if not rows:
-        return pd.DataFrame(columns=["urun_kod", "urun_ad"])
+    doc.close()
 
-    df = pd.DataFrame(rows)
-    df["urun_kod"] = df["urun_kod"].fillna("").astype(str).str.strip()
-    df["urun_ad"] = df["urun_ad"].fillna("").astype(str).str.strip()
-    # stok_gunluk mağaza bazlı tekrarlar içerebilir → tekilleştir
-    df = df.drop_duplicates(subset=["urun_kod"])
-    return df
+    # Model kodları: 6+ karakter, en az 1 harf + en az 1 rakam karışık
+    raw_model = set(re.findall(r"\b[A-Z0-9]{6,}\b", all_text_upper))
+    model_codes = sorted(
+        m for m in raw_model
+        if re.search(r"[A-Z]", m) and re.search(r"\d", m)
+    )
+
+    # 4 haneli sayısal kodlar (aksesuar kodları: 9035, 7658 vs.)
+    code4 = sorted(set(re.findall(r"\b\d{4}\b", all_text_upper)))
+
+    # Bilinen markalar
+    brands = [b for b in BRANDS if b in all_text_upper]
+
+    # Bilinen kategoriler
+    categories = [c for c in CATEGORIES if c in all_text_upper]
+
+    return {
+        "model_codes": model_codes,
+        "code4": code4,
+        "brands": brands,
+        "categories": categories,
+        "page_texts": page_texts,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Main matching routine
+# STEP 2: Excel satırını needles'a karşı skorla
 # ---------------------------------------------------------------------------
 
-def run_auto_match(poster_id: int) -> dict:
-    """Match poster_items against product master.
+def _score_item(urun_kodu: str, urun_aciklamasi: str, needles: dict) -> int:
+    """Bir Excel satırını PDF needle'larına karşı skorla.
 
-    Returns dict with counts: {matched, review, unmatched, total}.
+    Skor tablosu:
+      model kodu eşleşmesi:  +100
+      4-haneli kod eşleşmesi: +90
+      marka eşleşmesi:        +30
+      kategori eşleşmesi:     +10 (her biri)
+    """
+    desc_upper = (urun_aciklamasi or "").upper()
+    code_upper = (urun_kodu or "").upper()
+    combined = f"{code_upper} {desc_upper}"
+
+    score = 0
+
+    # Model kodu (en güçlü sinyal)
+    for m in needles["model_codes"]:
+        if m in combined:
+            score += 100
+
+    # 4 haneli kod
+    for c in needles["code4"]:
+        if c in combined:
+            score += 90
+
+    # Marka
+    for b in needles["brands"]:
+        if b in combined:
+            score += 30
+
+    # Kategori kelimeleri
+    for k in needles["categories"]:
+        if k in combined:
+            score += 10
+
+    return score
+
+
+def _find_best_needle(urun_kodu: str, urun_aciklamasi: str, needles: dict) -> str:
+    """Bu item için PDF'de aranacak en iyi needle'ı bul.
+
+    Hotspot bbox bulma sırasında kullanılacak.
+    Öncelik: model kodu > 4-haneli kod > marka.
+    """
+    desc_upper = (urun_aciklamasi or "").upper()
+    code_upper = (urun_kodu or "").upper()
+    combined = f"{code_upper} {desc_upper}"
+
+    # Model kodu eşleşmesi
+    for m in needles["model_codes"]:
+        if m in combined:
+            return m
+
+    # 4 haneli kod
+    for c in needles["code4"]:
+        if c in combined:
+            return c
+
+    # Marka (son çare)
+    for b in needles["brands"]:
+        if b in combined:
+            return b
+
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# STEP 3: Ana eşleştirme rutini
+# ---------------------------------------------------------------------------
+
+def run_auto_match(poster_id: int, pdf_bytes: bytes) -> dict:
+    """PDF-first match: PDF'den needle çıkar → Excel satırlarını skorla.
+
+    Args:
+        poster_id: İşlenecek afişin ID'si.
+        pdf_bytes: PDF dosyasının raw içeriği.
+
+    Returns:
+        dict with counts: {matched, review, unmatched, total, needles}.
     """
     items = get_poster_items(poster_id)
     if not items:
         return {"matched": 0, "review": 0, "unmatched": 0, "total": 0}
 
-    # Sadece Excel'den gelen kodları DB'den iste (RPC gerektirmez)
-    codes = [_clean_code(it.get("urun_kodu") or "") for it in items]
-    master = _load_master_for_codes(codes)
-    if master.empty:
-        # Mark all unmatched
-        for it in items:
-            update_poster_item(it["id"], {
-                "status": "unmatched",
-                "match_confidence": 0,
-            })
-        return {"matched": 0, "review": 0, "unmatched": len(items), "total": len(items)}
-
-    # Build lookup: kod → urun_ad
-    kod_to_ad = {}
-    for _, row in master.iterrows():
-        kod = row["urun_kod"]
-        if kod:
-            kod_to_ad[kod] = row["urun_ad"]
+    # PDF'den anahtarları çıkar
+    needles = extract_needles_from_pdf(pdf_bytes)
 
     stats = {"matched": 0, "review": 0, "unmatched": 0, "total": len(items)}
 
@@ -177,93 +204,37 @@ def run_auto_match(poster_id: int) -> dict:
         urun_kodu = _clean_code(item.get("urun_kodu") or "")
         urun_aciklamasi = (item.get("urun_aciklamasi") or "").strip()
 
-        best_match: Optional[dict] = None
+        score = _score_item(urun_kodu, urun_aciklamasi, needles)
+        best_needle = _find_best_needle(urun_kodu, urun_aciklamasi, needles)
 
-        # --- Strategy 1: exact code match ---
-        if urun_kodu and urun_kodu in kod_to_ad:
-            best_match = {
-                "match_sku_id": urun_kodu,
-                "search_term": urun_kodu,
-                "match_confidence": 1.0,
-                "status": "matched",
-            }
+        # search_term: DB araması için Excel ÜRÜN KODU kullan
+        search_term = urun_kodu or None
 
-        # --- Strategy 2: code prefix/contains match ---
-        if not best_match and urun_kodu and len(urun_kodu) >= 5:
-            candidates = [
-                (k, v) for k, v in kod_to_ad.items()
-                if k.startswith(urun_kodu) or urun_kodu in k
-            ]
-            if len(candidates) == 1:
-                best_match = {
-                    "match_sku_id": candidates[0][0],
-                    "search_term": candidates[0][0],
-                    "match_confidence": 0.85,
-                    "status": "matched",
-                }
-            elif candidates:
-                # Multiple candidates – take best fuzzy if description available
-                if urun_aciklamasi:
-                    scored = [
-                        (k, v, _fuzzy_score(urun_aciklamasi, v))
-                        for k, v in candidates
-                    ]
-                    scored.sort(key=lambda x: x[2], reverse=True)
-                    top = scored[0]
-                    conf = round(top[2] * 0.85, 2)
-                    best_match = {
-                        "match_sku_id": top[0],
-                        "search_term": top[0],
-                        "match_confidence": conf,
-                        "status": "matched" if conf >= 0.6 else "review",
-                    }
-                else:
-                    # Ambiguous – mark for review
-                    best_match = {
-                        "match_sku_id": candidates[0][0],
-                        "search_term": candidates[0][0],
-                        "match_confidence": 0.4,
-                        "status": "review",
-                    }
+        if score >= 90:
+            status = "matched"
+            confidence = min(1.0, score / 100.0)
+        elif score >= 60:
+            status = "review"
+            confidence = score / 100.0
+        else:
+            status = "unmatched"
+            confidence = score / 100.0 if score > 0 else 0
 
-        # --- Strategy 3: fuzzy by description ---
-        if not best_match and urun_aciklamasi:
-            best_score = 0.0
-            best_kod = ""
-            best_ad = ""
+        updates = {
+            "match_sku_id": urun_kodu or None,
+            "search_term": search_term,
+            "match_confidence": round(confidence, 2),
+            "status": status,
+        }
 
-            for _, row in master.iterrows():
-                score = _fuzzy_score(urun_aciklamasi, row["urun_ad"])
-                if score > best_score:
-                    best_score = score
-                    best_kod = row["urun_kod"]
-                    best_ad = row["urun_ad"]
+        # best_needle'ı search_term'e yedek olarak kaydet (hotspot_gen kullanacak)
+        # Ama asıl arama terimi hep urun_kodu olsun
+        if not search_term and best_needle:
+            updates["search_term"] = best_needle
 
-            if best_score >= 0.55:
-                status = "matched" if best_score >= 0.75 else "review"
-                best_match = {
-                    "match_sku_id": best_kod,
-                    "search_term": best_kod if best_kod else _normalize(urun_aciklamasi),
-                    "match_confidence": round(best_score, 2),
-                    "status": status,
-                }
+        update_poster_item(item_id, updates)
+        stats[status] = stats.get(status, 0) + 1
 
-        # --- No match ---
-        if not best_match:
-            # Fallback search_term: use code if exists, else first 3 words of description
-            fallback_term = urun_kodu
-            if not fallback_term and urun_aciklamasi:
-                words = urun_aciklamasi.split()[:3]
-                fallback_term = " ".join(words)
-
-            best_match = {
-                "match_sku_id": None,
-                "search_term": fallback_term or None,
-                "match_confidence": 0,
-                "status": "unmatched",
-            }
-
-        update_poster_item(item_id, best_match)
-        stats[best_match["status"]] = stats.get(best_match["status"], 0) + 1
-
+    # needles'ı da dön ki hotspot_gen kullansın
+    stats["needles"] = needles
     return stats

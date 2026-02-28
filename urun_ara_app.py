@@ -1178,9 +1178,9 @@ def _admin_tab_poster_upload():
                 st.error(f"Excel import hatası: {e}")
                 return
 
-            # Auto-match
-            st.markdown("**Otomatik eşleştirme...**")
-            stats = run_auto_match(poster_id)
+            # Auto-match (PDF-first: PDF'den needle çıkar → Excel satırlarını skorla)
+            st.markdown("**Otomatik eşleştirme (PDF analizi)...**")
+            stats = run_auto_match(poster_id, pdf_bytes)
             st.success(
                 f"Eşleştirme: {stats['matched']} eşleşti, "
                 f"{stats['review']} incelenmeli, "
