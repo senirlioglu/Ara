@@ -919,7 +919,7 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 # ============================================================================
 
 def admin_panel():
-    """Admin paneli - arama analitikleri"""
+    """Admin paneli - sekmeli: Analitikler + Afiş Yönetimi"""
     from io import BytesIO
 
     admin_pass = os.environ.get('ADMIN_PASSWORD') or st.secrets.get('ADMIN_PASSWORD')
@@ -929,7 +929,7 @@ def admin_panel():
         return
 
     if not st.session_state.get('admin_auth', False):
-        st.title("🔐 Admin Girişi")
+        st.title("Admin Girişi")
         password = st.text_input("Şifre:", type="password")
         if st.button("Giriş"):
             if password == admin_pass:
@@ -940,6 +940,22 @@ def admin_panel():
                 st.error("Yanlış şifre!")
         return
 
+    # ---- Header ----
+    st.markdown("""
+    <div style="
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.2rem 1rem;
+        border-radius: 0 0 20px 20px;
+        margin: -1rem -1rem 1.2rem -1rem;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(102,126,234,0.3);
+    ">
+        <h1 style="color:white; font-size:1.6rem; font-weight:700; margin:0;">
+            Admin Paneli
+        </h1>
+    </div>
+    """, unsafe_allow_html=True)
+
     def df_to_xlsx(dataframe):
         """DataFrame'i xlsx byte'larına çevir"""
         output = BytesIO()
@@ -947,7 +963,40 @@ def admin_panel():
             dataframe.to_excel(writer, index=False, sheet_name='Veri')
         return output.getvalue()
 
-    st.title("📊 Arama Analitikleri")
+    # ---- Tabs ----
+    tab_analytics, tab_poster_upload, tab_poster_review, tab_poster_view = st.tabs([
+        "Analitikler",
+        "Afiş Yükle",
+        "Afiş İncele",
+        "Afiş Görüntüle",
+    ])
+
+    with tab_analytics:
+        _admin_tab_analytics(df_to_xlsx)
+
+    with tab_poster_upload:
+        _admin_tab_poster_upload()
+
+    with tab_poster_review:
+        _admin_tab_poster_review()
+
+    with tab_poster_view:
+        _admin_tab_poster_view()
+
+    # ---- Çıkış ----
+    st.markdown("---")
+    if st.button("Çıkış", key="admin_logout"):
+        st.session_state.admin_auth = False
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB 1: Analitikler (mevcut arama log paneli)
+# ---------------------------------------------------------------------------
+
+def _admin_tab_analytics(df_to_xlsx):
+    """Arama analitikleri sekmesi."""
+    st.subheader("Arama Analitikleri")
 
     client = get_supabase_client()
     if not client:
@@ -995,8 +1044,8 @@ def admin_panel():
 
         st.markdown("---")
 
-        # ---- 🔥 EN ÇOK ARANANLAR ----
-        st.subheader("🔥 En Çok Arananlar")
+        # ---- EN ÇOK ARANANLAR ----
+        st.subheader("En Çok Arananlar")
         top_full = df.groupby('arama_terimi').agg(
             {'arama_sayisi': 'sum', 'sonuc_sayisi': 'last'}
         ).reset_index()
@@ -1006,15 +1055,15 @@ def admin_panel():
         st.dataframe(top_full.head(20), use_container_width=True, hide_index=True)
 
         st.download_button(
-            "📥 Tümünü İndir (xlsx)",
+            "Tümünü İndir (xlsx)",
             data=df_to_xlsx(top_full),
             file_name=f"en_cok_arananlar_{today}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="dl_top"
         )
 
-        # ---- ❌ SONUÇ BULUNAMAYANLAR ----
-        st.subheader("❌ Sonuç Bulunamayanlar")
+        # ---- SONUÇ BULUNAMAYANLAR ----
+        st.subheader("Sonuç Bulunamayanlar")
         sonucsuz_full = df[df['sonuc_sayisi'] == 0].groupby('arama_terimi').agg(
             {'arama_sayisi': 'sum'}
         ).reset_index()
@@ -1027,22 +1076,21 @@ def admin_panel():
             st.dataframe(sonucsuz_full.head(20), use_container_width=True, hide_index=True)
 
             st.download_button(
-                "📥 Tümünü İndir (xlsx)",
+                "Tümünü İndir (xlsx)",
                 data=df_to_xlsx(sonucsuz_full),
                 file_name=f"sonucsuz_aramalar_{today}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_sonucsuz"
             )
 
-        # ---- 🕐 BUGÜN ARANANLAR (son aranana göre sıralı) ----
-        st.subheader("🕐 Bugün Arananlar")
+        # ---- BUGÜN ARANANLAR ----
+        st.subheader("Bugün Arananlar")
         bugun = datetime.now().strftime('%Y-%m-%d')
         bugun_full = df[df['tarih'] == bugun].copy()
 
         if bugun_full.empty:
             st.info("Bugün henüz arama yapılmamış")
         else:
-            # En son aranan en üstte
             sort_col = 'son_arama_zamani' if 'son_arama_zamani' in bugun_full.columns else 'id'
             bugun_full = bugun_full.sort_values(sort_col, ascending=False)
             bugun_show = bugun_full[['arama_terimi', 'arama_sayisi', 'sonuc_sayisi']].copy()
@@ -1051,7 +1099,7 @@ def admin_panel():
             st.dataframe(bugun_show.head(50), use_container_width=True, hide_index=True)
 
             st.download_button(
-                "📥 Tümünü İndir (xlsx)",
+                "Tümünü İndir (xlsx)",
                 data=df_to_xlsx(bugun_show),
                 file_name=f"bugun_aramalar_{today}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1061,9 +1109,405 @@ def admin_panel():
     except Exception as e:
         st.error(f"Hata: {e}")
 
-    if st.button("🚪 Çıkış"):
-        st.session_state.admin_auth = False
-        st.rerun()
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB 2: Afiş Yükle & İşle
+# ---------------------------------------------------------------------------
+
+def _admin_tab_poster_upload():
+    """Haftalık Excel + PDF yükle, otomatik eşleştir ve hotspot üret."""
+    from poster.db import upsert_poster
+    from poster.excel_import import import_excel_to_poster_items
+    from poster.match import run_auto_match
+    from poster.hotspot_gen import generate_hotspots_for_poster, get_pdf_page_count
+
+    st.subheader("Afiş Bilgileri")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        title = st.text_input("Afiş Başlığı", placeholder="Örn: Hafta 9 Afişi", key="pu_title")
+    with col2:
+        week_date = st.date_input("Hafta Tarihi", value=datetime.now(), key="pu_date")
+
+    st.markdown("---")
+    st.subheader("Dosya Yükleme")
+
+    col_pdf, col_excel = st.columns(2)
+    with col_pdf:
+        pdf_file = st.file_uploader("PDF Afiş Dosyası", type=["pdf"], key="pu_pdf")
+    with col_excel:
+        excel_file = st.file_uploader("Excel Ürün Listesi", type=["xlsx", "xls"], key="pu_excel")
+
+    if not title:
+        st.info("Afiş başlığı girin.")
+        return
+
+    if st.button("Afişi Kaydet & İşle", type="primary", use_container_width=True, key="pu_run"):
+        if not pdf_file:
+            st.error("PDF dosyası gerekli.")
+            return
+        if not excel_file:
+            st.error("Excel dosyası gerekli.")
+            return
+
+        with st.spinner("İşleniyor..."):
+            pdf_bytes = pdf_file.read()
+            pdf_file.seek(0)
+            page_count = get_pdf_page_count(pdf_bytes)
+
+            pdf_url = _upload_pdf_to_storage(pdf_bytes, title, str(week_date))
+
+            poster_id = upsert_poster(
+                title=title,
+                week_date=str(week_date),
+                pdf_url=pdf_url,
+                page_count=page_count,
+            )
+            if not poster_id:
+                st.error("Afiş kaydedilemedi!")
+                return
+
+            st.success(f"Afiş kaydedildi (ID: {poster_id}, {page_count} sayfa)")
+
+            # Excel import
+            st.markdown("**Excel import...**")
+            try:
+                inserted, skipped = import_excel_to_poster_items(excel_file, poster_id)
+                st.success(f"Excel import: {inserted} ürün eklendi, {skipped} atlandı")
+            except Exception as e:
+                st.error(f"Excel import hatası: {e}")
+                return
+
+            # Auto-match
+            st.markdown("**Otomatik eşleştirme...**")
+            stats = run_auto_match(poster_id)
+            st.success(
+                f"Eşleştirme: {stats['matched']} eşleşti, "
+                f"{stats['review']} incelenmeli, "
+                f"{stats['unmatched']} eşleşmedi"
+            )
+
+            # Generate hotspots
+            st.markdown("**Hotspot üretimi...**")
+            hs_stats = generate_hotspots_for_poster(poster_id, pdf_bytes)
+            st.success(
+                f"Hotspot: {hs_stats['found']} bulundu, "
+                f"{hs_stats['missing']} bulunamadı"
+            )
+
+            st.balloons()
+            st.info(
+                f"Toplam {stats['total']} ürün işlendi. "
+                f"İncelenmesi gereken {stats['review'] + stats['unmatched']} ürün var. "
+                f"'Afiş İncele' sekmesinden kontrol edin."
+            )
+
+            st.session_state["last_poster_id"] = poster_id
+
+
+def _upload_pdf_to_storage(pdf_bytes: bytes, title: str, week_date: str) -> str:
+    """PDF'i Supabase Storage'a yükle, public URL döndür."""
+    from poster.db import get_supabase
+    client = get_supabase()
+    if not client:
+        return ""
+
+    bucket = "posters"
+    safe_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in title)
+    file_path = f"{week_date}/{safe_title}.pdf"
+
+    try:
+        client.storage.from_(bucket).upload(
+            file_path,
+            pdf_bytes,
+            file_options={"content-type": "application/pdf", "upsert": "true"},
+        )
+        return client.storage.from_(bucket).get_public_url(file_path)
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB 3: Afiş İncele & Düzelt
+# ---------------------------------------------------------------------------
+
+def _admin_tab_poster_review():
+    """Eşleşme ve hotspot sorunlarını incele/düzelt."""
+    from poster.db import get_posters, get_poster_items, update_poster_item, upsert_hotspot
+
+    st.subheader("Afiş Seç")
+
+    posters = get_posters(limit=20)
+    if not posters:
+        st.info("Henüz afiş yok.")
+        return
+
+    last_pid = st.session_state.get("last_poster_id")
+    poster_options = {f"{p['title']} ({p['week_date']})": p["poster_id"] for p in posters}
+    labels = list(poster_options.keys())
+
+    default_idx = 0
+    if last_pid:
+        for i, (label, pid) in enumerate(poster_options.items()):
+            if pid == last_pid:
+                default_idx = i
+                break
+
+    selected_label = st.selectbox("Afiş", labels, index=default_idx, key="pr_poster_select")
+    poster_id = poster_options[selected_label]
+
+    items = get_poster_items(poster_id)
+    if not items:
+        st.info("Bu afişte ürün yok.")
+        return
+
+    # Durum filtresi
+    filter_status = st.multiselect(
+        "Durum Filtresi",
+        ["matched", "review", "unmatched", "pending"],
+        default=["review", "unmatched"],
+        key="pr_status_filter",
+    )
+
+    filtered = [it for it in items if it.get("status") in filter_status]
+
+    if not filtered:
+        st.success("Filtreye uyan kayıt yok – tüm ürünler eşleşmiş!")
+        return
+
+    st.markdown(f"**{len(filtered)} ürün listeleniyor**")
+
+    for item in filtered:
+        _render_review_card(item)
+
+
+def _render_review_card(item: dict):
+    """Tek bir ürün inceleme kartını çiz."""
+    from poster.db import update_poster_item, upsert_hotspot
+
+    item_id = item["id"]
+    urun_kodu = item.get("urun_kodu") or "-"
+    urun_aciklamasi = item.get("urun_aciklamasi") or "-"
+    afis_fiyat = item.get("afis_fiyat") or "-"
+    status = item.get("status") or "pending"
+    match_sku = item.get("match_sku_id") or ""
+    search_term = item.get("search_term") or ""
+    confidence = item.get("match_confidence") or 0
+    page_no = item.get("page_no") or "-"
+
+    status_icon = {"matched": "++", "review": "!!", "unmatched": "XX", "pending": ".."}
+    icon = status_icon.get(status, "..")
+
+    with st.expander(
+        f"[{icon}] {urun_kodu} – {urun_aciklamasi[:50]} "
+        f"[{status.upper()} %{int(confidence*100)}]",
+        expanded=(status != "matched"),
+    ):
+        col_info, col_edit = st.columns([1, 1])
+
+        with col_info:
+            st.markdown(f"""
+- **Ürün Kodu:** {urun_kodu}
+- **Açıklama:** {urun_aciklamasi}
+- **Fiyat:** {afis_fiyat}
+- **Sayfa:** {page_no}
+- **Eşleşen SKU:** {match_sku or '—'}
+- **Arama Terimi:** {search_term or '—'}
+- **Güven:** %{int(confidence*100)}
+            """)
+
+        with col_edit:
+            st.markdown("**Manuel Düzeltme:**")
+
+            new_sku = st.text_input(
+                "Doğru Ürün Kodu (SKU)",
+                value=match_sku,
+                key=f"pr_sku_{item_id}",
+            )
+            new_search = st.text_input(
+                "Arama Terimi",
+                value=search_term,
+                key=f"pr_search_{item_id}",
+            )
+            new_price = st.text_input(
+                "Afiş Fiyatı",
+                value=afis_fiyat if afis_fiyat != "-" else "",
+                key=f"pr_price_{item_id}",
+            )
+
+            st.markdown("**Hotspot (opsiyonel):**")
+            hs_cols = st.columns(4)
+            hs_x0 = hs_cols[0].number_input("x0", 0.0, 1.0, 0.0, 0.01, key=f"pr_hx0_{item_id}")
+            hs_y0 = hs_cols[1].number_input("y0", 0.0, 1.0, 0.0, 0.01, key=f"pr_hy0_{item_id}")
+            hs_x1 = hs_cols[2].number_input("x1", 0.0, 1.0, 0.0, 0.01, key=f"pr_hx1_{item_id}")
+            hs_y1 = hs_cols[3].number_input("y1", 0.0, 1.0, 0.0, 0.01, key=f"pr_hy1_{item_id}")
+
+            hs_page = st.number_input(
+                "Hotspot Sayfa No",
+                min_value=1, max_value=20,
+                value=int(page_no) if page_no != "-" else 1,
+                key=f"pr_hpage_{item_id}",
+            )
+
+            if st.button("Kaydet", key=f"pr_save_{item_id}", type="primary"):
+                updates = {}
+                if new_sku and new_sku != match_sku:
+                    updates["match_sku_id"] = new_sku
+                    updates["search_term"] = new_sku
+                    updates["match_confidence"] = 1.0
+                    updates["status"] = "matched"
+                if new_search and new_search != search_term:
+                    updates["search_term"] = new_search
+                if new_price:
+                    updates["afis_fiyat"] = new_price
+                if not updates and new_sku:
+                    updates["status"] = "matched"
+                    updates["match_confidence"] = 1.0
+
+                if updates:
+                    update_poster_item(item_id, updates)
+                    st.success("Ürün güncellendi!")
+
+                if hs_x1 > hs_x0 and hs_y1 > hs_y0:
+                    upsert_hotspot(
+                        poster_item_id=item_id,
+                        page_no=hs_page,
+                        x0=hs_x0, y0=hs_y0, x1=hs_x1, y1=hs_y1,
+                        source="manual",
+                        updated_by="admin",
+                    )
+                    st.success("Hotspot kaydedildi!")
+
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB 4: Afiş Görüntüle (hotspot önizleme)
+# ---------------------------------------------------------------------------
+
+def _admin_tab_poster_view():
+    """Afiş sayfasını hotspot'larla birlikte önizle."""
+    import base64
+    import streamlit.components.v1 as components
+    from poster.db import get_posters, get_hotspots_for_page
+    from poster.hotspot_gen import render_page_image
+
+    st.subheader("Afiş Önizleme")
+
+    posters = get_posters(limit=20)
+    if not posters:
+        st.info("Henüz afiş yok.")
+        return
+
+    last_pid = st.session_state.get("last_poster_id")
+    poster_options = {f"{p['title']} ({p['week_date']})": p for p in posters}
+    labels = list(poster_options.keys())
+
+    default_idx = 0
+    if last_pid:
+        for i, p in enumerate(posters):
+            if p["poster_id"] == last_pid:
+                default_idx = i
+                break
+
+    selected_label = st.selectbox("Afiş", labels, index=default_idx, key="pv_poster_select")
+    poster = poster_options[selected_label]
+    poster_id = poster["poster_id"]
+    page_count = poster.get("page_count", 1) or 1
+
+    if page_count > 1:
+        page_no = st.slider("Sayfa", 1, page_count, 1, key="pv_page")
+    else:
+        page_no = 1
+
+    # PDF'i indir
+    pdf_url = poster.get("pdf_url", "")
+    if not pdf_url:
+        st.warning("Bu afişe ait PDF URL'si yok. Tekrar yükleyin.")
+        return
+
+    pdf_bytes = _fetch_pdf_bytes_cached(pdf_url)
+    if not pdf_bytes:
+        st.error("PDF indirilemedi.")
+        return
+
+    # Sayfayı render et
+    try:
+        png_bytes = render_page_image(pdf_bytes, page_no, dpi=150)
+    except Exception as e:
+        st.error(f"Sayfa render hatası: {e}")
+        return
+
+    # Hotspot'ları getir
+    hotspots = get_hotspots_for_page(poster_id, page_no)
+
+    if not hotspots:
+        st.warning("Bu sayfada hotspot yok.")
+        st.image(png_bytes, use_container_width=True)
+        return
+
+    # HTML overlay ile göster
+    img_b64 = base64.b64encode(png_bytes).decode()
+    hotspot_divs = []
+    for hs in hotspots:
+        x0 = hs.get("x0", 0) * 100
+        y0 = hs.get("y0", 0) * 100
+        w = (hs.get("x1", 0) - hs.get("x0", 0)) * 100
+        h = (hs.get("y1", 0) - hs.get("y0", 0)) * 100
+
+        urun_aciklamasi = hs.get("urun_aciklamasi", "") or ""
+        afis_fiyat = hs.get("afis_fiyat", "") or ""
+        tooltip = urun_aciklamasi[:60]
+        if afis_fiyat:
+            tooltip += f" - {afis_fiyat}"
+
+        hotspot_divs.append(f"""
+        <div class="hotspot" title="{tooltip}" style="
+            left:{x0:.2f}%; top:{y0:.2f}%; width:{w:.2f}%; height:{h:.2f}%;
+        "></div>
+        """)
+
+    html = f"""
+    <!DOCTYPE html><html><head><style>
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
+    .poster-wrap {{ position:relative; display:inline-block; width:100%; line-height:0; }}
+    .poster-wrap img {{ width:100%; height:auto; display:block; }}
+    .hotspot {{
+        position:absolute;
+        border:2px solid rgba(102,126,234,0.6);
+        border-radius:8px;
+        background:rgba(102,126,234,0.1);
+        cursor:pointer;
+        transition:all .2s;
+    }}
+    .hotspot:hover {{
+        background:rgba(102,126,234,0.3);
+        border-color:rgba(102,126,234,1);
+        box-shadow:0 0 12px rgba(102,126,234,0.5);
+    }}
+    </style></head><body>
+    <div class="poster-wrap">
+        <img src="data:image/png;base64,{img_b64}" alt="Poster" />
+        {"".join(hotspot_divs)}
+    </div>
+    </body></html>
+    """
+    components.html(html, height=1200, scrolling=True)
+    st.caption(f"{len(hotspots)} hotspot mevcut. Üzerine gelin / dokunun.")
+
+
+@st.cache_data(ttl=300)
+def _fetch_pdf_bytes_cached(pdf_url: str):
+    """PDF'i URL'den indir (5dk cache)."""
+    if not pdf_url:
+        return None
+    try:
+        import httpx
+        resp = httpx.get(pdf_url, timeout=30, follow_redirects=True)
+        resp.raise_for_status()
+        return resp.content
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -1072,16 +1516,11 @@ def admin_panel():
 
 if __name__ == "__main__":
     params = st.query_params
-    mode = params.get("mode")
 
-    if params.get("admin") == "true" and mode == "poster":
-        # Poster admin panel
-        from poster.admin import poster_admin_page
-        poster_admin_page()
-    elif params.get("admin") == "true":
+    if params.get("admin") == "true":
         admin_panel()
-    elif mode == "poster" or params.get("pick"):
-        # Poster viewer for store staff
+    elif params.get("mode") == "poster" or params.get("pick"):
+        # Mağaza personeli: afiş görüntüleyici
         from poster.viewer import poster_viewer_page
         poster_viewer_page()
     else:
