@@ -77,26 +77,65 @@ def _fuzzy_score(desc_a: str, desc_b: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Master product cache
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _load_product_master() -> pd.DataFrame:
-    """Fetch distinct (urun_kod, urun_ad) from stok_gunluk via RPC or direct query."""
+def _clean_code(x: str) -> str:
+    """Normalise product code – strip whitespace, fix Excel float artefacts."""
+    if not x:
+        return ""
+    s = str(x).strip()
+    # Excel bazen "9035.0" gibi float string döndürür
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+
+# ---------------------------------------------------------------------------
+# Master product fetch – only for the codes we actually need
+# ---------------------------------------------------------------------------
+
+def _load_master_for_codes(codes: list[str]) -> pd.DataFrame:
+    """Fetch (urun_kod, urun_ad) from stok_gunluk only for the given codes.
+
+    Bu yaklaşım olmayan bir RPC'ye bağımlılığı ortadan kaldırır ve
+    sadece ihtiyaç duyulan kodları çeker (200'lik batch'ler halinde).
+    """
     client = get_supabase()
     if not client:
         return pd.DataFrame(columns=["urun_kod", "urun_ad"])
 
-    try:
-        result = client.rpc("get_tum_urunler", {"result_limit": 50000}).execute()
-        if result.data:
-            df = pd.DataFrame(result.data)
-            df["urun_kod"] = df["urun_kod"].fillna("").astype(str).str.strip()
-            df["urun_ad"] = df["urun_ad"].fillna("").astype(str).str.strip()
-            return df
-    except Exception:
-        pass
+    codes = [_clean_code(c) for c in codes if _clean_code(c)]
+    codes = list(dict.fromkeys(codes))  # unique, preserve order
+    if not codes:
+        return pd.DataFrame(columns=["urun_kod", "urun_ad"])
 
-    return pd.DataFrame(columns=["urun_kod", "urun_ad"])
+    rows: list[dict] = []
+    BATCH = 200  # Supabase .in_() için güvenli üst sınır
+    for i in range(0, len(codes), BATCH):
+        batch = codes[i : i + BATCH]
+        try:
+            res = (
+                client.table("stok_gunluk")
+                .select("urun_kod, urun_ad")
+                .in_("urun_kod", batch)
+                .limit(50000)
+                .execute()
+            )
+            if res.data:
+                rows.extend(res.data)
+        except Exception:
+            pass
+
+    if not rows:
+        return pd.DataFrame(columns=["urun_kod", "urun_ad"])
+
+    df = pd.DataFrame(rows)
+    df["urun_kod"] = df["urun_kod"].fillna("").astype(str).str.strip()
+    df["urun_ad"] = df["urun_ad"].fillna("").astype(str).str.strip()
+    # stok_gunluk mağaza bazlı tekrarlar içerebilir → tekilleştir
+    df = df.drop_duplicates(subset=["urun_kod"])
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +151,9 @@ def run_auto_match(poster_id: int) -> dict:
     if not items:
         return {"matched": 0, "review": 0, "unmatched": 0, "total": 0}
 
-    master = _load_product_master()
+    # Sadece Excel'den gelen kodları DB'den iste (RPC gerektirmez)
+    codes = [_clean_code(it.get("urun_kodu") or "") for it in items]
+    master = _load_master_for_codes(codes)
     if master.empty:
         # Mark all unmatched
         for it in items:
@@ -133,7 +174,7 @@ def run_auto_match(poster_id: int) -> dict:
 
     for item in items:
         item_id = item["id"]
-        urun_kodu = (item.get("urun_kodu") or "").strip()
+        urun_kodu = _clean_code(item.get("urun_kodu") or "")
         urun_aciklamasi = (item.get("urun_aciklamasi") or "").strip()
 
         best_match: Optional[dict] = None

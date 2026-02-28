@@ -77,6 +77,9 @@ def import_excel_to_poster_items(
 
     for _, row in df.iterrows():
         urun_kodu = str(row.get("urun_kodu", "") or "").strip()
+        # Excel bazen sayısal kodları float olarak okur: "9035.0" → "9035"
+        if urun_kodu.endswith(".0") and urun_kodu[:-2].isdigit():
+            urun_kodu = urun_kodu[:-2]
         urun_aciklamasi = str(row.get("urun_aciklamasi", "") or "").strip()
 
         if not urun_kodu and not urun_aciklamasi:
