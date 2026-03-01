@@ -1,11 +1,10 @@
 """PDF-first auto-match: PDF text → needles → score Excel rows → match.
 
-Akış:
-  1. PDF sayfalarından ayırt edici anahtarlar çıkar (model kodları, 4-haneli kodlar,
-     marka isimleri, kategori kelimeleri)
-  2. Her Excel (poster_items) satırını bu needles'a karşı skorla
-  3. Yüksek skor → matched, orta → review, düşük → unmatched
-  4. search_term olarak Excel ÜRÜN KODU kullan (DB araması için)
+Akış (hızlı, batch):
+  1. Excel'i bellekte DataFrame olarak tut (DB call yok)
+  2. PDF'den needle çıkar (CPU only)
+  3. Bellekte tüm satırları skorla (CPU only)
+  4. Sadece eşleşen satırları batch insert et (1 DB call)
 """
 
 from __future__ import annotations
@@ -14,8 +13,7 @@ import re
 from typing import Optional
 
 import fitz  # PyMuPDF
-
-from poster.db import get_supabase, update_poster_item, get_poster_items
+import pandas as pd
 
 
 # ---------------------------------------------------------------------------
@@ -43,9 +41,9 @@ CATEGORIES = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _clean_code(x: str) -> str:
+def _clean_code(x) -> str:
     """Normalise product code – strip whitespace, fix Excel float artefacts."""
-    if not x:
+    if not x or (isinstance(x, float) and pd.isna(x)):
         return ""
     s = str(x).strip()
     if s.endswith(".0") and s[:-2].isdigit():
@@ -62,23 +60,17 @@ def extract_needles_from_pdf(pdf_bytes: bytes) -> dict:
 
     Returns:
         {
-            "model_codes": ["70U8000F", "65VQ90F3UA", ...],
-            "code4": ["9035", "7658", ...],
-            "brands": ["SAMSUNG", "ONVO", ...],
-            "categories": ["TV", "POWERBANK", ...],
-            "page_texts": {1: "PAGE 1 FULL TEXT...", ...},  # 1-based
+            "model_codes": ["70U8000F", ...],
+            "code4": ["9035", ...],
+            "brands": ["SAMSUNG", ...],
+            "categories": ["TV", ...],
         }
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     all_text_upper = ""
-    page_texts: dict[int, str] = {}
-
     for i in range(len(doc)):
-        text = doc[i].get_text()
-        page_texts[i + 1] = text.upper()
-        all_text_upper += " " + text.upper()
-
+        all_text_upper += " " + doc[i].get_text().upper()
     doc.close()
 
     # Model kodları: 6+ karakter, en az 1 harf + en az 1 rakam karışık
@@ -88,13 +80,11 @@ def extract_needles_from_pdf(pdf_bytes: bytes) -> dict:
         if re.search(r"[A-Z]", m) and re.search(r"\d", m)
     )
 
-    # 4 haneli sayısal kodlar (aksesuar kodları: 9035, 7658 vs.)
+    # 4 haneli sayısal kodlar (aksesuar kodları)
     code4 = sorted(set(re.findall(r"\b\d{4}\b", all_text_upper)))
 
-    # Bilinen markalar
+    # Bilinen markalar ve kategoriler
     brands = [b for b in BRANDS if b in all_text_upper]
-
-    # Bilinen kategoriler
     categories = [c for c in CATEGORIES if c in all_text_upper]
 
     return {
@@ -102,139 +92,187 @@ def extract_needles_from_pdf(pdf_bytes: bytes) -> dict:
         "code4": code4,
         "brands": brands,
         "categories": categories,
-        "page_texts": page_texts,
     }
 
 
 # ---------------------------------------------------------------------------
-# STEP 2: Excel satırını needles'a karşı skorla
+# STEP 2: Bellekte skorlama (DB call yok)
 # ---------------------------------------------------------------------------
 
-def _score_item(urun_kodu: str, urun_aciklamasi: str, needles: dict) -> int:
-    """Bir Excel satırını PDF needle'larına karşı skorla.
-
-    Skor tablosu:
-      model kodu eşleşmesi:  +100
-      4-haneli kod eşleşmesi: +90
-      marka eşleşmesi:        +30
-      kategori eşleşmesi:     +10 (her biri)
-    """
-    desc_upper = (urun_aciklamasi or "").upper()
-    code_upper = (urun_kodu or "").upper()
-    combined = f"{code_upper} {desc_upper}"
-
+def _score_row(urun_kodu: str, urun_aciklamasi: str, needles: dict) -> int:
+    """Bir Excel satırını PDF needle'larına karşı skorla."""
+    combined = f"{(urun_kodu or '').upper()} {(urun_aciklamasi or '').upper()}"
     score = 0
-
-    # Model kodu (en güçlü sinyal)
     for m in needles["model_codes"]:
         if m in combined:
             score += 100
-
-    # 4 haneli kod
     for c in needles["code4"]:
         if c in combined:
             score += 90
-
-    # Marka
     for b in needles["brands"]:
         if b in combined:
             score += 30
-
-    # Kategori kelimeleri
     for k in needles["categories"]:
         if k in combined:
             score += 10
-
     return score
 
 
 def _find_best_needle(urun_kodu: str, urun_aciklamasi: str, needles: dict) -> str:
-    """Bu item için PDF'de aranacak en iyi needle'ı bul.
+    """Bu item için PDF'de aranacak en iyi needle'ı bul."""
+    combined = f"{(urun_kodu or '').upper()} {(urun_aciklamasi or '').upper()}"
 
-    Hotspot bbox bulma sırasında kullanılacak.
-    Öncelik: model kodu > 4-haneli kod > marka.
-    """
-    desc_upper = (urun_aciklamasi or "").upper()
-    code_upper = (urun_kodu or "").upper()
-    combined = f"{code_upper} {desc_upper}"
-
-    # Model kodu eşleşmesi
     for m in needles["model_codes"]:
         if m in combined:
             return m
-
-    # 4 haneli kod
     for c in needles["code4"]:
         if c in combined:
             return c
-
-    # Marka (son çare)
     for b in needles["brands"]:
         if b in combined:
             return b
-
     return ""
 
 
+def score_excel_against_pdf(excel_df: pd.DataFrame, needles: dict) -> pd.DataFrame:
+    """Excel DataFrame'in tüm satırlarını needles'a karşı skorla.
+
+    Returns: DataFrame with __score, __status, __needle columns added.
+    """
+    df = excel_df.copy()
+
+    scores = []
+    statuses = []
+    best_needles = []
+
+    for _, row in df.iterrows():
+        kod = _clean_code(row.get("urun_kodu", ""))
+        aciklama = str(row.get("urun_aciklamasi", "") or "").strip()
+
+        s = _score_row(kod, aciklama, needles)
+        scores.append(s)
+
+        if s >= 90:
+            statuses.append("matched")
+        elif s >= 60:
+            statuses.append("review")
+        else:
+            statuses.append("unmatched")
+
+        best_needles.append(_find_best_needle(kod, aciklama, needles))
+
+    df["__score"] = scores
+    df["__status"] = statuses
+    df["__needle"] = best_needles
+
+    return df
+
+
 # ---------------------------------------------------------------------------
-# STEP 3: Ana eşleştirme rutini
+# STEP 3: Batch DB işlemleri (sadece eşleşenler)
 # ---------------------------------------------------------------------------
 
-def run_auto_match(poster_id: int, pdf_bytes: bytes) -> dict:
-    """PDF-first match: PDF'den needle çıkar → Excel satırlarını skorla.
+def batch_insert_matched_items(
+    poster_id: int,
+    scored_df: pd.DataFrame,
+    min_score: int = 60,
+) -> list[dict]:
+    """Skoru yeterli olan satırları poster_items'a batch insert et.
+
+    Returns: inserted rows (with DB-assigned IDs).
+    """
+    from poster.db import get_supabase
+
+    client = get_supabase()
+    if not client:
+        return []
+
+    relevant = scored_df[scored_df["__score"] >= min_score].copy()
+    if relevant.empty:
+        return []
+
+    # Mevcut poster_items'ı kontrol et (duplicate engeli)
+    existing = (
+        client.table("poster_items")
+        .select("urun_kodu")
+        .eq("poster_id", poster_id)
+        .execute()
+    )
+    existing_codes = {r["urun_kodu"] for r in (existing.data or []) if r.get("urun_kodu")}
+
+    rows_to_insert = []
+    for _, row in relevant.iterrows():
+        kod = _clean_code(row.get("urun_kodu", ""))
+        if kod in existing_codes:
+            continue  # Zaten eklenmiş
+
+        aciklama = str(row.get("urun_aciklamasi", "") or "").strip()
+        afis_fiyat = str(row.get("afis_fiyat", "") or "").strip() or None
+        status = row["__status"]
+        score = row["__score"]
+        needle = row["__needle"]
+
+        rows_to_insert.append({
+            "poster_id": poster_id,
+            "urun_kodu": kod or None,
+            "urun_aciklamasi": aciklama or None,
+            "afis_fiyat": afis_fiyat,
+            "search_term": kod or None,
+            "match_sku_id": kod or None,
+            "match_confidence": round(min(1.0, score / 100.0), 2),
+            "status": status,
+        })
+
+    if not rows_to_insert:
+        return []
+
+    # Batch insert (tek DB call)
+    result = client.table("poster_items").insert(rows_to_insert).execute()
+    return result.data or []
+
+
+# ---------------------------------------------------------------------------
+# STEP 4: Hızlı tek-poster pipeline
+# ---------------------------------------------------------------------------
+
+def process_single_poster(
+    poster_id: int,
+    pdf_bytes: bytes,
+    excel_df: pd.DataFrame,
+) -> dict:
+    """Tek bir afiş için tam pipeline: needle çıkar → skorla → insert → hotspot.
 
     Args:
-        poster_id: İşlenecek afişin ID'si.
-        pdf_bytes: PDF dosyasının raw içeriği.
+        poster_id: DB'deki poster kaydının ID'si.
+        pdf_bytes: PDF dosyası raw bytes.
+        excel_df: Haftalık Excel verisi (tüm afişlerin toplam listesi).
 
     Returns:
-        dict with counts: {matched, review, unmatched, total, needles}.
+        {matched, review, total_scored, items_inserted, hotspots_found, hotspots_missing}
     """
-    items = get_poster_items(poster_id)
-    if not items:
-        return {"matched": 0, "review": 0, "unmatched": 0, "total": 0}
+    from poster.hotspot_gen import generate_hotspots_for_poster
 
-    # PDF'den anahtarları çıkar
+    # 1. PDF'den needle çıkar (CPU only)
     needles = extract_needles_from_pdf(pdf_bytes)
 
-    stats = {"matched": 0, "review": 0, "unmatched": 0, "total": len(items)}
+    # 2. Bellekte skorla (CPU only)
+    scored = score_excel_against_pdf(excel_df, needles)
 
-    for item in items:
-        item_id = item["id"]
-        urun_kodu = _clean_code(item.get("urun_kodu") or "")
-        urun_aciklamasi = (item.get("urun_aciklamasi") or "").strip()
+    matched_count = int((scored["__status"] == "matched").sum())
+    review_count = int((scored["__status"] == "review").sum())
 
-        score = _score_item(urun_kodu, urun_aciklamasi, needles)
-        best_needle = _find_best_needle(urun_kodu, urun_aciklamasi, needles)
+    # 3. Sadece eşleşenleri DB'ye batch insert (1 call)
+    inserted = batch_insert_matched_items(poster_id, scored, min_score=60)
 
-        # search_term: DB araması için Excel ÜRÜN KODU kullan
-        search_term = urun_kodu or None
+    # 4. Hotspot üret (eşleşen item başına ~1 call)
+    hs_stats = generate_hotspots_for_poster(poster_id, pdf_bytes)
 
-        if score >= 90:
-            status = "matched"
-            confidence = min(1.0, score / 100.0)
-        elif score >= 60:
-            status = "review"
-            confidence = score / 100.0
-        else:
-            status = "unmatched"
-            confidence = score / 100.0 if score > 0 else 0
-
-        updates = {
-            "match_sku_id": urun_kodu or None,
-            "search_term": search_term,
-            "match_confidence": round(confidence, 2),
-            "status": status,
-        }
-
-        # best_needle'ı search_term'e yedek olarak kaydet (hotspot_gen kullanacak)
-        # Ama asıl arama terimi hep urun_kodu olsun
-        if not search_term and best_needle:
-            updates["search_term"] = best_needle
-
-        update_poster_item(item_id, updates)
-        stats[status] = stats.get(status, 0) + 1
-
-    # needles'ı da dön ki hotspot_gen kullansın
-    stats["needles"] = needles
-    return stats
+    return {
+        "matched": matched_count,
+        "review": review_count,
+        "total_scored": len(scored),
+        "items_inserted": len(inserted),
+        "hotspots_found": hs_stats.get("found", 0),
+        "hotspots_missing": hs_stats.get("missing", 0),
+        "needles": needles,
+    }

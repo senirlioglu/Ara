@@ -1115,117 +1115,118 @@ def _admin_tab_analytics(df_to_xlsx):
 # ---------------------------------------------------------------------------
 
 def _admin_tab_poster_upload():
-    """Haftalık Excel + PDF yükle, otomatik eşleştir ve hotspot üret."""
-    from poster.db import upsert_poster
-    from poster.excel_import import import_excel_to_poster_items
-    from poster.match import run_auto_match
-    from poster.hotspot_gen import generate_hotspots_for_poster, get_pdf_page_count
+    """Haftalık Excel + çoklu PDF yükle, toplu eşleştir."""
+    from poster.db import upsert_poster, get_poster_items as _get_items
+    from poster.excel_import import read_excel
+    from poster.match import process_single_poster
+    from poster.hotspot_gen import get_pdf_page_count
 
-    st.subheader("Afiş Bilgileri")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        title = st.text_input("Afiş Başlığı", placeholder="Örn: Hafta 9 Afişi", key="pu_title")
-    with col2:
-        week_date = st.date_input("Hafta Tarihi", value=datetime.now(), key="pu_date")
-
-    st.markdown("---")
     st.subheader("Dosya Yükleme")
+    st.caption("Excel'i bir kez, PDF'leri toplu yükleyin. Her PDF otomatik eşleştirilir.")
 
-    col_pdf, col_excel = st.columns(2)
-    with col_pdf:
-        pdf_file = st.file_uploader("PDF Afiş Dosyası", type=["pdf"], key="pu_pdf")
+    week_date = st.date_input("Hafta Tarihi", value=datetime.now(), key="pu_date")
+
+    col_excel, col_pdf = st.columns(2)
     with col_excel:
-        excel_file = st.file_uploader("Excel Ürün Listesi", type=["xlsx", "xls"], key="pu_excel")
+        excel_file = st.file_uploader(
+            "Excel Ürün Listesi (tüm afişler)",
+            type=["xlsx", "xls"],
+            key="pu_excel",
+        )
+    with col_pdf:
+        pdf_files = st.file_uploader(
+            "PDF Afişler (çoklu seçim)",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="pu_pdfs",
+        )
 
-    if not title:
-        st.info("Afiş başlığı girin.")
+    if not excel_file:
+        st.info("Haftalık Excel dosyasını yükleyin.")
+        return
+    if not pdf_files:
+        st.info("En az bir PDF afiş yükleyin.")
         return
 
-    if st.button("Afişi Kaydet & İşle", type="primary", use_container_width=True, key="pu_run"):
-        if not pdf_file:
-            st.error("PDF dosyası gerekli.")
-            return
-        if not excel_file:
-            st.error("Excel dosyası gerekli.")
+    st.markdown(f"**{len(pdf_files)} PDF** yüklendi.")
+
+    if st.button(
+        f"Tümünü İşle ({len(pdf_files)} afiş)",
+        type="primary",
+        use_container_width=True,
+        key="pu_run",
+    ):
+        # 1. Excel'i bir kez oku (bellekte tut)
+        try:
+            excel_df = read_excel(excel_file)
+        except Exception as e:
+            st.error(f"Excel okuma hatası: {e}")
             return
 
-        with st.spinner("İşleniyor..."):
+        st.success(f"Excel okundu: {len(excel_df)} satır")
+
+        # 2. Her PDF için sırayla işle
+        progress = st.progress(0, text="Başlanıyor...")
+        total_matched = 0
+        total_review = 0
+        total_hotspots = 0
+
+        for i, pdf_file in enumerate(pdf_files):
+            pdf_name = pdf_file.name.replace(".pdf", "").replace(".PDF", "")
+            progress.progress(
+                (i) / len(pdf_files),
+                text=f"İşleniyor: {pdf_name} ({i+1}/{len(pdf_files)})",
+            )
+
             pdf_bytes = pdf_file.read()
-            pdf_file.seek(0)
             page_count = get_pdf_page_count(pdf_bytes)
 
-            pdf_url = _upload_pdf_to_storage(pdf_bytes, title, str(week_date))
-
+            # Poster kaydı oluştur
+            pdf_url = _upload_pdf_to_storage(pdf_bytes, pdf_name, str(week_date))
             poster_id = upsert_poster(
-                title=title,
+                title=pdf_name,
                 week_date=str(week_date),
                 pdf_url=pdf_url,
                 page_count=page_count,
             )
             if not poster_id:
-                st.error("Afiş kaydedilemedi!")
-                return
+                st.error(f"Afiş kaydedilemedi: {pdf_name}")
+                continue
 
-            st.success(f"Afiş kaydedildi (ID: {poster_id}, {page_count} sayfa)")
+            # Tam pipeline (needle → skorla → batch insert → hotspot)
+            result = process_single_poster(poster_id, pdf_bytes, excel_df)
 
-            # Excel import
-            st.markdown("**Excel import...**")
-            try:
-                inserted, skipped = import_excel_to_poster_items(excel_file, poster_id)
-                st.success(f"Excel import: {inserted} ürün eklendi, {skipped} atlandı")
-            except Exception as e:
-                st.error(f"Excel import hatası: {e}")
-                return
+            total_matched += result["matched"]
+            total_review += result["review"]
+            total_hotspots += result["hotspots_found"]
 
-            # Auto-match (PDF-first: PDF'den needle çıkar → Excel satırlarını skorla)
-            st.markdown("**Otomatik eşleştirme (PDF analizi)...**")
-            stats = run_auto_match(poster_id, pdf_bytes)
-            st.success(
-                f"Eşleştirme: {stats['matched']} eşleşti, "
-                f"{stats['review']} incelenmeli, "
-                f"{stats['unmatched']} eşleşmedi"
-            )
-
-            # Eşleşen ürünleri listele
-            from poster.db import get_poster_items as _get_items
-            all_items = _get_items(poster_id)
-
-            matched_items = [it for it in all_items if it.get("status") == "matched"]
-            review_items = [it for it in all_items if it.get("status") == "review"]
-
-            if matched_items:
-                st.markdown("**Eşleşen ürünler:**")
-                for it in matched_items:
+            # Sonucu göster
+            with st.expander(
+                f"{pdf_name} — {result['matched']} eslesti, "
+                f"{result['review']} incelenmeli, "
+                f"{result['hotspots_found']} hotspot",
+                expanded=(result["matched"] > 0),
+            ):
+                items = _get_items(poster_id)
+                for it in items:
                     kod = it.get("urun_kodu") or "-"
                     aciklama = (it.get("urun_aciklamasi") or "")[:60]
+                    status = it.get("status") or "?"
                     conf = int((it.get("match_confidence") or 0) * 100)
-                    st.markdown(f"- `{kod}` — {aciklama} (%{conf})")
-
-            if review_items:
-                st.markdown("**İncelenmesi gereken ürünler:**")
-                for it in review_items:
-                    kod = it.get("urun_kodu") or "-"
-                    aciklama = (it.get("urun_aciklamasi") or "")[:60]
-                    conf = int((it.get("match_confidence") or 0) * 100)
-                    st.markdown(f"- `{kod}` — {aciklama} (%{conf})")
-
-            # Generate hotspots
-            st.markdown("**Hotspot üretimi...**")
-            hs_stats = generate_hotspots_for_poster(poster_id, pdf_bytes)
-            st.success(
-                f"Hotspot: {hs_stats['found']} bulundu, "
-                f"{hs_stats['missing']} bulunamadı"
-            )
-
-            st.balloons()
-            st.info(
-                f"Toplam {stats['total']} ürün işlendi. "
-                f"İncelenmesi gereken {stats['review'] + stats['unmatched']} ürün var. "
-                f"'Afiş İncele' sekmesinden kontrol edin."
-            )
+                    icon = {"matched": "+", "review": "?", "unmatched": "x"}.get(status, ".")
+                    st.markdown(f"[{icon}] `{kod}` — {aciklama} (%{conf})")
 
             st.session_state["last_poster_id"] = poster_id
+
+        progress.progress(1.0, text="Tamamlandı!")
+
+        # Özet
+        st.balloons()
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Afişler", len(pdf_files))
+        col2.metric("Eşleşen", total_matched)
+        col3.metric("İncelenmeli", total_review)
+        col4.metric("Hotspot", total_hotspots)
 
 
 def _upload_pdf_to_storage(pdf_bytes: bytes, title: str, week_date: str) -> str:
