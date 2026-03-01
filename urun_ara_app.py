@@ -1187,6 +1187,29 @@ def _admin_tab_poster_upload():
                 f"{stats['unmatched']} eşleşmedi"
             )
 
+            # Eşleşen ürünleri listele
+            from poster.db import get_poster_items as _get_items
+            all_items = _get_items(poster_id)
+
+            matched_items = [it for it in all_items if it.get("status") == "matched"]
+            review_items = [it for it in all_items if it.get("status") == "review"]
+
+            if matched_items:
+                st.markdown("**Eşleşen ürünler:**")
+                for it in matched_items:
+                    kod = it.get("urun_kodu") or "-"
+                    aciklama = (it.get("urun_aciklamasi") or "")[:60]
+                    conf = int((it.get("match_confidence") or 0) * 100)
+                    st.markdown(f"- `{kod}` — {aciklama} (%{conf})")
+
+            if review_items:
+                st.markdown("**İncelenmesi gereken ürünler:**")
+                for it in review_items:
+                    kod = it.get("urun_kodu") or "-"
+                    aciklama = (it.get("urun_aciklamasi") or "")[:60]
+                    conf = int((it.get("match_confidence") or 0) * 100)
+                    st.markdown(f"- `{kod}` — {aciklama} (%{conf})")
+
             # Generate hotspots
             st.markdown("**Hotspot üretimi...**")
             hs_stats = generate_hotspots_for_poster(poster_id, pdf_bytes)
@@ -1261,18 +1284,32 @@ def _admin_tab_poster_review():
         st.info("Bu afişte ürün yok.")
         return
 
-    # Durum filtresi
+    # Durum özeti
+    count_by_status = {}
+    for it in items:
+        s = it.get("status") or "pending"
+        count_by_status[s] = count_by_status.get(s, 0) + 1
+
+    cols = st.columns(4)
+    cols[0].metric("Matched", count_by_status.get("matched", 0))
+    cols[1].metric("Review", count_by_status.get("review", 0))
+    cols[2].metric("Unmatched", count_by_status.get("unmatched", 0))
+    cols[3].metric("Toplam", len(items))
+
+    st.markdown("---")
+
+    # Durum filtresi — varsayılan: hepsini göster
     filter_status = st.multiselect(
         "Durum Filtresi",
         ["matched", "review", "unmatched", "pending"],
-        default=["review", "unmatched"],
+        default=["matched", "review", "unmatched", "pending"],
         key="pr_status_filter",
     )
 
     filtered = [it for it in items if it.get("status") in filter_status]
 
     if not filtered:
-        st.success("Filtreye uyan kayıt yok – tüm ürünler eşleşmiş!")
+        st.info("Filtreye uyan kayıt yok.")
         return
 
     st.markdown(f"**{len(filtered)} ürün listeleniyor**")
