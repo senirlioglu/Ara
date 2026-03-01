@@ -1,6 +1,11 @@
-"""Flyer processing pipeline — orchestrates OCR → Cluster → Match → Save.
+"""Flyer processing pipeline — orchestrates OCR → Filter → Cluster → Match → Save.
 
-Single entry point: process_flyer(week_id, flyer_id, image_bytes, excel_df)
+NEW pipeline:
+  1. OCR at BLOCK/PARAGRAPH level (cached)
+  2. Noise filtering (drop junk text)
+  3. Price-anchored clustering + DBSCAN fallback
+  4. Weighted matching to Excel
+  5. Save clusters + matches to DB
 """
 
 from __future__ import annotations
@@ -18,7 +23,11 @@ from flyer.db import (
     get_ocr_cache,
 )
 from flyer.ocr_engine import run_ocr
-from flyer.clustering import cluster_words
+from flyer.clustering import (
+    filter_noise_candidates,
+    build_product_clusters_price_anchor,
+    cluster_words,
+)
 from flyer.matching import match_clusters_to_excel
 
 log = logging.getLogger(__name__)
@@ -42,64 +51,89 @@ def process_flyer(
 ) -> dict:
     """Full pipeline for a single flyer.
 
-    1. OCR (cached unless force_ocr)
-    2. DBSCAN clustering
-    3. Match clusters to Excel
-    4. Save clusters + matches to DB
+    1. OCR at block/paragraph level (cached unless force_ocr)
+    2. Noise filtering
+    3. Price-anchored clustering + DBSCAN fallback
+    4. Match clusters to Excel
+    5. Save clusters + matches to DB
 
     Returns:
-        {ocr_words, clusters_count, matched, review, unmatched, total}
+        {ocr_word_count, clusters_count, matched, review, unmatched, skipped, total}
     """
-    # 1. OCR
-    words = run_ocr(flyer_id, image_bytes, force=force_ocr)
+    # 1. OCR (block/paragraph level)
+    blocks = run_ocr(flyer_id, image_bytes, force=force_ocr)
 
-    # 2. Cluster
-    clusters = cluster_words(
-        words, img_w, img_h,
-        eps=eps, min_samples=min_samples,
-    )
+    # Detect format: new block-level vs old word-level
+    is_block_level = blocks and "level" in blocks[0]
 
-    # 3. Save clusters to DB (delete old first for re-cluster support)
+    if is_block_level:
+        # 2. Noise filtering
+        filtered = filter_noise_candidates(blocks, img_w, img_h)
+        log.info(f"Noise filter: {len(blocks)} → {len(filtered)} blocks")
+
+        # 3. Price-anchored clustering
+        clusters = build_product_clusters_price_anchor(
+            filtered, img_w, img_h,
+            pad_x=20.0, pad_y=20.0,
+        )
+    else:
+        # Legacy word-level path
+        log.info("Using legacy word-level clustering")
+        clusters = cluster_words(
+            blocks, img_w, img_h,
+            eps=eps, min_samples=min_samples,
+        )
+
+    # 4. Save clusters to DB (delete old first for re-cluster support)
     delete_clusters_for_flyer(flyer_id)
     saved_clusters = batch_insert_clusters(flyer_id, clusters)
 
     if not saved_clusters:
         return {
-            "ocr_word_count": len(words),
+            "ocr_word_count": len(blocks),
             "clusters_count": 0,
             "matched": 0,
             "review": 0,
             "unmatched": 0,
+            "skipped": 0,
             "total": 0,
         }
 
-    # 4. Match clusters to Excel
+    # 5. Match clusters to Excel
     match_results = match_clusters_to_excel(saved_clusters, excel_df)
 
-    # 5. Save matches to DB (batch)
+    # 6. Save matches to DB (batch)
     match_rows = []
-    stats = {"matched": 0, "review": 0, "unmatched": 0}
+    stats = {"matched": 0, "review": 0, "unmatched": 0, "skip": 0}
 
     for mr in match_results:
         best = mr["best_match"]
+        st = best.get("status", "unmatched")
+
+        # Don't save skip clusters as matches
+        if st == "skip":
+            stats["skip"] += 1
+            continue
+
         match_rows.append({
             "cluster_id": mr["cluster_id"],
             "urun_kodu": best.get("urun_kodu"),
             "urun_aciklamasi": best.get("urun_aciklamasi"),
             "afis_fiyat": best.get("afis_fiyat"),
             "confidence": best.get("confidence", 0),
-            "status": best.get("status", "unmatched"),
+            "status": st,
         })
-        stats[best.get("status", "unmatched")] += 1
+        stats[st] = stats.get(st, 0) + 1
 
     batch_insert_matches(match_rows)
 
     return {
-        "ocr_word_count": len(words),
+        "ocr_word_count": len(blocks),
         "clusters_count": len(saved_clusters),
         "matched": stats["matched"],
         "review": stats["review"],
         "unmatched": stats["unmatched"],
+        "skipped": stats["skip"],
         "total": len(saved_clusters),
     }
 
@@ -112,20 +146,29 @@ def recluster_flyer(
     eps: float = 80.0,
     min_samples: int = 2,
 ) -> dict:
-    """Re-cluster using cached OCR (no re-OCR). For eps tuning.
+    """Re-cluster using cached OCR (no re-OCR). For eps/parameter tuning.
 
     Returns same stats dict as process_flyer.
     """
     # Get cached OCR
-    words = get_ocr_cache(flyer_id)
-    if words is None:
+    blocks = get_ocr_cache(flyer_id)
+    if blocks is None:
         return {"error": "OCR cache not found. Run full process first."}
 
-    # Re-cluster with new eps
-    clusters = cluster_words(
-        words, img_w, img_h,
-        eps=eps, min_samples=min_samples,
-    )
+    is_block_level = blocks and "level" in blocks[0]
+
+    if is_block_level:
+        filtered = filter_noise_candidates(blocks, img_w, img_h)
+        clusters = build_product_clusters_price_anchor(
+            filtered, img_w, img_h,
+            eps_factor=eps / img_w if img_w > 0 else 0.06,
+            min_samples=max(2, min_samples),
+        )
+    else:
+        clusters = cluster_words(
+            blocks, img_w, img_h,
+            eps=eps, min_samples=min_samples,
+        )
 
     # Save clusters (delete old)
     delete_clusters_for_flyer(flyer_id)
@@ -133,33 +176,38 @@ def recluster_flyer(
 
     if not saved_clusters:
         return {
-            "ocr_word_count": len(words),
+            "ocr_word_count": len(blocks),
             "clusters_count": 0,
-            "matched": 0, "review": 0, "unmatched": 0, "total": 0,
+            "matched": 0, "review": 0, "unmatched": 0, "skipped": 0, "total": 0,
         }
 
     # Re-match
     match_results = match_clusters_to_excel(saved_clusters, excel_df)
 
     match_rows = []
-    stats = {"matched": 0, "review": 0, "unmatched": 0}
+    stats = {"matched": 0, "review": 0, "unmatched": 0, "skip": 0}
     for mr in match_results:
         best = mr["best_match"]
+        st = best.get("status", "unmatched")
+        if st == "skip":
+            stats["skip"] += 1
+            continue
         match_rows.append({
             "cluster_id": mr["cluster_id"],
             "urun_kodu": best.get("urun_kodu"),
             "urun_aciklamasi": best.get("urun_aciklamasi"),
             "afis_fiyat": best.get("afis_fiyat"),
             "confidence": best.get("confidence", 0),
-            "status": best.get("status", "unmatched"),
+            "status": st,
         })
-        stats[best.get("status", "unmatched")] += 1
+        stats[st] = stats.get(st, 0) + 1
 
     batch_insert_matches(match_rows)
 
     return {
-        "ocr_word_count": len(words),
+        "ocr_word_count": len(blocks),
         "clusters_count": len(saved_clusters),
         **stats,
+        "skipped": stats["skip"],
         "total": len(saved_clusters),
     }

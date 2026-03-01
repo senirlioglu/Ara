@@ -210,11 +210,12 @@ def _run_bulk_import(week_date: str, excel_file, image_files: list):
             )
             results_table.append({
                 "Dosya": fname,
-                "OCR Kelime": result["ocr_word_count"],
+                "OCR Blok": result["ocr_word_count"],
                 "Cluster": result["clusters_count"],
                 "Eşleşen": result["matched"],
                 "İncelenmeli": result["review"],
                 "Eşleşmedi": result["unmatched"],
+                "Atlanan": result.get("skipped", 0),
             })
         except Exception as e:
             log.error(f"Pipeline error for {fname}: {e}")
