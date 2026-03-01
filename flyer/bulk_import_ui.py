@@ -1,4 +1,4 @@
-"""Bulk Import UI — Weekly Excel + multiple flyer images in one run."""
+"""Bulk Import UI — Weekly Excel + multiple flyer images/PDFs in one run."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from flyer.db import (
 )
 from flyer.excel_import import read_weekly_excel
 from flyer.pipeline import process_flyer, get_image_dimensions
+from flyer.pdf_utils import pdf_to_jpegs
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,13 @@ def _upload_image_to_storage(image_bytes: bytes, filename: str, week_date: str) 
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
     path = f"{week_date}/{safe_name}"
 
+    # Detect content type from extension
+    lower = filename.lower()
+    if lower.endswith(".png"):
+        content_type = "image/png"
+    else:
+        content_type = "image/jpeg"
+
     try:
         try:
             client.storage.from_(bucket).remove([path])
@@ -38,7 +46,7 @@ def _upload_image_to_storage(image_bytes: bytes, filename: str, week_date: str) 
             pass
         client.storage.from_(bucket).upload(
             path, image_bytes,
-            file_options={"content-type": "image/jpeg"},
+            file_options={"content-type": content_type},
         )
         return client.storage.from_(bucket).get_public_url(path)
     except Exception as e:
@@ -46,10 +54,33 @@ def _upload_image_to_storage(image_bytes: bytes, filename: str, week_date: str) 
         return ""
 
 
+def _expand_uploads(uploaded_files: list) -> list[tuple[str, bytes]]:
+    """Expand uploaded files: PDFs become one entry per page, images pass through.
+
+    Returns:
+        List of (filename, image_bytes_jpeg) tuples ready for pipeline.
+    """
+    expanded: list[tuple[str, bytes]] = []
+    for f in uploaded_files:
+        raw = f.read()
+        lower = f.name.lower()
+        if lower.endswith(".pdf"):
+            # Convert each PDF page to JPEG
+            pages = pdf_to_jpegs(raw, dpi=200)
+            base = f.name.rsplit(".", 1)[0]
+            for label, jpeg in pages:
+                fname = f"{base}_{label}.jpg"
+                expanded.append((fname, jpeg))
+        else:
+            # Regular image — pass through
+            expanded.append((f.name, raw))
+    return expanded
+
+
 def bulk_import_page():
     """Main bulk import UI."""
     st.subheader("Haftalık Toplu Yükleme")
-    st.caption("1 Excel + tüm afiş görselleri (JPEG/PNG). Tek seferde işle.")
+    st.caption("1 Excel + afiş dosyaları (JPEG/PNG/PDF). PDF'ler sayfa sayfa işlenir.")
 
     # --- Inputs ---
     week_date = st.date_input("Hafta Tarihi", value=datetime.now(), key="bi_date")
@@ -63,8 +94,8 @@ def bulk_import_page():
         )
     with col_images:
         image_files = st.file_uploader(
-            "Afiş Görselleri (çoklu)",
-            type=["jpg", "jpeg", "png"],
+            "Afiş Dosyaları (çoklu)",
+            type=["jpg", "jpeg", "png", "pdf"],
             accept_multiple_files=True,
             key="bi_images",
         )
@@ -73,14 +104,24 @@ def bulk_import_page():
         st.info("Haftalık Excel dosyasını yükleyin.")
         return
     if not image_files:
-        st.info("En az bir afiş görseli yükleyin.")
+        st.info("En az bir afiş dosyası yükleyin (JPEG, PNG veya PDF).")
         return
 
-    st.markdown(f"**{len(image_files)} görsel** yüklendi.")
+    # Count PDFs for info
+    pdf_count = sum(1 for f in image_files if f.name.lower().endswith(".pdf"))
+    img_count = len(image_files) - pdf_count
+    parts = []
+    if img_count:
+        parts.append(f"{img_count} görsel")
+    if pdf_count:
+        parts.append(f"{pdf_count} PDF")
+    st.markdown(f"**{' + '.join(parts)}** yüklendi.")
+    if pdf_count:
+        st.info("PDF dosyaları sayfa sayfa JPEG'e dönüştürülecek.")
 
     # --- Process button ---
     if st.button(
-        f"Tümünü İşle ({len(image_files)} afiş)",
+        f"Tümünü İşle ({len(image_files)} dosya)",
         type="primary",
         use_container_width=True,
         key="bi_run",
@@ -126,7 +167,12 @@ def _run_bulk_import(week_date: str, excel_file, image_files: list):
     if product_rows:
         batch_insert_weekly_products(week_id, product_rows)
 
-    # 4. Process each flyer image
+    # 4. Expand PDFs to individual page images
+    with st.spinner("PDF dosyaları dönüştürülüyor..."):
+        expanded = _expand_uploads(image_files)
+    st.info(f"Toplam {len(expanded)} afiş sayfası işlenecek.")
+
+    # 5. Process each flyer image
     progress = st.progress(0, text="Başlanıyor...")
     results_table = []
 
@@ -134,14 +180,12 @@ def _run_bulk_import(week_date: str, excel_file, image_files: list):
     if "flyer_cache" not in st.session_state:
         st.session_state["flyer_cache"] = {}
 
-    for i, img_file in enumerate(image_files):
-        fname = img_file.name
+    for i, (fname, image_bytes) in enumerate(expanded):
         progress.progress(
-            i / len(image_files),
-            text=f"İşleniyor: {fname} ({i+1}/{len(image_files)})",
+            i / len(expanded),
+            text=f"İşleniyor: {fname} ({i+1}/{len(expanded)})",
         )
 
-        image_bytes = img_file.read()
         img_w, img_h = get_image_dimensions(image_bytes)
 
         # Upload image
@@ -181,7 +225,7 @@ def _run_bulk_import(week_date: str, excel_file, image_files: list):
 
     progress.progress(1.0, text="Tamamlandı!")
 
-    # 5. Show results table
+    # 6. Show results table
     if results_table:
         st.markdown("---")
         st.markdown("### Sonuç Tablosu")
