@@ -964,24 +964,27 @@ def admin_panel():
         return output.getvalue()
 
     # ---- Tabs ----
-    tab_analytics, tab_poster_upload, tab_poster_review, tab_poster_view = st.tabs([
+    tab_analytics, tab_flyer_upload, tab_flyer_review, tab_flyer_view = st.tabs([
         "Analitikler",
-        "Afiş Yükle",
-        "Afiş İncele",
-        "Afiş Görüntüle",
+        "Afiş Yükle (v2)",
+        "Afiş İncele (v2)",
+        "Afiş Görüntüle (v2)",
     ])
 
     with tab_analytics:
         _admin_tab_analytics(df_to_xlsx)
 
-    with tab_poster_upload:
-        _admin_tab_poster_upload()
+    with tab_flyer_upload:
+        from flyer.bulk_import_ui import bulk_import_page
+        bulk_import_page()
 
-    with tab_poster_review:
-        _admin_tab_poster_review()
+    with tab_flyer_review:
+        from flyer.review_ui import review_page
+        review_page()
 
-    with tab_poster_view:
-        _admin_tab_poster_view()
+    with tab_flyer_view:
+        from flyer.viewer_ui import viewer_page
+        viewer_page()
 
     # ---- Çıkış ----
     st.markdown("---")
@@ -1628,8 +1631,12 @@ if __name__ == "__main__":
 
     if params.get("admin") == "true":
         admin_panel()
+    elif params.get("mode") == "flyer" or params.get("pick_cluster"):
+        # Mağaza personeli: yeni afiş görüntüleyici (Vision OCR v2)
+        from flyer.viewer_ui import viewer_page
+        viewer_page()
     elif params.get("mode") == "poster" or params.get("pick"):
-        # Mağaza personeli: afiş görüntüleyici
+        # Eski afiş görüntüleyici (PDF-based, legacy)
         from poster.viewer import poster_viewer_page
         poster_viewer_page()
     else:
