@@ -5,6 +5,7 @@ Akış (hızlı, batch):
   2. PDF'den needle çıkar (CPU only)
   3. Bellekte tüm satırları skorla (CPU only)
   4. Sadece eşleşen satırları batch insert et (1 DB call)
+  5. Ters eşleştirme: PDF needle'ları → Excel'de karşılığı olmayanları tespit et
 """
 
 from __future__ import annotations
@@ -169,7 +170,39 @@ def score_excel_against_pdf(excel_df: pd.DataFrame, needles: dict) -> pd.DataFra
 
 
 # ---------------------------------------------------------------------------
-# STEP 3: Batch DB işlemleri (sadece eşleşenler)
+# STEP 3: Ters eşleştirme — PDF'de olup Excel'de olmayan ürünleri bul
+# ---------------------------------------------------------------------------
+
+def find_orphan_needles(needles: dict, excel_df: pd.DataFrame) -> list[str]:
+    """PDF'deki model_codes ve code4 needle'larından Excel'de hiçbir satırla
+    eşleşmeyenleri döndür.
+
+    Bu needle'lar = PDF'de görünen ama Excel listesinde karşılığı olmayan ürünler.
+    """
+    # Excel'deki tüm metin havuzunu oluştur (bir kez)
+    excel_text_pool = ""
+    for _, row in excel_df.iterrows():
+        kod = _clean_code(row.get("urun_kodu", "")).upper()
+        aciklama = str(row.get("urun_aciklamasi", "") or "").upper()
+        excel_text_pool += f" {kod} {aciklama}"
+
+    orphans = []
+
+    # Model kodları kontrol (en güçlü sinyaller)
+    for m in needles["model_codes"]:
+        if m not in excel_text_pool:
+            orphans.append(m)
+
+    # 4-haneli kodlar kontrol
+    for c in needles["code4"]:
+        if c not in excel_text_pool:
+            orphans.append(c)
+
+    return orphans
+
+
+# ---------------------------------------------------------------------------
+# STEP 4: Batch DB işlemleri (sadece eşleşenler)
 # ---------------------------------------------------------------------------
 
 def batch_insert_matched_items(
@@ -210,7 +243,6 @@ def batch_insert_matched_items(
         afis_fiyat = str(row.get("afis_fiyat", "") or "").strip() or None
         status = row["__status"]
         score = row["__score"]
-        needle = row["__needle"]
 
         rows_to_insert.append({
             "poster_id": poster_id,
@@ -232,7 +264,7 @@ def batch_insert_matched_items(
 
 
 # ---------------------------------------------------------------------------
-# STEP 4: Hızlı tek-poster pipeline
+# STEP 5: Hızlı tek-poster pipeline
 # ---------------------------------------------------------------------------
 
 def process_single_poster(
@@ -242,13 +274,9 @@ def process_single_poster(
 ) -> dict:
     """Tek bir afiş için tam pipeline: needle çıkar → skorla → insert → hotspot.
 
-    Args:
-        poster_id: DB'deki poster kaydının ID'si.
-        pdf_bytes: PDF dosyası raw bytes.
-        excel_df: Haftalık Excel verisi (tüm afişlerin toplam listesi).
-
     Returns:
-        {matched, review, total_scored, items_inserted, hotspots_found, hotspots_missing}
+        {matched, review, total_scored, items_inserted,
+         hotspots_found, hotspots_missing, orphan_needles, needles}
     """
     from poster.hotspot_gen import generate_hotspots_for_poster
 
@@ -261,10 +289,13 @@ def process_single_poster(
     matched_count = int((scored["__status"] == "matched").sum())
     review_count = int((scored["__status"] == "review").sum())
 
-    # 3. Sadece eşleşenleri DB'ye batch insert (1 call)
+    # 3. Ters eşleştirme: PDF'de olup Excel'de olmayan ürünler (CPU only)
+    orphans = find_orphan_needles(needles, excel_df)
+
+    # 4. Sadece eşleşenleri DB'ye batch insert (1 call)
     inserted = batch_insert_matched_items(poster_id, scored, min_score=60)
 
-    # 4. Hotspot üret (eşleşen item başına ~1 call)
+    # 5. Hotspot üret (eşleşen item başına ~1 call)
     hs_stats = generate_hotspots_for_poster(poster_id, pdf_bytes)
 
     return {
@@ -274,5 +305,6 @@ def process_single_poster(
         "items_inserted": len(inserted),
         "hotspots_found": hs_stats.get("found", 0),
         "hotspots_missing": hs_stats.get("missing", 0),
+        "orphan_needles": orphans,
         "needles": needles,
     }

@@ -1170,6 +1170,7 @@ def _admin_tab_poster_upload():
         total_matched = 0
         total_review = 0
         total_hotspots = 0
+        all_orphans: dict[str, list[str]] = {}  # poster_name → orphan_needles
 
         for i, pdf_file in enumerate(pdf_files):
             pdf_name = pdf_file.name.replace(".pdf", "").replace(".PDF", "")
@@ -1193,47 +1194,77 @@ def _admin_tab_poster_upload():
                 st.error(f"Afiş kaydedilemedi: {pdf_name}")
                 continue
 
+            # PDF bytes'ı session_state'e cache'le (viewer için fallback)
+            if "pdf_cache" not in st.session_state:
+                st.session_state["pdf_cache"] = {}
+            st.session_state["pdf_cache"][poster_id] = pdf_bytes
+
             # Tam pipeline (needle → skorla → batch insert → hotspot)
             result = process_single_poster(poster_id, pdf_bytes, excel_df)
 
-            total_matched += result["matched"]
+            total_matched += result["items_inserted"]
             total_review += result["review"]
             total_hotspots += result["hotspots_found"]
 
+            # Orphan needle'ları topla
+            if result.get("orphan_needles"):
+                all_orphans[pdf_name] = result["orphan_needles"]
+
             # Sonucu göster
+            orphan_count = len(result.get("orphan_needles", []))
             with st.expander(
-                f"{pdf_name} — {result['matched']} eslesti, "
-                f"{result['review']} incelenmeli, "
-                f"{result['hotspots_found']} hotspot",
-                expanded=(result["matched"] > 0),
+                f"{pdf_name} — {result['items_inserted']} eklendi, "
+                f"{result['hotspots_found']} hotspot"
+                + (f", {orphan_count} KAYIP" if orphan_count else ""),
+                expanded=(orphan_count > 0),
             ):
                 items = _get_items(poster_id)
-                for it in items:
-                    kod = it.get("urun_kodu") or "-"
-                    aciklama = (it.get("urun_aciklamasi") or "")[:60]
-                    status = it.get("status") or "?"
-                    conf = int((it.get("match_confidence") or 0) * 100)
-                    icon = {"matched": "+", "review": "?", "unmatched": "x"}.get(status, ".")
-                    st.markdown(f"[{icon}] `{kod}` — {aciklama} (%{conf})")
+                if items:
+                    st.markdown("**Eşleşen ürünler:**")
+                    for it in items:
+                        kod = it.get("urun_kodu") or "-"
+                        aciklama = (it.get("urun_aciklamasi") or "")[:60]
+                        conf = int((it.get("match_confidence") or 0) * 100)
+                        st.markdown(f"- `{kod}` — {aciklama} (%{conf})")
+
+                if result.get("orphan_needles"):
+                    st.markdown("**PDF'de var ama Excel'de eşleşmedi (KAYIP):**")
+                    for needle in result["orphan_needles"]:
+                        st.markdown(f"- `{needle}` — Excel'de karşılığı yok!")
 
             st.session_state["last_poster_id"] = poster_id
 
         progress.progress(1.0, text="Tamamlandı!")
 
         # Özet
-        st.balloons()
+        total_orphans = sum(len(v) for v in all_orphans.values())
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Afişler", len(pdf_files))
         col2.metric("Eşleşen", total_matched)
-        col3.metric("İncelenmeli", total_review)
-        col4.metric("Hotspot", total_hotspots)
+        col3.metric("Hotspot", total_hotspots)
+        col4.metric("Kayıp Ürün", total_orphans, delta_color="inverse")
+
+        # Kayıp ürünlerin toplu raporu
+        if all_orphans:
+            st.markdown("---")
+            st.warning(
+                f"{total_orphans} ürün PDF'lerde görünüyor ama Excel listesinde "
+                f"eşleşmedi. Bunları Excel'de kontrol edin."
+            )
+            for poster_name, orphans in all_orphans.items():
+                st.markdown(f"**{poster_name}:** {', '.join(f'`{o}`' for o in orphans)}")
+        else:
+            st.balloons()
 
 
 def _upload_pdf_to_storage(pdf_bytes: bytes, title: str, week_date: str) -> str:
     """PDF'i Supabase Storage'a yükle, public URL döndür."""
     from poster.db import get_supabase
+    import logging
+
     client = get_supabase()
     if not client:
+        logging.warning("PDF upload: Supabase client yok")
         return ""
 
     bucket = "posters"
@@ -1241,13 +1272,22 @@ def _upload_pdf_to_storage(pdf_bytes: bytes, title: str, week_date: str) -> str:
     file_path = f"{week_date}/{safe_title}.pdf"
 
     try:
+        # Önce mevcut dosyayı silmeyi dene (upsert için)
+        try:
+            client.storage.from_(bucket).remove([file_path])
+        except Exception:
+            pass
+
         client.storage.from_(bucket).upload(
             file_path,
             pdf_bytes,
-            file_options={"content-type": "application/pdf", "upsert": "true"},
+            file_options={"content-type": "application/pdf"},
         )
-        return client.storage.from_(bucket).get_public_url(file_path)
-    except Exception:
+        url = client.storage.from_(bucket).get_public_url(file_path)
+        logging.info(f"PDF upload OK: {file_path} → {url}")
+        return url
+    except Exception as e:
+        logging.error(f"PDF upload hatası: {e}")
         return ""
 
 
@@ -1256,50 +1296,66 @@ def _upload_pdf_to_storage(pdf_bytes: bytes, title: str, week_date: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _admin_tab_poster_review():
-    """Eşleşme ve hotspot sorunlarını incele/düzelt."""
+    """Hafta bazlı birleşik eşleşme inceleme ekranı."""
     from poster.db import get_posters, get_poster_items, update_poster_item, upsert_hotspot
 
-    st.subheader("Afiş Seç")
+    st.subheader("Hafta Seç")
 
-    posters = get_posters(limit=20)
+    posters = get_posters(limit=50)
     if not posters:
         st.info("Henüz afiş yok.")
         return
 
-    last_pid = st.session_state.get("last_poster_id")
-    poster_options = {f"{p['title']} ({p['week_date']})": p["poster_id"] for p in posters}
-    labels = list(poster_options.keys())
+    # Haftaları grupla
+    weeks: dict[str, list[dict]] = {}
+    for p in posters:
+        wd = p.get("week_date") or "Tarihsiz"
+        weeks.setdefault(wd, []).append(p)
 
-    default_idx = 0
-    if last_pid:
-        for i, (label, pid) in enumerate(poster_options.items()):
-            if pid == last_pid:
-                default_idx = i
-                break
+    week_labels = list(weeks.keys())
+    selected_week = st.selectbox("Hafta", week_labels, key="pr_week_select")
+    week_posters = weeks[selected_week]
 
-    selected_label = st.selectbox("Afiş", labels, index=default_idx, key="pr_poster_select")
-    poster_id = poster_options[selected_label]
+    st.markdown(f"**{selected_week}** — {len(week_posters)} afiş")
 
-    items = get_poster_items(poster_id)
-    if not items:
-        st.info("Bu afişte ürün yok.")
+    # Tüm afişlerin ürünlerini topla
+    all_items: list[dict] = []
+    items_by_poster: dict[str, list[dict]] = {}
+    for p in week_posters:
+        pid = p["poster_id"]
+        ptitle = p.get("title", f"Afiş {pid}")
+        items = get_poster_items(pid)
+        for it in items:
+            it["_poster_title"] = ptitle
+        all_items.extend(items)
+        items_by_poster[ptitle] = items
+
+    if not all_items:
+        st.info("Bu haftada ürün yok.")
         return
 
-    # Durum özeti
-    count_by_status = {}
-    for it in items:
+    # Toplam durum özeti
+    count_by_status: dict[str, int] = {}
+    for it in all_items:
         s = it.get("status") or "pending"
         count_by_status[s] = count_by_status.get(s, 0) + 1
 
     cols = st.columns(4)
-    cols[0].metric("Matched", count_by_status.get("matched", 0))
-    cols[1].metric("Review", count_by_status.get("review", 0))
-    cols[2].metric("Unmatched", count_by_status.get("unmatched", 0))
-    cols[3].metric("Toplam", len(items))
+    cols[0].metric("Eşleşen", count_by_status.get("matched", 0))
+    cols[1].metric("İncelenmeli", count_by_status.get("review", 0))
+    cols[2].metric("Eşleşmedi", count_by_status.get("unmatched", 0))
+    cols[3].metric("Toplam", len(all_items))
 
     st.markdown("---")
 
-    # Durum filtresi — varsayılan: hepsini göster
+    # Görünüm seçimi
+    view_mode = st.radio(
+        "Görünüm",
+        ["Afiş bazlı", "Tüm ürünler (birleşik)"],
+        horizontal=True,
+        key="pr_view_mode",
+    )
+
     filter_status = st.multiselect(
         "Durum Filtresi",
         ["matched", "review", "unmatched", "pending"],
@@ -1307,16 +1363,26 @@ def _admin_tab_poster_review():
         key="pr_status_filter",
     )
 
-    filtered = [it for it in items if it.get("status") in filter_status]
-
-    if not filtered:
-        st.info("Filtreye uyan kayıt yok.")
-        return
-
-    st.markdown(f"**{len(filtered)} ürün listeleniyor**")
-
-    for item in filtered:
-        _render_review_card(item)
+    if view_mode == "Afiş bazlı":
+        for ptitle, items in items_by_poster.items():
+            filtered = [it for it in items if it.get("status") in filter_status]
+            if not filtered:
+                continue
+            matched_c = sum(1 for it in filtered if it.get("status") == "matched")
+            with st.expander(
+                f"{ptitle} — {matched_c}/{len(filtered)} eşleşti",
+                expanded=(matched_c < len(filtered)),
+            ):
+                for item in filtered:
+                    _render_review_card(item)
+    else:
+        filtered = [it for it in all_items if it.get("status") in filter_status]
+        if not filtered:
+            st.info("Filtreye uyan kayıt yok.")
+            return
+        st.markdown(f"**{len(filtered)} ürün listeleniyor**")
+        for item in filtered:
+            _render_review_card(item)
 
 
 def _render_review_card(item: dict):
@@ -1458,15 +1524,20 @@ def _admin_tab_poster_view():
     else:
         page_no = 1
 
-    # PDF'i indir
-    pdf_url = poster.get("pdf_url", "")
-    if not pdf_url:
-        st.warning("Bu afişe ait PDF URL'si yok. Tekrar yükleyin.")
-        return
+    # PDF'i al: önce session cache, sonra URL'den indir
+    pdf_cache = st.session_state.get("pdf_cache", {})
+    pdf_bytes = pdf_cache.get(poster_id)
 
-    pdf_bytes = _fetch_pdf_bytes_cached(pdf_url)
     if not pdf_bytes:
-        st.error("PDF indirilemedi.")
+        pdf_url = poster.get("pdf_url", "")
+        if pdf_url:
+            pdf_bytes = _fetch_pdf_bytes_cached(pdf_url)
+
+    if not pdf_bytes:
+        st.warning(
+            "PDF bulunamadı. Afiş Yükleme sekmesinden tekrar yükleyin. "
+            "(Yükleme sonrası aynı oturumda görüntüleyebilirsiniz.)"
+        )
         return
 
     # Sayfayı render et
