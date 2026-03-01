@@ -23,18 +23,29 @@ log = logging.getLogger(__name__)
 
 
 def _get_vision_client():
-    """Create Vision client, handling both file-based and env-based credentials."""
+    """Create Vision client, handling file-based, env-based, and Streamlit secrets."""
     from google.cloud import vision
 
-    # Check if GOOGLE_CREDENTIALS_JSON env var has inline JSON
+    # Already configured? Skip re-setup.
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        return vision.ImageAnnotatorClient()
+
+    # Try sources in order: env var → Streamlit secrets
     creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
-    if creds_json and creds_json.startswith("{"):
-        # Write to temp file and set GOOGLE_APPLICATION_CREDENTIALS
+
+    if not creds_json:
+        try:
+            import streamlit as st
+            creds_json = st.secrets.get("GOOGLE_CREDENTIALS_JSON", "")
+        except Exception:
+            pass
+
+    if creds_json and creds_json.strip().startswith("{"):
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         tmp.write(creds_json)
         tmp.close()
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
-        log.info("Using GOOGLE_CREDENTIALS_JSON env var for authentication")
+        log.info("Vision credentials loaded from GOOGLE_CREDENTIALS_JSON")
 
     return vision.ImageAnnotatorClient()
 
