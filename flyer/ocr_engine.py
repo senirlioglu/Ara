@@ -2,16 +2,41 @@
 
 Returns list of word dicts: [{text, x0, y0, x1, y1}, ...]
 Coordinates are in pixels (original image dimensions).
+
+Authentication (supports both):
+  1. GOOGLE_APPLICATION_CREDENTIALS env var pointing to JSON key file
+  2. GOOGLE_CREDENTIALS_JSON env var containing the JSON content directly
+     (for Railway/Heroku where you can't upload files)
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
 from typing import Optional
 
 from flyer.db import get_ocr_cache, save_ocr_cache
 
 log = logging.getLogger(__name__)
+
+
+def _get_vision_client():
+    """Create Vision client, handling both file-based and env-based credentials."""
+    from google.cloud import vision
+
+    # Check if GOOGLE_CREDENTIALS_JSON env var has inline JSON
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
+    if creds_json and creds_json.startswith("{"):
+        # Write to temp file and set GOOGLE_APPLICATION_CREDENTIALS
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        tmp.write(creds_json)
+        tmp.close()
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+        log.info("Using GOOGLE_CREDENTIALS_JSON env var for authentication")
+
+    return vision.ImageAnnotatorClient()
 
 
 def _vision_ocr(image_bytes: bytes) -> list[dict]:
@@ -23,7 +48,7 @@ def _vision_ocr(image_bytes: bytes) -> list[dict]:
     """
     from google.cloud import vision
 
-    client = vision.ImageAnnotatorClient()
+    client = _get_vision_client()
     image = vision.Image(content=image_bytes)
     response = client.document_text_detection(image=image)
 
