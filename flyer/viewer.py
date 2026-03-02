@@ -74,7 +74,11 @@ def viewer_page():
     selected_week_label = st.selectbox("Hafta Secin", list(week_map.keys()))
     week_id = week_map[selected_week_label]
 
-    flyers = get_flyers_for_week(week_id)
+    try:
+        flyers = get_flyers_for_week(week_id)
+    except Exception as e:
+        st.error(f"Afiş verileri yüklenirken hata oluştu: {e}")
+        return
     if not flyers:
         st.info("Bu haftada afis yok.")
         return

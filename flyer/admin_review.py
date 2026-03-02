@@ -120,7 +120,11 @@ def review_page():
     week_id = week_map[selected_week_label]
 
     # --- Flyer/page selector ---
-    flyers = get_flyers_for_week(week_id)
+    try:
+        flyers = get_flyers_for_week(week_id)
+    except Exception as e:
+        st.error(f"Afiş verileri yüklenirken hata oluştu: {e}")
+        return
     if not flyers:
         st.info("Bu haftada afiş yok.")
         return

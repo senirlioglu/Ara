@@ -6,10 +6,13 @@ Tables: weeks, weekly_products, flyers, flyer_ocr, flyer_regions, flyer_matches.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Optional
 
 import streamlit as st
+
+log = logging.getLogger(__name__)
 
 
 @st.cache_resource
@@ -127,15 +130,32 @@ def get_flyers_for_week(week_id: int) -> list[dict]:
     client = get_supabase()
     if not client:
         return []
-    result = (
-        client.table("flyers")
-        .select("*")
-        .eq("week_id", week_id)
-        .order("pdf_filename")
-        .order("page_no")
-        .execute()
-    )
-    return result.data or []
+    try:
+        result = (
+            client.table("flyers")
+            .select("*")
+            .eq("week_id", week_id)
+            .order("pdf_filename")
+            .order("page_no")
+            .execute()
+        )
+        return result.data or []
+    except Exception:
+        # Fallback: chained .order() can fail in some postgrest-py versions;
+        # fetch without server-side ordering and sort in Python instead.
+        try:
+            result = (
+                client.table("flyers")
+                .select("*")
+                .eq("week_id", week_id)
+                .execute()
+            )
+            data = result.data or []
+            data.sort(key=lambda f: (f.get("pdf_filename", ""), f.get("page_no", 0)))
+            return data
+        except Exception as exc:
+            log.error("get_flyers_for_week(week_id=%s) failed: %s", week_id, exc)
+            raise
 
 
 def get_flyer(flyer_id: int) -> Optional[dict]:
