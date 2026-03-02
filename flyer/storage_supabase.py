@@ -112,17 +112,34 @@ def insert_flyer(
     client = get_supabase()
     if not client:
         return None
-    result = client.table("flyers").insert({
-        "week_id": week_id,
-        "pdf_filename": pdf_filename,
-        "page_no": page_no,
-        "image_url": image_url,
-        "img_w": img_w,
-        "img_h": img_h,
-        "zoom": zoom,
-    }).execute()
-    if result.data:
-        return result.data[0]["flyer_id"]
+    # Try new schema first (pdf_filename, page_no, zoom columns)
+    try:
+        result = client.table("flyers").insert({
+            "week_id": week_id,
+            "filename": pdf_filename,
+            "pdf_filename": pdf_filename,
+            "page_no": page_no,
+            "image_url": image_url,
+            "img_w": img_w,
+            "img_h": img_h,
+            "zoom": zoom,
+        }).execute()
+        if result.data:
+            return result.data[0]["flyer_id"]
+    except Exception:
+        # Fallback: old schema (only filename, no page_no/zoom)
+        try:
+            result = client.table("flyers").insert({
+                "week_id": week_id,
+                "filename": pdf_filename,
+                "image_url": image_url,
+                "img_w": img_w,
+                "img_h": img_h,
+            }).execute()
+            if result.data:
+                return result.data[0]["flyer_id"]
+        except Exception as e:
+            log.error(f"insert_flyer failed: {e}")
     return None
 
 
@@ -230,7 +247,10 @@ def delete_regions_for_flyer(flyer_id: int):
     client = get_supabase()
     if not client:
         return
-    client.table("flyer_regions").delete().eq("flyer_id", flyer_id).execute()
+    try:
+        client.table("flyer_regions").delete().eq("flyer_id", flyer_id).execute()
+    except Exception:
+        pass  # Table may not exist yet
 
 
 def batch_insert_regions(flyer_id: int, regions: list[dict]) -> list[dict]:
@@ -252,8 +272,12 @@ def batch_insert_regions(flyer_id: int, regions: list[dict]) -> list[dict]:
             "keys_json": json.dumps(r.get("keys_json", {}), ensure_ascii=False),
         }
         rows.append(row)
-    result = client.table("flyer_regions").insert(rows).execute()
-    return result.data or []
+    try:
+        result = client.table("flyer_regions").insert(rows).execute()
+        return result.data or []
+    except Exception as e:
+        log.error(f"batch_insert_regions failed: {e}")
+        return []
 
 
 def get_regions_for_flyer(flyer_id: int) -> list[dict]:
@@ -270,8 +294,7 @@ def get_regions_for_flyer(flyer_id: int) -> list[dict]:
         )
         return result.data or []
     except Exception:
-        # Fallback: .order() can fail in some postgrest-py versions;
-        # fetch without server-side ordering and sort in Python instead.
+        # Table may not exist (pre-migration) or .order() may fail
         try:
             result = (
                 client.table("flyer_regions")
@@ -282,9 +305,9 @@ def get_regions_for_flyer(flyer_id: int) -> list[dict]:
             data = result.data or []
             data.sort(key=lambda r: r.get("region_id", 0))
             return data
-        except Exception as exc:
-            log.error("get_regions_for_flyer(flyer_id=%s) failed: %s", flyer_id, exc)
-            raise
+        except Exception:
+            # Table doesn't exist yet — return empty
+            return []
 
 
 # ---------------------------------------------------------------------------
@@ -298,17 +321,25 @@ def batch_insert_matches(matches: list[dict]) -> list[dict]:
     rows = []
     for m in matches:
         row = {
-            "region_id": m["region_id"],
             "urun_kodu": m.get("urun_kodu"),
             "urun_aciklamasi": m.get("urun_aciklamasi"),
             "afis_fiyat": m.get("afis_fiyat"),
             "confidence": m.get("confidence", 0),
             "status": m.get("status", "unmatched"),
-            "candidates_json": json.dumps(m.get("candidates", []), ensure_ascii=False),
         }
+        if m.get("region_id"):
+            row["region_id"] = m["region_id"]
+        if m.get("cluster_id"):
+            row["cluster_id"] = m["cluster_id"]
+        if "candidates" in m:
+            row["candidates_json"] = json.dumps(m["candidates"], ensure_ascii=False)
         rows.append(row)
-    result = client.table("flyer_matches").insert(rows).execute()
-    return result.data or []
+    try:
+        result = client.table("flyer_matches").insert(rows).execute()
+        return result.data or []
+    except Exception as e:
+        log.error(f"batch_insert_matches failed: {e}")
+        return []
 
 
 def update_match(match_id: int, updates: dict):
@@ -347,6 +378,53 @@ def get_regions_with_matches(flyer_id: int) -> list[dict]:
     for r in regions:
         m = match_map.get(r["region_id"], {})
         merged.append({**r, "_match": m})
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Legacy compat: old v2 clusters (read-only, for pre-migration data)
+# ---------------------------------------------------------------------------
+
+def get_clusters_with_matches(flyer_id: int) -> list[dict]:
+    """Read old flyer_clusters + matches. Returns [] if table doesn't exist."""
+    client = get_supabase()
+    if not client:
+        return []
+    try:
+        result = (
+            client.table("flyer_clusters")
+            .select("*")
+            .eq("flyer_id", flyer_id)
+            .order("cluster_id")
+            .execute()
+        )
+        clusters = result.data or []
+    except Exception:
+        return []
+
+    if not clusters:
+        return []
+
+    cids = [c["cluster_id"] for c in clusters]
+    try:
+        matches_result = (
+            client.table("flyer_matches")
+            .select("*")
+            .in_("cluster_id", cids)
+            .execute()
+        )
+    except Exception:
+        matches_result = None
+
+    match_map = {}
+    if matches_result and matches_result.data:
+        for m in matches_result.data:
+            match_map[m.get("cluster_id")] = m
+
+    merged = []
+    for c in clusters:
+        m = match_map.get(c["cluster_id"], {})
+        merged.append({**c, "_match": m})
     return merged
 
 

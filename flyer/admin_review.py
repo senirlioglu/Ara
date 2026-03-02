@@ -27,6 +27,7 @@ from flyer.storage_supabase import (
     get_weeks,
     get_flyers_for_week,
     get_regions_with_matches,
+    get_clusters_with_matches,
     get_weekly_products,
     get_ocr_cache,
     update_match,
@@ -157,15 +158,20 @@ def review_page():
     flyer = flyer_labels[selected_label]
     flyer_id = flyer["flyer_id"]
 
-    # --- Regions + matches ---
-    try:
-        regions = get_regions_with_matches(flyer_id)
-    except Exception as e:
-        st.error(f"Bölge verileri yüklenirken hata oluştu: {e}")
-        regions = []
+    # --- Regions (v3) or clusters (v2 legacy) ---
+    regions = get_regions_with_matches(flyer_id)
+    using_legacy = False
+
+    if not regions:
+        # Fallback to old clusters
+        regions = get_clusters_with_matches(flyer_id)
+        if regions:
+            using_legacy = True
 
     # Summary
     if regions:
+        if using_legacy:
+            st.caption("Eski (v2) cluster verisi gösteriliyor. Yeni veri için yeniden yükleme yapın.")
         statuses = [r.get("_match", {}).get("status", "unmatched") for r in regions]
         matched_c = statuses.count("matched")
         review_c = statuses.count("review")
@@ -323,8 +329,8 @@ def _rebuild_from_cache(flyer: dict, week_id: int):
 
 def _render_region_card(region: dict, image_bytes: bytes | None, product_options: dict):
     """Render a single region review card with crop preview."""
-    rid = region.get("region_id", "?")
-    region_text = region.get("region_text", "")
+    rid = region.get("region_id") or region.get("cluster_id", "?")
+    region_text = region.get("region_text") or region.get("ocr_text", "")
     price_value = region.get("price_value", "")
     match = region.get("_match", {})
     match_id = match.get("match_id")

@@ -15,6 +15,7 @@ from flyer.storage_supabase import (
     get_weeks,
     get_flyers_for_week,
     get_regions_with_matches,
+    get_clusters_with_matches,
     get_supabase,
 )
 
@@ -124,12 +125,11 @@ def viewer_page():
         st.error("Gorsel yuklenemedi.")
         return
 
-    # --- Get regions with matches ---
-    try:
-        regions = get_regions_with_matches(flyer_id)
-    except Exception as e:
-        st.error(f"Bölge verileri yüklenirken hata oluştu: {e}")
-        regions = []
+    # --- Get regions (v3) or clusters (v2 legacy) ---
+    regions = get_regions_with_matches(flyer_id)
+    if not regions:
+        regions = get_clusters_with_matches(flyer_id)
+
     matched_regions = [
         r for r in regions
         if r.get("_match", {}).get("status") == "matched"
@@ -161,7 +161,9 @@ def _build_overlay_html(image_bytes: bytes, regions: list[dict]) -> str:
         y0 = r.get("y0", 0) * 100
         w = (r.get("x1", 0) - r.get("x0", 0)) * 100
         h = (r.get("y1", 0) - r.get("y0", 0)) * 100
-        region_id = r.get("region_id", 0)
+        # Support both v3 (region_id) and v2 (cluster_id)
+        item_id = r.get("region_id") or r.get("cluster_id", 0)
+        param_name = "pick_region" if r.get("region_id") else "pick_cluster"
         price = r.get("price_value", "")
 
         match = r.get("_match", {})
@@ -175,8 +177,8 @@ def _build_overlay_html(image_bytes: bytes, regions: list[dict]) -> str:
         <div class="hotspot"
              title="{tooltip}"
              style="left:{x0:.2f}%; top:{y0:.2f}%; width:{w:.2f}%; height:{h:.2f}%;"
-             onclick="pickRegion({region_id})">
-            <span class="price-tag">{price}</span>
+             onclick="pickItem({item_id}, '{param_name}')">
+            {f'<span class="price-tag">{price}</span>' if price else ''}
         </div>
         """)
 
@@ -215,9 +217,9 @@ def _build_overlay_html(image_bytes: bytes, regions: list[dict]) -> str:
         {"".join(hotspot_divs)}
     </div>
     <script>
-    function pickRegion(rid) {{
+    function pickItem(itemId, paramName) {{
         var url = new URL(window.parent.location.href);
-        url.searchParams.set('pick_region', rid);
+        url.searchParams.set(paramName, itemId);
         url.searchParams.set('mode', 'flyer');
         window.parent.location.href = url.toString();
     }}
@@ -299,8 +301,59 @@ def _handle_pick(region_id: int):
 
 
 def _handle_pick_legacy(cluster_id: int):
-    """Legacy support: handle old pick_cluster param by redirecting."""
-    st.warning("Eski cluster sistemi. Yeni sistem icin tekrar yukleme yapın.")
+    """Legacy support: handle old pick_cluster param with cluster_id."""
+    client = get_supabase()
+    if not client:
+        st.error("Veritabani baglantisi yok")
+        return
+
+    try:
+        result = (
+            client.table("flyer_matches")
+            .select("*")
+            .eq("cluster_id", cluster_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        result = type("R", (), {"data": []})()
+
+    if not result.data:
+        st.error("Urun bilgisi bulunamadi")
+        if st.button("Afise Don"):
+            st.query_params.pop("pick_cluster", None)
+            st.rerun()
+        return
+
+    match = result.data[0]
+    urun_kodu = match.get("urun_kodu") or ""
+    urun_aciklamasi = match.get("urun_aciklamasi") or ""
+    afis_fiyat = match.get("afis_fiyat") or ""
+
+    st.markdown(f"""
+    <div style="
+        background: white; border: 2px solid #667eea; border-radius: 16px;
+        padding: 1.2rem; margin-bottom: 1rem;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+    ">
+        <div style="font-weight: 700; font-size: 1.1rem; color: #1e3a5f; margin-bottom: 0.5rem;">
+            {urun_aciklamasi}
+        </div>
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+            {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Fiyat: " + afis_fiyat + "</span>" if afis_fiyat else ""}
+            {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + urun_kodu + "</span>" if urun_kodu else ""}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     if st.button("Afise Don"):
         st.query_params.pop("pick_cluster", None)
         st.rerun()
+
+    if urun_kodu:
+        st.markdown("---")
+        st.subheader("Stok Sonuclari")
+        from urun_ara_app import ara_urun, goster_sonuclar
+        with st.spinner("Araniyor..."):
+            df = ara_urun(urun_kodu)
+            goster_sonuclar(df, urun_kodu)
