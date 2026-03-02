@@ -45,6 +45,29 @@ from flyer.pdf_render import render_page
 log = logging.getLogger(__name__)
 
 
+def _make_flyer_label(flyer: dict) -> str:
+    """Build a safe, user-friendly label for flyer selection."""
+    filename = flyer.get("pdf_filename") or flyer.get("image_url") or "Dosya adı yok"
+    page_no = flyer.get("page_no")
+    if page_no is None:
+        return str(filename)
+    return f"{filename} s.{page_no}"
+
+
+def _build_flyer_label_map(flyers: list[dict]) -> dict[str, dict]:
+    """Map unique labels to flyer records without KeyError risk."""
+    label_map: dict[str, dict] = {}
+    for flyer in flyers:
+        base_label = _make_flyer_label(flyer)
+        label = base_label
+        counter = 2
+        while label in label_map:
+            label = f"{base_label} ({counter})"
+            counter += 1
+        label_map[label] = flyer
+    return label_map
+
+
 def _parse_keys(keys_json) -> dict:
     if isinstance(keys_json, str):
         try:
@@ -129,7 +152,7 @@ def review_page():
         st.info("Bu haftada afiş yok.")
         return
 
-    flyer_labels = {f"{f['pdf_filename']} s.{f['page_no']}": f for f in flyers}
+    flyer_labels = _build_flyer_label_map(flyers)
     selected_label = st.selectbox("Sayfa", list(flyer_labels.keys()), key="rv_flyer")
     flyer = flyer_labels[selected_label]
     flyer_id = flyer["flyer_id"]
