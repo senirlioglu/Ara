@@ -134,8 +134,8 @@ def build_regions(
     win_down: float = 0.04,
     pad_x_frac: float = 0.015,
     pad_y_frac: float = 0.02,
-    min_words: int = 6,
-    min_alpha_words: int = 2,
+    min_words: int = 3,
+    min_alpha_words: int = 1,
     iou_threshold: float = 0.25,
     anchor_radius: int = 180,
 ) -> list[dict]:
