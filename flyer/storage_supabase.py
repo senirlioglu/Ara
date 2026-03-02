@@ -112,67 +112,58 @@ def insert_flyer(
     client = get_supabase()
     if not client:
         return None
-    # Try new schema first (pdf_filename, page_no, zoom columns)
+    # Always insert with OLD schema columns first (guaranteed to exist)
+    base_row = {
+        "week_id": week_id,
+        "filename": pdf_filename,
+        "image_url": image_url,
+        "img_w": img_w,
+        "img_h": img_h,
+    }
     try:
-        result = client.table("flyers").insert({
-            "week_id": week_id,
-            "filename": pdf_filename,
+        result = client.table("flyers").insert(base_row).execute()
+        if not result.data:
+            return None
+        flyer_id = result.data[0]["flyer_id"]
+    except Exception as e:
+        log.error(f"insert_flyer failed: {e}")
+        return None
+
+    # Try to set new v3 columns (pdf_filename, page_no, zoom) if migration was run
+    try:
+        client.table("flyers").update({
             "pdf_filename": pdf_filename,
             "page_no": page_no,
-            "image_url": image_url,
-            "img_w": img_w,
-            "img_h": img_h,
             "zoom": zoom,
-        }).execute()
-        if result.data:
-            return result.data[0]["flyer_id"]
+        }).eq("flyer_id", flyer_id).execute()
     except Exception:
-        # Fallback: old schema (only filename, no page_no/zoom)
-        try:
-            result = client.table("flyers").insert({
-                "week_id": week_id,
-                "filename": pdf_filename,
-                "image_url": image_url,
-                "img_w": img_w,
-                "img_h": img_h,
-            }).execute()
-            if result.data:
-                return result.data[0]["flyer_id"]
-        except Exception as e:
-            log.error(f"insert_flyer failed: {e}")
-    return None
+        pass  # Migration not run yet — ignore silently
+
+    return flyer_id
 
 
 def get_flyers_for_week(week_id: int) -> list[dict]:
     client = get_supabase()
     if not client:
         return []
+    # Fetch without server-side ordering on new columns (may not exist yet).
+    # Sort in Python instead — safe regardless of schema version.
     try:
         result = (
             client.table("flyers")
             .select("*")
             .eq("week_id", week_id)
-            .order("pdf_filename")
-            .order("page_no")
             .execute()
         )
-        return result.data or []
-    except Exception:
-        # Fallback: chained .order() can fail in some postgrest-py versions;
-        # fetch without server-side ordering and sort in Python instead.
-        try:
-            result = (
-                client.table("flyers")
-                .select("*")
-                .eq("week_id", week_id)
-                .execute()
-            )
-            data = result.data or []
-            data.sort(key=lambda f: (f.get("pdf_filename", ""), f.get("page_no", 0)))
-            return data
-        except Exception as exc:
-            log.error("get_flyers_for_week(week_id=%s) failed: %s", week_id, exc)
-            raise
+        data = result.data or []
+        data.sort(key=lambda f: (
+            f.get("pdf_filename") or f.get("filename") or "",
+            f.get("page_no", 0),
+        ))
+        return data
+    except Exception as exc:
+        log.error("get_flyers_for_week(week_id=%s) failed: %s", week_id, exc)
+        raise
 
 
 def get_flyer(flyer_id: int) -> Optional[dict]:
@@ -318,24 +309,37 @@ def batch_insert_matches(matches: list[dict]) -> list[dict]:
     client = get_supabase()
     if not client or not matches:
         return []
-    rows = []
-    for m in matches:
-        row = {
-            "urun_kodu": m.get("urun_kodu"),
-            "urun_aciklamasi": m.get("urun_aciklamasi"),
-            "afis_fiyat": m.get("afis_fiyat"),
-            "confidence": m.get("confidence", 0),
-            "status": m.get("status", "unmatched"),
-        }
-        if m.get("region_id"):
-            row["region_id"] = m["region_id"]
-        if m.get("cluster_id"):
-            row["cluster_id"] = m["cluster_id"]
-        if "candidates" in m:
-            row["candidates_json"] = json.dumps(m["candidates"], ensure_ascii=False)
-        rows.append(row)
+
+    def _build_rows(include_new_cols: bool) -> list[dict]:
+        rows = []
+        for m in matches:
+            row = {
+                "urun_kodu": m.get("urun_kodu"),
+                "urun_aciklamasi": m.get("urun_aciklamasi"),
+                "afis_fiyat": m.get("afis_fiyat"),
+                "confidence": m.get("confidence", 0),
+                "status": m.get("status", "unmatched"),
+            }
+            if include_new_cols:
+                if m.get("region_id"):
+                    row["region_id"] = m["region_id"]
+                if "candidates" in m:
+                    row["candidates_json"] = json.dumps(m["candidates"], ensure_ascii=False)
+            if m.get("cluster_id"):
+                row["cluster_id"] = m["cluster_id"]
+            rows.append(row)
+        return rows
+
+    # Try with new v3 columns (region_id, candidates_json)
     try:
-        result = client.table("flyer_matches").insert(rows).execute()
+        result = client.table("flyer_matches").insert(_build_rows(True)).execute()
+        return result.data or []
+    except Exception:
+        pass
+
+    # Fallback: old schema without region_id / candidates_json
+    try:
+        result = client.table("flyer_matches").insert(_build_rows(False)).execute()
         return result.data or []
     except Exception as e:
         log.error(f"batch_insert_matches failed: {e}")
