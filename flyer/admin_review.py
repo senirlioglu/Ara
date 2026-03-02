@@ -158,7 +158,11 @@ def review_page():
     flyer_id = flyer["flyer_id"]
 
     # --- Regions + matches ---
-    regions = get_regions_with_matches(flyer_id)
+    try:
+        regions = get_regions_with_matches(flyer_id)
+    except Exception as e:
+        st.error(f"Bölge verileri yüklenirken hata oluştu: {e}")
+        regions = []
 
     # Summary
     if regions:
