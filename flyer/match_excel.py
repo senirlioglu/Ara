@@ -91,10 +91,12 @@ def _score_row(
                 score += 20
                 break
 
-    # Fuzzy description match (+0..30)
+    # Fuzzy description match (+0..120)
+    # Give much higher weight to description matches so grocery items can match
+    # even without electronic model codes.
     if fuzz and row_desc:
         ratio = fuzz.token_set_ratio(region_upper, row_combined)
-        score += (ratio / 100.0) * 30
+        score += (ratio / 100.0) * 120
 
     return score
 
