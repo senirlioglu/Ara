@@ -126,6 +126,15 @@ def insert_flyer(
     return None
 
 
+def _normalize_flyer(row: dict) -> dict:
+    """Ensure v2 records (``filename``, no ``page_no``) are v3-compatible."""
+    if "pdf_filename" not in row and "filename" in row:
+        row["pdf_filename"] = row["filename"]
+    row.setdefault("pdf_filename", "")
+    row.setdefault("page_no", 1)
+    return row
+
+
 def get_flyers_for_week(week_id: int) -> list[dict]:
     client = get_supabase()
     if not client:
@@ -139,7 +148,7 @@ def get_flyers_for_week(week_id: int) -> list[dict]:
             .order("page_no")
             .execute()
         )
-        return result.data or []
+        return [_normalize_flyer(r) for r in (result.data or [])]
     except Exception:
         # Fallback: chained .order() can fail in some postgrest-py versions;
         # fetch without server-side ordering and sort in Python instead.
@@ -150,7 +159,7 @@ def get_flyers_for_week(week_id: int) -> list[dict]:
                 .eq("week_id", week_id)
                 .execute()
             )
-            data = result.data or []
+            data = [_normalize_flyer(r) for r in (result.data or [])]
             data.sort(key=lambda f: (f.get("pdf_filename", ""), f.get("page_no", 0)))
             return data
         except Exception as exc:

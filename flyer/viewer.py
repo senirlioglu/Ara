@@ -83,7 +83,7 @@ def viewer_page():
         st.info("Bu haftada afis yok.")
         return
 
-    flyer_labels = {f"{f['pdf_filename']} s.{f['page_no']}": f for f in flyers}
+    flyer_labels = {f"{f.get('pdf_filename', f.get('filename', ''))} s.{f.get('page_no', 1)}": f for f in flyers}
     selected_label = st.selectbox("Afis Secin", list(flyer_labels.keys()))
     flyer = flyer_labels[selected_label]
     flyer_id = flyer["flyer_id"]
