@@ -260,14 +260,31 @@ def get_regions_for_flyer(flyer_id: int) -> list[dict]:
     client = get_supabase()
     if not client:
         return []
-    result = (
-        client.table("flyer_regions")
-        .select("*")
-        .eq("flyer_id", flyer_id)
-        .order("region_id")
-        .execute()
-    )
-    return result.data or []
+    try:
+        result = (
+            client.table("flyer_regions")
+            .select("*")
+            .eq("flyer_id", flyer_id)
+            .order("region_id")
+            .execute()
+        )
+        return result.data or []
+    except Exception:
+        # Fallback: .order() can fail in some postgrest-py versions;
+        # fetch without server-side ordering and sort in Python instead.
+        try:
+            result = (
+                client.table("flyer_regions")
+                .select("*")
+                .eq("flyer_id", flyer_id)
+                .execute()
+            )
+            data = result.data or []
+            data.sort(key=lambda r: r.get("region_id", 0))
+            return data
+        except Exception as exc:
+            log.error("get_regions_for_flyer(flyer_id=%s) failed: %s", flyer_id, exc)
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -310,15 +327,21 @@ def get_regions_with_matches(flyer_id: int) -> list[dict]:
     if not regions:
         return []
     rids = [r["region_id"] for r in regions]
-    matches_result = (
-        client.table("flyer_matches")
-        .select("*")
-        .in_("region_id", rids)
-        .execute()
-    )
+    try:
+        matches_result = (
+            client.table("flyer_matches")
+            .select("*")
+            .in_("region_id", rids)
+            .execute()
+        )
+    except Exception as exc:
+        log.error("get_regions_with_matches: matches query failed for flyer %s: %s", flyer_id, exc)
+        matches_result = None
+
     match_map = {}
-    for m in (matches_result.data or []):
-        match_map[m["region_id"]] = m
+    if matches_result and matches_result.data:
+        for m in matches_result.data:
+            match_map[m["region_id"]] = m
 
     merged = []
     for r in regions:
