@@ -5,8 +5,10 @@ Two price patterns:
   2. Small prices: 799, 119, 299, 459      (2-4 digit, contextually validated)
 
 Small prices require contextual validation:
-  - Must be near ₺/TL text, or within a price-like neighborhood
-  - Must be >= 49
+  - Range 99..9999
+  - Reject if near inch (") or units (cm/ml/kg/l)
+  - Reject if part of phone pattern (444 xx xx)
+  - Prefer proximity to TL/₺ indicator or another large price
 """
 
 from __future__ import annotations
@@ -20,49 +22,44 @@ RE_LARGE_PRICE = re.compile(r"\b(\d{1,3}(?:\.\d{3})+)(?:,\d{2})?\b")
 # Pattern 2: Small integer prices (799, 119, 49)
 RE_SMALL_PRICE = re.compile(r"^\d{2,4}$")
 
+# Phone patterns to reject
+RE_PHONE_444 = re.compile(r"\b444\s?\d{2}\s?\d{2}\b")
+RE_PHONE_0850 = re.compile(r"\b0850\b")
+
 # TL/₺ indicator words (for contextual validation of small prices)
 TL_INDICATORS = {"TL", "₺", "LIRA"}
 
-# Min price threshold
-MIN_SMALL_PRICE = 49
+# Unit words near which a number is NOT a price
+UNIT_INDICATORS = {'"', "CM", "ML", "KG", "LT", "L", "MM", "GR", "İNÇ", "INÇ", "INCH"}
+
+# Min/max price threshold for small prices
+MIN_SMALL_PRICE = 99
+MAX_SMALL_PRICE = 9999
 
 
 def _word_center(w: dict) -> tuple[float, float]:
     return (w["x0"] + w["x1"]) / 2, (w["y0"] + w["y1"]) / 2
 
 
-def _distance(a: dict, b: dict) -> float:
-    ax, ay = _word_center(a)
-    bx, by = _word_center(b)
-    return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
-
-
 def find_prices(
     words: list[dict],
     img_w: int,
     img_h: int,
-    tl_proximity: float = 0.08,
 ) -> list[dict]:
     """Detect price words from OCR output.
 
     Args:
         words: [{text, x0, y0, x1, y1}, ...] in pixel coords.
         img_w, img_h: Image dimensions in pixels.
-        tl_proximity: Max distance (fraction of image diagonal) to TL indicator
-                      for small-price contextual validation.
 
     Returns:
         [{text, value, x0, y0, x1, y1}, ...]
         value is the raw price string (e.g. "42.999" or "799").
     """
-    diag = (img_w ** 2 + img_h ** 2) ** 0.5
-    tl_radius = tl_proximity * diag
 
     # Pre-locate TL indicator words
     tl_words = [w for w in words if w["text"].upper().strip(".,") in TL_INDICATORS]
 
-    # Also locate large-price words (they form a "price neighborhood")
-    large_price_words: list[dict] = []
     prices: list[dict] = []
 
     # Pass 1: Large prices (always valid)
@@ -78,7 +75,6 @@ def find_prices(
                 "x1": w["x1"],
                 "y1": w["y1"],
             })
-            large_price_words.append(w)
 
     # Pass 2: Small prices (contextually validated)
     for w in words:
@@ -91,7 +87,7 @@ def find_prices(
         except ValueError:
             continue
 
-        if val < MIN_SMALL_PRICE:
+        if val < MIN_SMALL_PRICE or val > MAX_SMALL_PRICE:
             continue
 
         # Skip if already captured as part of a large price
@@ -102,11 +98,36 @@ def find_prices(
         if already:
             continue
 
-        # Contextual validation: near a TL indicator or near another large price
-        near_tl = any(_distance(w, tw) < tl_radius for tw in tl_words)
-        near_price = any(_distance(w, pw) < tl_radius for pw in large_price_words)
+        # Gather nearby words (within 160px x, 80px y) for contextual validation
+        cx, cy = _word_center(w)
+        near_texts = []
+        for u in words:
+            ucx, ucy = _word_center(u)
+            if abs(ucx - cx) < 160 and abs(ucy - cy) < 80:
+                near_texts.append(u["text"].upper().strip(".,"))
 
-        if near_tl or near_price:
+        near_str = " ".join(near_texts)
+
+        # Reject: near inch mark (")
+        if any('"' in nt or '"' in nt or '"' in nt for nt in near_texts):
+            continue
+
+        # Reject: near unit indicators (cm, ml, kg, l, mm, gr)
+        if any(nt in UNIT_INDICATORS for nt in near_texts):
+            continue
+
+        # Reject: part of phone pattern (444 xx xx, 0850)
+        if RE_PHONE_444.search(near_str) or RE_PHONE_0850.search(near_str):
+            continue
+
+        # Validate: near a TL indicator or near another large price
+        near_tl = any(nt in TL_INDICATORS for nt in near_texts)
+        near_large = any(
+            abs(_word_center(p)[0] - cx) < 160 and abs(_word_center(p)[1] - cy) < 80
+            for p in prices
+        )
+
+        if near_tl or near_large:
             prices.append({
                 "text": text,
                 "value": text,
