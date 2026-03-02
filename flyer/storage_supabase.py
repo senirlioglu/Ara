@@ -6,10 +6,13 @@ Tables: weeks, weekly_products, flyers, flyer_ocr, flyer_regions, flyer_matches.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Optional
 
 import streamlit as st
+
+log = logging.getLogger(__name__)
 
 
 @st.cache_resource
@@ -127,15 +130,19 @@ def get_flyers_for_week(week_id: int) -> list[dict]:
     client = get_supabase()
     if not client:
         return []
-    result = (
-        client.table("flyers")
-        .select("*")
-        .eq("week_id", week_id)
-        .order("pdf_filename")
-        .order("page_no")
-        .execute()
-    )
-    return result.data or []
+    try:
+        result = (
+            client.table("flyers")
+            .select("*")
+            .eq("week_id", week_id)
+            .execute()
+        )
+    except Exception as e:
+        log.error("get_flyers_for_week query failed: %s", e)
+        raise
+    data = result.data or []
+    data.sort(key=lambda r: (r.get("pdf_filename", ""), r.get("page_no", 0)))
+    return data
 
 
 def get_flyer(flyer_id: int) -> Optional[dict]:

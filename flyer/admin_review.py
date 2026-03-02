@@ -120,7 +120,18 @@ def review_page():
     week_id = week_map[selected_week_label]
 
     # --- Flyer/page selector ---
-    flyers = get_flyers_for_week(week_id)
+    try:
+        flyers = get_flyers_for_week(week_id)
+    except Exception as e:
+        msg = f"Afiş verileri yüklenirken hata oluştu: {e}"
+        if hasattr(e, "code"):
+            msg += f"\n\nPostgREST hata kodu: {e.code}"
+        if hasattr(e, "details") and e.details:
+            msg += f"\nDetay: {e.details}"
+        if hasattr(e, "hint") and e.hint:
+            msg += f"\nİpucu: {e.hint}"
+        st.error(msg)
+        return
     if not flyers:
         st.info("Bu haftada afiş yok.")
         return
