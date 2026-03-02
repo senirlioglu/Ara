@@ -1,25 +1,25 @@
-"""Viewer UI — show flyer image with clickable hotspot overlays.
+"""Viewer UI — store staff flyer viewer with clickable hotspot overlays.
 
-Click hotspot → run_search(urun_kodu) for stock lookup.
+Click region hotspot → show matched product info → run_search(urun_kodu).
 """
 
 from __future__ import annotations
 
 import base64
+import json
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from flyer.db import (
+from flyer.storage_supabase import (
     get_weeks,
     get_flyers_for_week,
-    get_clusters_with_matches,
+    get_regions_with_matches,
     get_supabase,
 )
 
 
 def _fetch_image_bytes(url: str) -> bytes | None:
-    """Download image from URL."""
     if not url:
         return None
     try:
@@ -53,9 +53,15 @@ def viewer_page():
 
     # --- Check if user picked a hotspot ---
     params = st.query_params
+    pick_region_id = params.get("pick_region")
+    if pick_region_id:
+        _handle_pick(int(pick_region_id))
+        return
+
+    # Legacy support for old pick_cluster param
     pick_cluster_id = params.get("pick_cluster")
     if pick_cluster_id:
-        _handle_pick(int(pick_cluster_id))
+        _handle_pick_legacy(int(pick_cluster_id))
         return
 
     # --- Week + Flyer selection ---
@@ -73,9 +79,9 @@ def viewer_page():
         st.info("Bu haftada afis yok.")
         return
 
-    flyer_map = {f["filename"]: f for f in flyers}
-    selected_fname = st.selectbox("Afis Secin", list(flyer_map.keys()))
-    flyer = flyer_map[selected_fname]
+    flyer_labels = {f"{f['pdf_filename']} s.{f['page_no']}": f for f in flyers}
+    selected_label = st.selectbox("Afis Secin", list(flyer_labels.keys()))
+    flyer = flyer_labels[selected_label]
     flyer_id = flyer["flyer_id"]
 
     # --- Get image bytes ---
@@ -91,54 +97,55 @@ def viewer_page():
         st.error("Gorsel yuklenemedi.")
         return
 
-    # --- Get clusters with matches ---
-    clusters = get_clusters_with_matches(flyer_id)
-    matched_clusters = [
-        c for c in clusters
-        if c.get("_match", {}).get("status") == "matched"
+    # --- Get regions with matches ---
+    regions = get_regions_with_matches(flyer_id)
+    matched_regions = [
+        r for r in regions
+        if r.get("_match", {}).get("status") == "matched"
     ]
 
-    if not matched_clusters:
-        st.warning("Bu afiste henuz tiklanabilir alan tanimlanmamis.")
+    if not matched_regions:
+        st.warning("Bu sayfada henuz tiklanabilir alan tanimlanmamis.")
         st.image(image_bytes, use_container_width=True)
         return
 
     # --- Render overlay ---
-    html = _build_overlay_html(image_bytes, matched_clusters)
+    html = _build_overlay_html(image_bytes, matched_regions)
     components.html(html, height=1200, scrolling=True)
-    st.caption(f"{len(matched_clusters)} tiklanabilir urun alani mevcut.")
+    st.caption(f"{len(matched_regions)} tiklanabilir urun alani mevcut.")
 
 
-def _build_overlay_html(image_bytes: bytes, clusters: list[dict]) -> str:
+def _build_overlay_html(image_bytes: bytes, regions: list[dict]) -> str:
     """Build HTML with clickable hotspot overlays."""
     img_b64 = base64.b64encode(image_bytes).decode()
 
-    # Detect image type
     if image_bytes[:4] == b'\x89PNG':
         mime = "image/png"
     else:
         mime = "image/jpeg"
 
     hotspot_divs = []
-    for cl in clusters:
-        x0 = cl.get("x0", 0) * 100
-        y0 = cl.get("y0", 0) * 100
-        w = (cl.get("x1", 0) - cl.get("x0", 0)) * 100
-        h = (cl.get("y1", 0) - cl.get("y0", 0)) * 100
-        cluster_id = cl.get("cluster_id", 0)
+    for r in regions:
+        x0 = r.get("x0", 0) * 100
+        y0 = r.get("y0", 0) * 100
+        w = (r.get("x1", 0) - r.get("x0", 0)) * 100
+        h = (r.get("y1", 0) - r.get("y0", 0)) * 100
+        region_id = r.get("region_id", 0)
+        price = r.get("price_value", "")
 
-        match = cl.get("_match", {})
+        match = r.get("_match", {})
         desc = (match.get("urun_aciklamasi") or "")[:60]
-        fiyat = match.get("afis_fiyat") or ""
+        fiyat = match.get("afis_fiyat") or price
         tooltip = desc
         if fiyat:
-            tooltip += f" - {fiyat}"
+            tooltip += f" - {fiyat} TL"
 
         hotspot_divs.append(f"""
         <div class="hotspot"
              title="{tooltip}"
              style="left:{x0:.2f}%; top:{y0:.2f}%; width:{w:.2f}%; height:{h:.2f}%;"
-             onclick="pickCluster({cluster_id})">
+             onclick="pickRegion({region_id})">
+            <span class="price-tag">{price}</span>
         </div>
         """)
 
@@ -161,15 +168,25 @@ def _build_overlay_html(image_bytes: bytes, clusters: list[dict]) -> str:
         border-color:rgba(102,126,234,1);
         box-shadow:0 0 12px rgba(102,126,234,0.4);
     }}
+    .price-tag {{
+        position:absolute;
+        bottom:2px; right:4px;
+        font-size:10px;
+        color:white;
+        background:rgba(102,126,234,0.7);
+        padding:1px 5px;
+        border-radius:4px;
+        pointer-events:none;
+    }}
     </style></head><body>
     <div class="wrap">
         <img src="data:{mime};base64,{img_b64}" />
         {"".join(hotspot_divs)}
     </div>
     <script>
-    function pickCluster(cid) {{
+    function pickRegion(rid) {{
         var url = new URL(window.parent.location.href);
-        url.searchParams.set('pick_cluster', cid);
+        url.searchParams.set('pick_region', rid);
         url.searchParams.set('mode', 'flyer');
         window.parent.location.href = url.toString();
     }}
@@ -178,18 +195,17 @@ def _build_overlay_html(image_bytes: bytes, clusters: list[dict]) -> str:
     """
 
 
-def _handle_pick(cluster_id: int):
-    """Handle hotspot click — show product info + trigger search."""
+def _handle_pick(region_id: int):
+    """Handle region hotspot click — show product info + trigger search."""
     client = get_supabase()
     if not client:
         st.error("Veritabani baglantisi yok")
         return
 
-    # Get match for this cluster
     result = (
         client.table("flyer_matches")
         .select("*")
-        .eq("cluster_id", cluster_id)
+        .eq("region_id", region_id)
         .limit(1)
         .execute()
     )
@@ -202,6 +218,18 @@ def _handle_pick(cluster_id: int):
     urun_aciklamasi = match.get("urun_aciklamasi") or ""
     afis_fiyat = match.get("afis_fiyat") or ""
     search_term = urun_kodu
+
+    # Also get price from region
+    region_result = (
+        client.table("flyer_regions")
+        .select("price_value")
+        .eq("region_id", region_id)
+        .limit(1)
+        .execute()
+    )
+    detected_price = ""
+    if region_result.data:
+        detected_price = region_result.data[0].get("price_value", "")
 
     # Product info card
     st.markdown(f"""
@@ -218,17 +246,16 @@ def _handle_pick(cluster_id: int):
         </div>
         <div style="display: flex; gap: 12px; flex-wrap: wrap;">
             {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Afis Fiyat: " + afis_fiyat + "</span>" if afis_fiyat else ""}
+            {"<span style='background: #ff7675; color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>OCR Fiyat: " + detected_price + "</span>" if detected_price else ""}
             {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + urun_kodu + "</span>" if urun_kodu else ""}
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Back button
     if st.button("Afise Don"):
-        st.query_params.pop("pick_cluster", None)
+        st.query_params.pop("pick_region", None)
         st.rerun()
 
-    # Trigger search
     if search_term:
         st.markdown("---")
         st.subheader("Stok Sonuclari")
@@ -238,3 +265,11 @@ def _handle_pick(cluster_id: int):
             goster_sonuclar(df, search_term)
     else:
         st.warning("Bu urun icin arama terimi tanimlanmamis.")
+
+
+def _handle_pick_legacy(cluster_id: int):
+    """Legacy support: handle old pick_cluster param by redirecting."""
+    st.warning("Eski cluster sistemi. Yeni sistem icin tekrar yukleme yapın.")
+    if st.button("Afise Don"):
+        st.query_params.pop("pick_cluster", None)
+        st.rerun()

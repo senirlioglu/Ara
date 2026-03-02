@@ -1,4 +1,7 @@
-"""Flyer DB helpers — Supabase client + CRUD for flyer pipeline."""
+"""Supabase CRUD for flyer pipeline v3 (price-anchored regions).
+
+Tables: weeks, weekly_products, flyers, flyer_ocr, flyer_regions, flyer_matches.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +31,6 @@ def get_supabase():
 # ---------------------------------------------------------------------------
 
 def upsert_week(week_date: str) -> Optional[int]:
-    """Insert or return existing week. Returns week_id."""
     client = get_supabase()
     if not client:
         return None
@@ -62,15 +64,13 @@ def get_weeks(limit: int = 20) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Weekly products (Excel import — batch)
+# Weekly products
 # ---------------------------------------------------------------------------
 
 def batch_insert_weekly_products(week_id: int, rows: list[dict]) -> int:
-    """Batch insert Excel rows into weekly_products. Returns count."""
     client = get_supabase()
     if not client or not rows:
         return 0
-    # Tag with week_id
     for r in rows:
         r["week_id"] = week_id
     result = client.table("weekly_products").insert(rows).execute()
@@ -92,7 +92,6 @@ def get_weekly_products(week_id: int) -> list[dict]:
 
 
 def delete_weekly_products(week_id: int):
-    """Remove all products for a week (re-import)."""
     client = get_supabase()
     if not client:
         return
@@ -100,21 +99,24 @@ def delete_weekly_products(week_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Flyers
+# Flyers (one record per PDF page)
 # ---------------------------------------------------------------------------
 
-def insert_flyer(week_id: int, filename: str, image_url: str,
-                 img_w: int, img_h: int) -> Optional[int]:
-    """Insert a flyer record. Returns flyer_id."""
+def insert_flyer(
+    week_id: int, pdf_filename: str, page_no: int,
+    image_url: str, img_w: int, img_h: int, zoom: float = 3.5,
+) -> Optional[int]:
     client = get_supabase()
     if not client:
         return None
     result = client.table("flyers").insert({
         "week_id": week_id,
-        "filename": filename,
+        "pdf_filename": pdf_filename,
+        "page_no": page_no,
         "image_url": image_url,
         "img_w": img_w,
         "img_h": img_h,
+        "zoom": zoom,
     }).execute()
     if result.data:
         return result.data[0]["flyer_id"]
@@ -129,7 +131,8 @@ def get_flyers_for_week(week_id: int) -> list[dict]:
         client.table("flyers")
         .select("*")
         .eq("week_id", week_id)
-        .order("flyer_id")
+        .order("pdf_filename")
+        .order("page_no")
         .execute()
     )
     return result.data or []
@@ -149,27 +152,30 @@ def get_flyer(flyer_id: int) -> Optional[dict]:
     return result.data[0] if result.data else None
 
 
+def update_flyer(flyer_id: int, updates: dict):
+    client = get_supabase()
+    if not client:
+        return
+    client.table("flyers").update(updates).eq("flyer_id", flyer_id).execute()
+
+
 # ---------------------------------------------------------------------------
 # OCR cache
 # ---------------------------------------------------------------------------
 
 def save_ocr_cache(flyer_id: int, ocr_words: list[dict]):
-    """Insert or update OCR cache for a flyer."""
     client = get_supabase()
     if not client:
         return
-    row = {"flyer_id": flyer_id, "ocr_words": json.dumps(ocr_words)}
-    # Upsert: try insert, on conflict update
+    row = {"flyer_id": flyer_id, "ocr_words": json.dumps(ocr_words, ensure_ascii=False)}
     try:
         client.table("flyer_ocr").upsert(row).execute()
     except Exception:
-        # Fallback: delete + insert
         client.table("flyer_ocr").delete().eq("flyer_id", flyer_id).execute()
         client.table("flyer_ocr").insert(row).execute()
 
 
 def get_ocr_cache(flyer_id: int) -> Optional[list[dict]]:
-    """Return cached OCR words, or None if not cached."""
     client = get_supabase()
     if not client:
         return None
@@ -188,40 +194,57 @@ def get_ocr_cache(flyer_id: int) -> Optional[list[dict]]:
     return raw
 
 
-# ---------------------------------------------------------------------------
-# Clusters
-# ---------------------------------------------------------------------------
-
-def delete_clusters_for_flyer(flyer_id: int):
-    """Delete all clusters (and cascade matches) for a flyer."""
+def delete_ocr_cache(flyer_id: int):
     client = get_supabase()
     if not client:
         return
-    client.table("flyer_clusters").delete().eq("flyer_id", flyer_id).execute()
+    client.table("flyer_ocr").delete().eq("flyer_id", flyer_id).execute()
 
 
-def batch_insert_clusters(flyer_id: int, clusters: list[dict]) -> list[dict]:
-    """Batch insert cluster records. Returns inserted rows with IDs."""
+# ---------------------------------------------------------------------------
+# Regions
+# ---------------------------------------------------------------------------
+
+def delete_regions_for_flyer(flyer_id: int):
+    """Delete all regions (and cascade matches) for a flyer."""
     client = get_supabase()
-    if not client or not clusters:
+    if not client:
+        return
+    client.table("flyer_regions").delete().eq("flyer_id", flyer_id).execute()
+
+
+def batch_insert_regions(flyer_id: int, regions: list[dict]) -> list[dict]:
+    """Batch insert region records. Returns inserted rows with IDs."""
+    client = get_supabase()
+    if not client or not regions:
         return []
-    for c in clusters:
-        c["flyer_id"] = flyer_id
-        if "keys_json" in c and isinstance(c["keys_json"], dict):
-            c["keys_json"] = json.dumps(c["keys_json"])
-    result = client.table("flyer_clusters").insert(clusters).execute()
+    rows = []
+    for r in regions:
+        row = {
+            "flyer_id": flyer_id,
+            "price_value": r.get("price_value"),
+            "price_bbox": json.dumps(r["price_bbox"]) if r.get("price_bbox") else None,
+            "x0": r["x0"],
+            "y0": r["y0"],
+            "x1": r["x1"],
+            "y1": r["y1"],
+            "region_text": r.get("region_text", ""),
+            "keys_json": json.dumps(r.get("keys_json", {}), ensure_ascii=False),
+        }
+        rows.append(row)
+    result = client.table("flyer_regions").insert(rows).execute()
     return result.data or []
 
 
-def get_clusters_for_flyer(flyer_id: int) -> list[dict]:
+def get_regions_for_flyer(flyer_id: int) -> list[dict]:
     client = get_supabase()
     if not client:
         return []
     result = (
-        client.table("flyer_clusters")
+        client.table("flyer_regions")
         .select("*")
         .eq("flyer_id", flyer_id)
-        .order("cluster_id")
+        .order("region_id")
         .execute()
     )
     return result.data or []
@@ -232,11 +255,22 @@ def get_clusters_for_flyer(flyer_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def batch_insert_matches(matches: list[dict]) -> list[dict]:
-    """Batch insert match records. Returns inserted rows."""
     client = get_supabase()
     if not client or not matches:
         return []
-    result = client.table("flyer_matches").insert(matches).execute()
+    rows = []
+    for m in matches:
+        row = {
+            "region_id": m["region_id"],
+            "urun_kodu": m.get("urun_kodu"),
+            "urun_aciklamasi": m.get("urun_aciklamasi"),
+            "afis_fiyat": m.get("afis_fiyat"),
+            "confidence": m.get("confidence", 0),
+            "status": m.get("status", "unmatched"),
+            "candidates_json": json.dumps(m.get("candidates", []), ensure_ascii=False),
+        }
+        rows.append(row)
+    result = client.table("flyer_matches").insert(rows).execute()
     return result.data or []
 
 
@@ -247,50 +281,52 @@ def update_match(match_id: int, updates: dict):
     client.table("flyer_matches").update(updates).eq("match_id", match_id).execute()
 
 
-def get_matches_for_flyer(flyer_id: int) -> list[dict]:
-    """Return matches with cluster info for a flyer."""
+def get_regions_with_matches(flyer_id: int) -> list[dict]:
+    """Return regions + their match info for a flyer (viewer/review use)."""
     client = get_supabase()
     if not client:
         return []
-    clusters = get_clusters_for_flyer(flyer_id)
-    if not clusters:
+    regions = get_regions_for_flyer(flyer_id)
+    if not regions:
         return []
-    cids = [c["cluster_id"] for c in clusters]
-    cluster_map = {c["cluster_id"]: c for c in clusters}
-    result = (
-        client.table("flyer_matches")
-        .select("*")
-        .in_("cluster_id", cids)
-        .execute()
-    )
-    merged = []
-    for m in (result.data or []):
-        cl = cluster_map.get(m["cluster_id"], {})
-        merged.append({**m, "_cluster": cl})
-    return merged
-
-
-def get_clusters_with_matches(flyer_id: int) -> list[dict]:
-    """Return clusters + their match info for a flyer (viewer use)."""
-    client = get_supabase()
-    if not client:
-        return []
-    clusters = get_clusters_for_flyer(flyer_id)
-    if not clusters:
-        return []
-    cids = [c["cluster_id"] for c in clusters]
+    rids = [r["region_id"] for r in regions]
     matches_result = (
         client.table("flyer_matches")
         .select("*")
-        .in_("cluster_id", cids)
+        .in_("region_id", rids)
         .execute()
     )
     match_map = {}
     for m in (matches_result.data or []):
-        match_map[m["cluster_id"]] = m
+        match_map[m["region_id"]] = m
 
     merged = []
-    for c in clusters:
-        m = match_map.get(c["cluster_id"], {})
-        merged.append({**c, "_match": m})
+    for r in regions:
+        m = match_map.get(r["region_id"], {})
+        merged.append({**r, "_match": m})
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Storage bucket helpers
+# ---------------------------------------------------------------------------
+
+def upload_to_storage(
+    bucket: str, path: str, data: bytes, content_type: str = "image/png",
+) -> str:
+    """Upload file to Supabase Storage. Returns public URL."""
+    client = get_supabase()
+    if not client:
+        return ""
+    try:
+        try:
+            client.storage.from_(bucket).remove([path])
+        except Exception:
+            pass
+        client.storage.from_(bucket).upload(
+            path, data,
+            file_options={"content-type": content_type},
+        )
+        return client.storage.from_(bucket).get_public_url(path)
+    except Exception:
+        return ""
