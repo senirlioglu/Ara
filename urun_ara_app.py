@@ -920,12 +920,27 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 def _mapping_tool_tab():
     """Manuel bbox seçimi ile ürün eşleştirme aracı."""
+    import base64
     import io
     import json
     import uuid as _uuid
 
-    from streamlit_drawable_canvas import st_canvas as _st_canvas
     from PIL import Image as _PILImage
+
+    # --- Monkey-patch: streamlit-drawable-canvas uses the removed
+    #     streamlit.elements.image.image_to_url internal API.
+    #     Provide a shim that converts PIL Image → base64 data-URL.
+    import streamlit.elements.image as _st_img_mod
+    if not hasattr(_st_img_mod, "image_to_url"):
+        def _image_to_url(image, width, clamp, channels, output_format, image_id):
+            buf = io.BytesIO()
+            image.save(buf, format=output_format)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            mime = f"image/{output_format.lower()}"
+            return f"data:{mime};base64,{b64}"
+        _st_img_mod.image_to_url = _image_to_url
+
+    from streamlit_drawable_canvas import st_canvas as _st_canvas
 
     from pdf_render import render_pdf_bytes_to_pages
     from vision_ocr import init_gcp_credentials, ocr_crop, make_ocr_cache_key
