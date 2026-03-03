@@ -920,10 +920,12 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 def _mapping_tool_tab():
     """Manuel bbox seçimi ile ürün eşleştirme aracı."""
-    import base64
+    import io
     import json
     import uuid as _uuid
-    from pathlib import Path
+
+    from streamlit_drawable_canvas import st_canvas as _st_canvas
+    from PIL import Image as _PILImage
 
     from pdf_render import render_pdf_bytes_to_pages
     from vision_ocr import init_gcp_credentials, ocr_crop, make_ocr_cache_key
@@ -1018,27 +1020,64 @@ def _mapping_tool_tab():
     col_img, col_ctrl = st.columns([3, 2])
 
     with col_img:
-        # Canvas component
-        b64 = base64.b64encode(page["png_bytes"]).decode()
-        img_src = f"data:image/png;base64,{b64}"
+        # Drawable canvas — user draws rectangles, we read bbox back
+        bg_img = _PILImage.open(io.BytesIO(page["png_bytes"]))
+        img_w, img_h = bg_img.size
 
+        # Scale down for display (max 700px wide)
+        display_w = min(700, img_w)
+        scale = display_w / img_w
+        display_h = int(img_h * scale)
+
+        # Build initial_drawing with saved boxes so they're visible
         saved = list_mappings(st.session_state["mt_week_id"], page["flyer_filename"], page["page_no"])
-        saved_boxes = [
-            {"x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"], "label": m.get("urun_kodu") or "?"}
-            for m in saved
-        ]
+        initial_objects = []
+        for m in saved:
+            initial_objects.append({
+                "type": "rect",
+                "left": m["x0"] * display_w,
+                "top": m["y0"] * display_h,
+                "width": (m["x1"] - m["x0"]) * display_w,
+                "height": (m["y1"] - m["y0"]) * display_h,
+                "fill": "rgba(0, 204, 102, 0.10)",
+                "stroke": "#00cc66",
+                "strokeWidth": 2,
+                "selectable": False,
+                "evented": False,
+            })
+        initial_drawing = {"version": "4.4.0", "objects": initial_objects} if initial_objects else None
 
-        canvas_path = Path(__file__).resolve().parent / "components" / "canvas.html"
-        canvas_html = canvas_path.read_text()
-        canvas_html = canvas_html.replace("__IMG_SRC__", img_src)
-        canvas_html = canvas_html.replace("__SAVED_BOXES__", json.dumps(saved_boxes))
+        canvas_result = _st_canvas(
+            fill_color="rgba(255, 68, 68, 0.15)",
+            stroke_width=2,
+            stroke_color="#ff4444",
+            background_image=bg_img,
+            drawing_mode="rect",
+            height=display_h,
+            width=display_w,
+            initial_drawing=initial_drawing,
+            update_streamlit=True,
+            key=f"mt_canvas_{sel_idx}",
+        )
 
-        result = st.components.v1.html(canvas_html, height=820, scrolling=True, key=f"mt_canvas_{page['flyer_id']}")
-
-        if result and isinstance(result, dict) and "x0" in result:
-            st.session_state["mt_bbox"] = result
-            st.session_state["mt_ocr_text"] = None
-            st.session_state["mt_manual_mode"] = False
+        # Extract the last user-drawn rectangle (skip saved green ones)
+        if canvas_result.json_data is not None:
+            user_rects = [
+                obj for obj in canvas_result.json_data.get("objects", [])
+                if obj.get("stroke") != "#00cc66"
+            ]
+            if user_rects:
+                last = user_rects[-1]
+                new_bbox = {
+                    "x0": round(max(0.0, last["left"] / display_w), 5),
+                    "y0": round(max(0.0, last["top"] / display_h), 5),
+                    "x1": round(min(1.0, (last["left"] + last["width"] * last.get("scaleX", 1)) / display_w), 5),
+                    "y1": round(min(1.0, (last["top"] + last["height"] * last.get("scaleY", 1)) / display_h), 5),
+                }
+                if new_bbox != st.session_state.get("mt_bbox"):
+                    st.session_state["mt_bbox"] = new_bbox
+                    st.session_state["mt_ocr_text"] = None
+                    st.session_state["mt_manual_mode"] = False
 
     with col_ctrl:
         bbox = st.session_state["mt_bbox"]
