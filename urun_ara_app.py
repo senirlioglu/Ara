@@ -915,6 +915,284 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 
 # ============================================================================
+# MAPPING TOOL TAB (Manuel Kutu Çizimi + OCR Önerileri)
+# ============================================================================
+
+def _mapping_tool_tab():
+    """Manuel bbox seçimi ile ürün eşleştirme aracı."""
+    import base64
+    import json
+    import uuid as _uuid
+    from pathlib import Path
+
+    from pdf_render import render_pdf_bytes_to_pages
+    from vision_ocr import init_gcp_credentials, ocr_crop, make_ocr_cache_key
+    from suggest_match import top_k_candidates
+    from storage import init_db, save_mapping, list_mappings, delete_mapping
+
+    init_db()
+    try:
+        init_gcp_credentials()
+    except Exception:
+        pass
+
+    # --- Session state defaults ---
+    for k, v in {
+        "mt_pages": [],
+        "mt_excel_df": None,
+        "mt_week_id": datetime.now().strftime("%Y-%m-%d"),
+        "mt_bbox": None,
+        "mt_ocr_text": None,
+        "mt_ocr_cache": {},
+        "mt_manual_mode": False,
+    }.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    # --- Upload controls ---
+    st.subheader("Eşleştirme Aracı — Manuel Kutu + OCR Önerileri")
+    st.caption("PDF yükle → sayfa seç → kutu çiz → OCR → öneri/manuel eşleştir")
+
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        mt_week = st.text_input("Hafta ID", value=st.session_state["mt_week_id"], key="mt_inp_week")
+        st.session_state["mt_week_id"] = mt_week
+    with c2:
+        mt_excel = st.file_uploader("Excel Ürün Listesi", type=["xlsx", "xls"], key="mt_excel")
+    with c3:
+        mt_pdfs = st.file_uploader("PDF Dosyaları", type=["pdf"], accept_multiple_files=True, key="mt_pdfs")
+
+    mt_zoom = st.slider("Render Zoom", 2.0, 5.0, 3.5, 0.5, key="mt_zoom")
+
+    if st.button("Haftayı Yükle", type="primary", key="mt_btn_load"):
+        if mt_excel:
+            try:
+                df = pd.read_excel(mt_excel)
+                col_map = {}
+                for c in df.columns:
+                    cu = str(c).strip().upper()
+                    if "KOD" in cu:
+                        col_map[c] = "urun_kodu"
+                    elif "AÇIKLAMA" in cu or "ACIKLAMA" in cu:
+                        col_map[c] = "urun_aciklamasi"
+                    elif "FİYAT" in cu or "FIYAT" in cu:
+                        col_map[c] = "afis_fiyat"
+                if col_map:
+                    df = df.rename(columns=col_map)
+                st.session_state["mt_excel_df"] = df
+            except Exception as e:
+                st.error(f"Excel okuma hatası: {e}")
+        if mt_pdfs:
+            all_pages = []
+            for f in mt_pdfs:
+                raw = f.read()
+                rendered = render_pdf_bytes_to_pages(raw, zoom=mt_zoom)
+                for p in rendered:
+                    all_pages.append({
+                        "flyer_id": str(_uuid.uuid4())[:8],
+                        "flyer_filename": f.name,
+                        "page_no": p["page_no"],
+                        "png_bytes": p["png_bytes"],
+                        "w": p["w"],
+                        "h": p["h"],
+                    })
+            st.session_state["mt_pages"] = all_pages
+        st.session_state["mt_bbox"] = None
+        st.session_state["mt_ocr_text"] = None
+        st.session_state["mt_manual_mode"] = False
+
+    pages = st.session_state["mt_pages"]
+    if not pages:
+        st.info("PDF ve Excel yükleyip 'Haftayı Yükle' basın.")
+        return
+
+    excel_df = st.session_state["mt_excel_df"]
+    st.success(f"{len(pages)} sayfa yüklendi" + (f" | Excel: {len(excel_df)} ürün" if excel_df is not None else ""))
+
+    # --- Page selector ---
+    page_labels = [f'{p["flyer_filename"]} - s{p["page_no"]}' for p in pages]
+    sel_idx = st.selectbox("Sayfa Seç", range(len(pages)), format_func=lambda i: page_labels[i], key="mt_sel_page")
+    page = pages[sel_idx]
+
+    # --- Layout: image left, controls right ---
+    col_img, col_ctrl = st.columns([3, 2])
+
+    with col_img:
+        # Canvas component
+        b64 = base64.b64encode(page["png_bytes"]).decode()
+        img_src = f"data:image/png;base64,{b64}"
+
+        saved = list_mappings(st.session_state["mt_week_id"], page["flyer_filename"], page["page_no"])
+        saved_boxes = [
+            {"x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"], "label": m.get("urun_kodu") or "?"}
+            for m in saved
+        ]
+
+        canvas_path = Path(__file__).resolve().parent / "components" / "canvas.html"
+        canvas_html = canvas_path.read_text()
+        canvas_html = canvas_html.replace("__IMG_SRC__", img_src)
+        canvas_html = canvas_html.replace("__SAVED_BOXES__", json.dumps(saved_boxes))
+
+        result = st.components.v1.html(canvas_html, height=820, scrolling=True, key=f"mt_canvas_{page['flyer_id']}")
+
+        if result and isinstance(result, dict) and "x0" in result:
+            st.session_state["mt_bbox"] = result
+            st.session_state["mt_ocr_text"] = None
+            st.session_state["mt_manual_mode"] = False
+
+    with col_ctrl:
+        bbox = st.session_state["mt_bbox"]
+        if not bbox:
+            st.info("Soldaki resimde kutu çizin, 'Seçimi Kullan' basın.")
+        else:
+            st.markdown(f"**Seçim:** ({bbox['x0']:.3f}, {bbox['y0']:.3f}) → ({bbox['x1']:.3f}, {bbox['y1']:.3f})")
+
+            if st.button("Seçimi Temizle", key="mt_btn_clear"):
+                st.session_state["mt_bbox"] = None
+                st.session_state["mt_ocr_text"] = None
+                st.session_state["mt_manual_mode"] = False
+                st.rerun()
+
+            st.markdown("---")
+
+            # OCR
+            if st.button("OCR Çalıştır", type="primary", key="mt_btn_ocr"):
+                cache_key = make_ocr_cache_key(page["png_bytes"], bbox)
+                cached = st.session_state["mt_ocr_cache"].get(cache_key)
+                if cached is not None:
+                    st.session_state["mt_ocr_text"] = cached
+                    st.caption("(Cache'den)")
+                else:
+                    with st.spinner("OCR çalışıyor..."):
+                        try:
+                            text = ocr_crop(page["png_bytes"], bbox, page["w"], page["h"])
+                            st.session_state["mt_ocr_cache"][cache_key] = text
+                            st.session_state["mt_ocr_text"] = text
+                        except Exception as e:
+                            st.error(f"OCR hatası: {e}")
+
+            ocr_text = st.session_state["mt_ocr_text"]
+            if ocr_text:
+                st.text_area("OCR Metin", ocr_text, height=100, disabled=True, key="mt_ocr_ta")
+
+            # Suggestions or manual mode
+            if ocr_text is not None:
+                if not st.session_state["mt_manual_mode"]:
+                    # --- Suggestions ---
+                    candidates = []
+                    if ocr_text and excel_df is not None:
+                        candidates = top_k_candidates(ocr_text, excel_df, k=5)
+
+                    if candidates:
+                        st.markdown("**Öneriler:**")
+                        options = [f'{c["urun_kodu"]} — {c["urun_aciklamasi"]} (skor: {c["score"]})' for c in candidates]
+                        choice = st.radio("Seç:", options, key="mt_radio_sug")
+                        chosen = candidates[options.index(choice)]
+
+                        ca, cb = st.columns(2)
+                        with ca:
+                            if st.button("Eşleştir (Öneri ile)", type="primary", key="mt_btn_accept"):
+                                _mt_save(page, bbox, ocr_text, chosen, "suggested")
+                        with cb:
+                            if st.button("Yok / Bulamadım", key="mt_btn_reject"):
+                                st.session_state["mt_manual_mode"] = True
+                                st.rerun()
+                    else:
+                        st.warning("Öneri bulunamadı." if ocr_text else "OCR metni boş.")
+                        if st.button("Manuel Eşleştirme", key="mt_btn_manual_fb"):
+                            st.session_state["mt_manual_mode"] = True
+                            st.rerun()
+                else:
+                    # --- Manual mode ---
+                    st.markdown("### Manuel Eşleştirme")
+                    if st.button("Geri Dön (Öneriler)", key="mt_btn_back"):
+                        st.session_state["mt_manual_mode"] = False
+                        st.rerun()
+
+                    # Excel select
+                    st.markdown("**Excel'den Seç:**")
+                    if excel_df is not None and not excel_df.empty:
+                        sq = st.text_input("Ara:", key="mt_inp_search")
+                        filt = excel_df.copy()
+                        if sq:
+                            q = sq.upper()
+                            filt = filt[filt.apply(
+                                lambda r: q in str(r.get("urun_kodu", "")).upper() or q in str(r.get("urun_aciklamasi", "")).upper(),
+                                axis=1,
+                            )]
+                        if not filt.empty:
+                            items = []
+                            for _, r in filt.head(50).iterrows():
+                                items.append({
+                                    "label": f'{r.get("urun_kodu", "")} — {r.get("urun_aciklamasi", "")}',
+                                    "urun_kodu": str(r.get("urun_kodu", "")).strip(),
+                                    "urun_aciklamasi": str(r.get("urun_aciklamasi", "")).strip(),
+                                    "afis_fiyat": str(r.get("afis_fiyat", "")).strip() or None,
+                                })
+                            picked = st.selectbox("Ürün:", [it["label"] for it in items], key="mt_sel_excel")
+                            picked_item = items[[it["label"] for it in items].index(picked)]
+                            if st.button("Kaydet (Excel'den)", type="primary", key="mt_btn_save_excel"):
+                                _mt_save(page, bbox, ocr_text, picked_item, "excel_manual")
+                        else:
+                            st.caption("Eşleşen ürün yok.")
+                    else:
+                        st.caption("Excel yüklenmedi.")
+
+                    st.markdown("---")
+                    st.markdown("**Ürün Kodu Gir:**")
+                    code_in = st.text_input("Ürün Kodu:", key="mt_code_in")
+                    desc_in = st.text_input("Açıklama (opsiyonel):", key="mt_desc_in")
+                    if st.button("Kaydet (Kod ile)", key="mt_btn_save_code"):
+                        if code_in:
+                            _mt_save(page, bbox, ocr_text,
+                                     {"urun_kodu": code_in.strip(), "urun_aciklamasi": desc_in.strip() or None, "afis_fiyat": None},
+                                     "code_manual", "unverified")
+                        else:
+                            st.warning("Ürün kodu girin.")
+
+    # --- Saved mappings table ---
+    st.markdown("---")
+    saved = list_mappings(st.session_state["mt_week_id"], page["flyer_filename"], page["page_no"])
+    if saved:
+        st.markdown(f"### Kaydedilen Eşleştirmeler ({len(saved)})")
+        rows = [{
+            "ID": m["mapping_id"], "Ürün Kodu": m["urun_kodu"] or "",
+            "Açıklama": (m["urun_aciklamasi"] or "")[:50], "Kaynak": m["source"], "Durum": m["status"],
+        } for m in saved]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        del_id = st.number_input("Silinecek ID:", min_value=0, step=1, key="mt_del_id")
+        if st.button("Sil", key="mt_btn_del"):
+            if del_id > 0:
+                delete_mapping(int(del_id))
+                st.rerun()
+    else:
+        st.caption("Bu sayfa için henüz eşleştirme yok.")
+
+
+def _mt_save(page, bbox, ocr_text, product, source, status="matched"):
+    """Save a mapping from the mapping tool tab."""
+    from storage import save_mapping
+    m = {
+        "week_id": st.session_state["mt_week_id"],
+        "flyer_filename": page["flyer_filename"],
+        "page_no": page["page_no"],
+        "x0": bbox["x0"], "y0": bbox["y0"], "x1": bbox["x1"], "y1": bbox["y1"],
+        "urun_kodu": product.get("urun_kodu"),
+        "urun_aciklamasi": product.get("urun_aciklamasi"),
+        "afis_fiyat": product.get("afis_fiyat"),
+        "ocr_text": ocr_text,
+        "source": source, "status": status,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    mid = save_mapping(m)
+    st.success(f"Kaydedildi! (ID: {mid}, kaynak: {source})")
+    st.session_state["mt_bbox"] = None
+    st.session_state["mt_ocr_text"] = None
+    st.session_state["mt_manual_mode"] = False
+    st.rerun()
+
+
+# ============================================================================
 # ADMIN PANEL
 # ============================================================================
 
@@ -964,11 +1242,12 @@ def admin_panel():
         return output.getvalue()
 
     # ---- Tabs ----
-    tab_analytics, tab_flyer_upload, tab_flyer_review, tab_flyer_view = st.tabs([
+    tab_analytics, tab_flyer_upload, tab_flyer_review, tab_flyer_view, tab_mapping = st.tabs([
         "Analitikler",
         "Afiş Yükle (v3)",
         "İncele & Düzelt (v3)",
         "Afiş Görüntüle (v3)",
+        "Eşleştir (Manuel Kutu)",
     ])
 
     with tab_analytics:
@@ -985,6 +1264,9 @@ def admin_panel():
     with tab_flyer_view:
         from flyer.viewer import viewer_page
         viewer_page()
+
+    with tab_mapping:
+        _mapping_tool_tab()
 
     # ---- Çıkış ----
     st.markdown("---")
