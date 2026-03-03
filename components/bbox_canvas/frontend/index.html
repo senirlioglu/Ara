@@ -3,30 +3,35 @@
 <head>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { background: transparent; }
+  body { background: transparent; overflow: hidden; }
   #wrap {
     position: relative;
     display: inline-block;
     cursor: crosshair;
     user-select: none;
+    -webkit-user-select: none;
   }
   #wrap img {
     display: block;
     max-width: 100%;
     height: auto;
   }
+  /* Active selection (red) */
   #sel {
     position: absolute;
     border: 2px solid #ff4444;
     background: rgba(255, 68, 68, 0.18);
     pointer-events: none;
     display: none;
+    z-index: 10;
   }
+  /* Saved boxes (green) */
   .saved-box {
     position: absolute;
     border: 2px solid #00cc66;
     background: rgba(0, 204, 102, 0.10);
     pointer-events: none;
+    z-index: 5;
   }
   .saved-label {
     position: absolute;
@@ -36,6 +41,16 @@
     padding: 1px 5px;
     white-space: nowrap;
     pointer-events: none;
+    z-index: 6;
+  }
+  /* Active box overlay (red, dashed — restored from session_state) */
+  #active-overlay {
+    position: absolute;
+    border: 3px dashed #ff4444;
+    background: rgba(255, 68, 68, 0.12);
+    pointer-events: none;
+    display: none;
+    z-index: 8;
   }
   #bar {
     margin-top: 6px;
@@ -62,6 +77,7 @@
 <div id="wrap">
   <img id="img" />
   <div id="sel"></div>
+  <div id="active-overlay"></div>
 </div>
 <div id="bar">
   <button id="btnUse" disabled>Seçimi Kullan</button>
@@ -70,7 +86,17 @@
 </div>
 
 <script>
-/* ── Streamlit Component Communication ── */
+/* ================================================================
+   Streamlit Custom Component — bbox_canvas frontend
+   ================================================================
+   Protocol: declare_component (apiVersion 1)
+   - Parent sends  streamlit:render  with args
+   - We send back  streamlit:setComponentValue  with {x0,y0,x1,y1}
+   - We send       streamlit:setFrameHeight     to auto-size
+   - We send       streamlit:componentReady      once at boot
+   ================================================================ */
+
+/* ── Streamlit messaging helpers ── */
 function sendValue(data) {
   window.parent.postMessage({
     isStreamlitMessage: true,
@@ -78,62 +104,59 @@ function sendValue(data) {
     value: data
   }, "*");
 }
-function setFrameHeight(h) {
+function setFrameHeight() {
   window.parent.postMessage({
     isStreamlitMessage: true,
     type: "streamlit:setFrameHeight",
-    height: h
-  }, "*");
-}
-function signalReady() {
-  window.parent.postMessage({
-    isStreamlitMessage: true,
-    type: "streamlit:componentReady",
-    apiVersion: 1
+    height: document.body.scrollHeight + 12
   }, "*");
 }
 
-/* ── State ── */
-var img = document.getElementById("img");
-var wrap = document.getElementById("wrap");
-var sel = document.getElementById("sel");
-var btnUse = document.getElementById("btnUse");
-var btnClear = document.getElementById("btnClear");
-var info = document.getElementById("info");
+/* ── DOM refs ── */
+var img       = document.getElementById("img");
+var wrap      = document.getElementById("wrap");
+var sel       = document.getElementById("sel");
+var activeOvl = document.getElementById("active-overlay");
+var btnUse    = document.getElementById("btnUse");
+var btnClear  = document.getElementById("btnClear");
+var info      = document.getElementById("info");
 
+/* ── Drawing state ── */
 var drawing = false;
-var startX = 0, startY = 0;
-var curBox = null;
-var rendered = false;
+var startX  = 0, startY = 0;
+var curBox  = null;          /* current user-drawn box (normalised) */
+var lastImgSrc = "";         /* track image changes */
 
-/* ── Receive args from Streamlit ── */
+/* ── Receive render events from Streamlit ── */
 window.addEventListener("message", function(event) {
   if (!event.data || event.data.type !== "streamlit:render") return;
   var args = event.data.args;
   if (!args) return;
 
-  /* Only re-render image if it changed (avoid flicker) */
   var newSrc = "data:image/png;base64," + args.image_b64;
-  if (!rendered) {
-    rendered = true;
+
+  /* Image changed (new page) → reload */
+  if (newSrc !== lastImgSrc) {
+    lastImgSrc = newSrc;
     img.onload = function() {
-      drawSavedBoxes(args.saved_boxes || []);
-      restoreActiveBox(args.active_bbox);
-      setFrameHeight(document.body.scrollHeight + 10);
+      drawOverlays(args.saved_boxes, args.active_bbox);
+      setFrameHeight();
     };
     img.src = newSrc;
   } else {
-    /* Re-render (rerun) — restore active selection */
-    drawSavedBoxes(args.saved_boxes || []);
-    restoreActiveBox(args.active_bbox);
+    /* Same image, just re-draw overlays (e.g. after rerun) */
+    drawOverlays(args.saved_boxes, args.active_bbox);
   }
 });
 
-function drawSavedBoxes(boxes) {
-  /* Remove old saved-box/label elements */
-  wrap.querySelectorAll(".saved-box, .saved-label").forEach(function(el) { el.remove(); });
-
+/* ── Overlay drawing ── */
+function drawOverlays(savedBoxes, activeBbox) {
   var iw = img.clientWidth, ih = img.clientHeight;
+  if (iw === 0 || ih === 0) return;  /* image not yet laid out */
+
+  /* 1. Saved (green) boxes */
+  wrap.querySelectorAll(".saved-box, .saved-label").forEach(function(el) { el.remove(); });
+  var boxes = savedBoxes || [];
   for (var i = 0; i < boxes.length; i++) {
     var b = boxes[i];
     var div = document.createElement("div");
@@ -143,7 +166,6 @@ function drawSavedBoxes(boxes) {
     div.style.width  = ((b.x1 - b.x0) * iw) + "px";
     div.style.height = ((b.y1 - b.y0) * ih) + "px";
     wrap.appendChild(div);
-
     if (b.label) {
       var lbl = document.createElement("div");
       lbl.className = "saved-label";
@@ -153,39 +175,35 @@ function drawSavedBoxes(boxes) {
       wrap.appendChild(lbl);
     }
   }
-}
 
-function restoreActiveBox(ab) {
-  /* Redraw the red selection rectangle from a previous sendValue */
-  if (!ab || ab.x0 == null) {
-    sel.style.display = "none";
-    curBox = null;
-    btnUse.disabled = true;
-    return;
+  /* 2. Active (red dashed) overlay — restored from Python session_state */
+  if (activeBbox && activeBbox.x0 != null && !curBox) {
+    activeOvl.style.display = "block";
+    activeOvl.style.left   = (activeBbox.x0 * iw) + "px";
+    activeOvl.style.top    = (activeBbox.y0 * ih) + "px";
+    activeOvl.style.width  = ((activeBbox.x1 - activeBbox.x0) * iw) + "px";
+    activeOvl.style.height = ((activeBbox.y1 - activeBbox.y0) * ih) + "px";
+    info.textContent = "Seçili: x0=" + activeBbox.x0.toFixed(3) + " y0=" + activeBbox.y0.toFixed(3)
+                     + " x1=" + activeBbox.x1.toFixed(3) + " y1=" + activeBbox.y1.toFixed(3);
+  } else if (!curBox) {
+    activeOvl.style.display = "none";
   }
-  var iw = img.clientWidth, ih = img.clientHeight;
-  sel.style.display = "block";
-  sel.style.left   = (ab.x0 * iw) + "px";
-  sel.style.top    = (ab.y0 * ih) + "px";
-  sel.style.width  = ((ab.x1 - ab.x0) * iw) + "px";
-  sel.style.height = ((ab.y1 - ab.y0) * ih) + "px";
-  curBox = {x0: ab.x0, y0: ab.y0, x1: ab.x1, y1: ab.y1};
-  btnUse.disabled = false;
-  info.textContent = "x0=" + ab.x0.toFixed(3) + " y0=" + ab.y0.toFixed(3)
-                   + " x1=" + ab.x1.toFixed(3) + " y1=" + ab.y1.toFixed(3);
 }
 
-/* ── Drawing logic ── */
+/* ── Mouse drawing ── */
 wrap.addEventListener("mousedown", function(e) {
-  if (e.target !== img && e.target !== wrap) return;
+  if (e.target !== img && e.target !== wrap && e.target !== activeOvl) return;
+  e.preventDefault();
   var r = img.getBoundingClientRect();
   startX = e.clientX - r.left;
   startY = e.clientY - r.top;
   drawing = true;
+  /* Hide active overlay when user starts a new draw */
+  activeOvl.style.display = "none";
   sel.style.display = "block";
-  sel.style.left = startX + "px";
-  sel.style.top  = startY + "px";
-  sel.style.width = "0px";
+  sel.style.left   = startX + "px";
+  sel.style.top    = startY + "px";
+  sel.style.width  = "0px";
   sel.style.height = "0px";
   curBox = null;
   btnUse.disabled = true;
@@ -193,49 +211,60 @@ wrap.addEventListener("mousedown", function(e) {
 
 wrap.addEventListener("mousemove", function(e) {
   if (!drawing) return;
+  e.preventDefault();
   var r = img.getBoundingClientRect();
-  var mx = e.clientX - r.left;
-  var my = e.clientY - r.top;
+  var mx = Math.max(0, Math.min(e.clientX - r.left, img.clientWidth));
+  var my = Math.max(0, Math.min(e.clientY - r.top,  img.clientHeight));
   sel.style.left   = Math.min(startX, mx) + "px";
   sel.style.top    = Math.min(startY, my) + "px";
   sel.style.width  = Math.abs(mx - startX) + "px";
   sel.style.height = Math.abs(my - startY) + "px";
 });
 
-wrap.addEventListener("mouseup", function(e) {
+/* Listen on document so mouseup outside the image still finalizes */
+document.addEventListener("mouseup", function(e) {
   if (!drawing) return;
   drawing = false;
-  var r = img.getBoundingClientRect();
-  var mx = e.clientX - r.left;
-  var my = e.clientY - r.top;
-  var iw = img.clientWidth, ih = img.clientHeight;
-  var x0 = Math.max(0, Math.min(startX, mx)) / iw;
-  var y0 = Math.max(0, Math.min(startY, my)) / ih;
-  var x1 = Math.min(iw, Math.max(startX, mx)) / iw;
-  var y1 = Math.min(ih, Math.max(startY, my)) / ih;
+  var r   = img.getBoundingClientRect();
+  var mx  = Math.max(0, Math.min(e.clientX - r.left, img.clientWidth));
+  var my  = Math.max(0, Math.min(e.clientY - r.top,  img.clientHeight));
+  var iw  = img.clientWidth, ih = img.clientHeight;
 
+  var x0 = Math.min(startX, mx) / iw;
+  var y0 = Math.min(startY, my) / ih;
+  var x1 = Math.max(startX, mx) / iw;
+  var y1 = Math.max(startY, my) / ih;
+
+  /* Ignore tiny accidental clicks */
   if ((x1 - x0) < 0.01 || (y1 - y0) < 0.01) {
     sel.style.display = "none";
     return;
   }
+
+  /* Round to 4 decimal places — keeps cache keys stable */
   curBox = {
-    x0: +x0.toFixed(5), y0: +y0.toFixed(5),
-    x1: +x1.toFixed(5), y1: +y1.toFixed(5)
+    x0: Math.round(x0 * 10000) / 10000,
+    y0: Math.round(y0 * 10000) / 10000,
+    x1: Math.round(x1 * 10000) / 10000,
+    y1: Math.round(y1 * 10000) / 10000
   };
   btnUse.disabled = false;
-  info.textContent = "x0=" + x0.toFixed(3) + " y0=" + y0.toFixed(3)
-                   + " x1=" + x1.toFixed(3) + " y1=" + y1.toFixed(3);
+  info.textContent = "x0=" + curBox.x0.toFixed(3) + " y0=" + curBox.y0.toFixed(3)
+                   + " → x1=" + curBox.x1.toFixed(3) + " y1=" + curBox.y1.toFixed(3);
 });
 
+/* ── Buttons ── */
 btnUse.addEventListener("click", function() {
   if (!curBox) return;
   sendValue(curBox);
-  info.textContent = "Seçim gönderildi ✓";
+  /* Keep the red selection visible until Streamlit reruns */
+  info.textContent = "Seçim gönderildi ✓  " + JSON.stringify(curBox);
   btnUse.disabled = true;
 });
 
 btnClear.addEventListener("click", function() {
   sel.style.display = "none";
+  activeOvl.style.display = "none";
   curBox = null;
   btnUse.disabled = true;
   info.textContent = "Kutu çizmek için sürükleyin";
@@ -243,8 +272,11 @@ btnClear.addEventListener("click", function() {
 });
 
 /* ── Boot ── */
-signalReady();
-setTimeout(function() { setFrameHeight(document.body.scrollHeight + 10); }, 300);
+window.parent.postMessage({
+  isStreamlitMessage: true,
+  type: "streamlit:componentReady",
+  apiVersion: 1
+}, "*");
 </script>
 </body>
 </html>

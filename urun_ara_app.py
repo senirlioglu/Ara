@@ -920,11 +920,8 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 def _mapping_tool_tab():
     """Manuel bbox seçimi ile ürün eşleştirme aracı."""
-    import base64
-    import io
     import uuid as _uuid
 
-    from PIL import Image as _PILImage
     from components.bbox_canvas import bbox_canvas
 
     from pdf_render import render_pdf_bytes_to_pages
@@ -953,7 +950,7 @@ def _mapping_tool_tab():
 
     # --- Upload controls ---
     st.subheader("Eşleştirme Aracı — Manuel Kutu + OCR Önerileri")
-    st.caption("PDF yükle → sayfa seç → slider ile alan seç → OCR → öneri/manuel eşleştir")
+    st.caption("PDF yükle → sayfa seç → mouse ile kutu çiz → OCR → öneri/manuel eşleştir")
 
     c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
@@ -1016,22 +1013,18 @@ def _mapping_tool_tab():
     sel_idx = st.selectbox("Sayfa Seç", range(len(pages)), format_func=lambda i: page_labels[i], key="mt_sel_page")
     page = pages[sel_idx]
 
+    # Clear bbox when page changes
+    page_id = f"{page['flyer_filename']}_p{page['page_no']}"
+    if st.session_state.get("mt_current_page") != page_id:
+        st.session_state["mt_current_page"] = page_id
+        st.session_state["mt_bbox"] = None
+        st.session_state["mt_ocr_text"] = None
+        st.session_state["mt_manual_mode"] = False
+
     # --- Interactive canvas: mouse ile kutu çiz ---
     col_img, col_ctrl = st.columns([3, 2])
 
     with col_img:
-        # Resize for display (max 700px wide) to keep component fast
-        pil_img = _PILImage.open(io.BytesIO(page["png_bytes"]))
-        img_w, img_h = pil_img.size
-        display_w = min(700, img_w)
-        scale = display_w / img_w
-        display_h = int(img_h * scale)
-        display_img = pil_img.resize((display_w, display_h), _PILImage.LANCZOS)
-
-        buf = io.BytesIO()
-        display_img.save(buf, format="PNG", optimize=True)
-        img_b64 = base64.b64encode(buf.getvalue()).decode()
-
         saved = list_mappings(st.session_state["mt_week_id"], page["flyer_filename"], page["page_no"])
         saved_boxes = [
             {"x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
@@ -1039,16 +1032,17 @@ def _mapping_tool_tab():
             for m in saved
         ]
 
+        # Deterministic key — same page always gets same iframe (no recreate)
+        canvas_key = f"bbox_{page['flyer_filename']}_p{page['page_no']}"
+
         result = bbox_canvas(
-            image_b64=img_b64,
+            page_png_bytes=page["png_bytes"],
             saved_boxes=saved_boxes,
             active_bbox=st.session_state["mt_bbox"],
-            height=display_h + 50,
-            key=f"mt_canvas_{sel_idx}",
+            key=canvas_key,
         )
 
         # Update bbox when user confirms selection.
-        # After storing we rerun so the component re-renders with active_bbox set.
         if result and isinstance(result, dict) and "x0" in result:
             if result != st.session_state.get("mt_bbox"):
                 st.session_state["mt_bbox"] = result
