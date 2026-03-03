@@ -118,9 +118,14 @@ window.addEventListener("message", function(event) {
     rendered = true;
     img.onload = function() {
       drawSavedBoxes(args.saved_boxes || []);
+      restoreActiveBox(args.active_bbox);
       setFrameHeight(document.body.scrollHeight + 10);
     };
     img.src = newSrc;
+  } else {
+    /* Re-render (rerun) — restore active selection */
+    drawSavedBoxes(args.saved_boxes || []);
+    restoreActiveBox(args.active_bbox);
   }
 });
 
@@ -148,6 +153,26 @@ function drawSavedBoxes(boxes) {
       wrap.appendChild(lbl);
     }
   }
+}
+
+function restoreActiveBox(ab) {
+  /* Redraw the red selection rectangle from a previous sendValue */
+  if (!ab || ab.x0 == null) {
+    sel.style.display = "none";
+    curBox = null;
+    btnUse.disabled = true;
+    return;
+  }
+  var iw = img.clientWidth, ih = img.clientHeight;
+  sel.style.display = "block";
+  sel.style.left   = (ab.x0 * iw) + "px";
+  sel.style.top    = (ab.y0 * ih) + "px";
+  sel.style.width  = ((ab.x1 - ab.x0) * iw) + "px";
+  sel.style.height = ((ab.y1 - ab.y0) * ih) + "px";
+  curBox = {x0: ab.x0, y0: ab.y0, x1: ab.x1, y1: ab.y1};
+  btnUse.disabled = false;
+  info.textContent = "x0=" + ab.x0.toFixed(3) + " y0=" + ab.y0.toFixed(3)
+                   + " x1=" + ab.x1.toFixed(3) + " y1=" + ab.y1.toFixed(3);
 }
 
 /* ── Drawing logic ── */

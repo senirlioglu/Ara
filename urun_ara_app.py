@@ -1042,6 +1042,7 @@ def _mapping_tool_tab():
         result = bbox_canvas(
             image_b64=img_b64,
             saved_boxes=saved_boxes,
+            active_bbox=st.session_state["mt_bbox"],
             height=display_h + 50,
             key=f"mt_canvas_{sel_idx}",
         )
@@ -1060,108 +1061,108 @@ def _mapping_tool_tab():
         else:
             st.markdown(f"**Seçim:** ({bbox['x0']:.3f}, {bbox['y0']:.3f}) → ({bbox['x1']:.3f}, {bbox['y1']:.3f})")
 
-        if st.button("Seçimi Temizle", key="mt_btn_clear"):
-            st.session_state["mt_bbox"] = None
-            st.session_state["mt_ocr_text"] = None
-            st.session_state["mt_manual_mode"] = False
-            st.rerun()
+            if st.button("Seçimi Temizle", key="mt_btn_clear"):
+                st.session_state["mt_bbox"] = None
+                st.session_state["mt_ocr_text"] = None
+                st.session_state["mt_manual_mode"] = False
+                st.rerun()
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # OCR
-        if st.button("OCR Çalıştır", type="primary", key="mt_btn_ocr"):
-            cache_key = make_ocr_cache_key(page["png_bytes"], bbox)
-            cached = st.session_state["mt_ocr_cache"].get(cache_key)
-            if cached is not None:
-                st.session_state["mt_ocr_text"] = cached
-                st.caption("(Cache'den)")
-            else:
-                with st.spinner("OCR çalışıyor..."):
-                    try:
-                        text = ocr_crop(page["png_bytes"], bbox, page["w"], page["h"])
-                        st.session_state["mt_ocr_cache"][cache_key] = text
-                        st.session_state["mt_ocr_text"] = text
-                    except Exception as e:
-                        st.error(f"OCR hatası: {e}")
+            # OCR
+            if st.button("OCR Çalıştır", type="primary", key="mt_btn_ocr"):
+                cache_key = make_ocr_cache_key(page["png_bytes"], bbox)
+                cached = st.session_state["mt_ocr_cache"].get(cache_key)
+                if cached is not None:
+                    st.session_state["mt_ocr_text"] = cached
+                    st.caption("(Cache'den)")
+                else:
+                    with st.spinner("OCR çalışıyor..."):
+                        try:
+                            text = ocr_crop(page["png_bytes"], bbox, page["w"], page["h"])
+                            st.session_state["mt_ocr_cache"][cache_key] = text
+                            st.session_state["mt_ocr_text"] = text
+                        except Exception as e:
+                            st.error(f"OCR hatası: {e}")
 
-        ocr_text = st.session_state["mt_ocr_text"]
-        if ocr_text:
-            st.text_area("OCR Metin", ocr_text, height=100, disabled=True, key="mt_ocr_ta")
+            ocr_text = st.session_state["mt_ocr_text"]
+            if ocr_text:
+                st.text_area("OCR Metin", ocr_text, height=100, disabled=True, key="mt_ocr_ta")
 
-        # Suggestions or manual mode
-        if ocr_text is not None:
-            if not st.session_state["mt_manual_mode"]:
-                # --- Suggestions ---
-                candidates = []
-                if ocr_text and excel_df is not None:
-                    candidates = top_k_candidates(ocr_text, excel_df, k=5)
+            # Suggestions or manual mode
+            if ocr_text is not None:
+                if not st.session_state["mt_manual_mode"]:
+                    # --- Suggestions ---
+                    candidates = []
+                    if ocr_text and excel_df is not None:
+                        candidates = top_k_candidates(ocr_text, excel_df, k=5)
 
-                if candidates:
-                    st.markdown("**Öneriler:**")
-                    options = [f'{c["urun_kodu"]} — {c["urun_aciklamasi"]} (skor: {c["score"]})' for c in candidates]
-                    choice = st.radio("Seç:", options, key="mt_radio_sug")
-                    chosen = candidates[options.index(choice)]
+                    if candidates:
+                        st.markdown("**Öneriler:**")
+                        options = [f'{c["urun_kodu"]} — {c["urun_aciklamasi"]} (skor: {c["score"]})' for c in candidates]
+                        choice = st.radio("Seç:", options, key="mt_radio_sug")
+                        chosen = candidates[options.index(choice)]
 
-                    ca, cb = st.columns(2)
-                    with ca:
-                        if st.button("Eşleştir (Öneri ile)", type="primary", key="mt_btn_accept"):
-                            _mt_save(page, bbox, ocr_text, chosen, "suggested")
-                    with cb:
-                        if st.button("Yok / Bulamadım", key="mt_btn_reject"):
+                        ca, cb = st.columns(2)
+                        with ca:
+                            if st.button("Eşleştir (Öneri ile)", type="primary", key="mt_btn_accept"):
+                                _mt_save(page, bbox, ocr_text, chosen, "suggested")
+                        with cb:
+                            if st.button("Yok / Bulamadım", key="mt_btn_reject"):
+                                st.session_state["mt_manual_mode"] = True
+                                st.rerun()
+                    else:
+                        st.warning("Öneri bulunamadı." if ocr_text else "OCR metni boş.")
+                        if st.button("Manuel Eşleştirme", key="mt_btn_manual_fb"):
                             st.session_state["mt_manual_mode"] = True
                             st.rerun()
                 else:
-                    st.warning("Öneri bulunamadı." if ocr_text else "OCR metni boş.")
-                    if st.button("Manuel Eşleştirme", key="mt_btn_manual_fb"):
-                        st.session_state["mt_manual_mode"] = True
+                    # --- Manual mode ---
+                    st.markdown("### Manuel Eşleştirme")
+                    if st.button("Geri Dön (Öneriler)", key="mt_btn_back"):
+                        st.session_state["mt_manual_mode"] = False
                         st.rerun()
-            else:
-                # --- Manual mode ---
-                st.markdown("### Manuel Eşleştirme")
-                if st.button("Geri Dön (Öneriler)", key="mt_btn_back"):
-                    st.session_state["mt_manual_mode"] = False
-                    st.rerun()
 
-                # Excel select
-                st.markdown("**Excel'den Seç:**")
-                if excel_df is not None and not excel_df.empty:
-                    sq = st.text_input("Ara:", key="mt_inp_search")
-                    filt = excel_df.copy()
-                    if sq:
-                        q = sq.upper()
-                        filt = filt[filt.apply(
-                            lambda r: q in str(r.get("urun_kodu", "")).upper() or q in str(r.get("urun_aciklamasi", "")).upper(),
-                            axis=1,
-                        )]
-                    if not filt.empty:
-                        items = []
-                        for _, r in filt.head(50).iterrows():
-                            items.append({
-                                "label": f'{r.get("urun_kodu", "")} — {r.get("urun_aciklamasi", "")}',
-                                "urun_kodu": str(r.get("urun_kodu", "")).strip(),
-                                "urun_aciklamasi": str(r.get("urun_aciklamasi", "")).strip(),
-                                "afis_fiyat": str(r.get("afis_fiyat", "")).strip() or None,
-                            })
-                        picked = st.selectbox("Ürün:", [it["label"] for it in items], key="mt_sel_excel")
-                        picked_item = items[[it["label"] for it in items].index(picked)]
-                        if st.button("Kaydet (Excel'den)", type="primary", key="mt_btn_save_excel"):
-                            _mt_save(page, bbox, ocr_text, picked_item, "excel_manual")
+                    # Excel select
+                    st.markdown("**Excel'den Seç:**")
+                    if excel_df is not None and not excel_df.empty:
+                        sq = st.text_input("Ara:", key="mt_inp_search")
+                        filt = excel_df.copy()
+                        if sq:
+                            q = sq.upper()
+                            filt = filt[filt.apply(
+                                lambda r: q in str(r.get("urun_kodu", "")).upper() or q in str(r.get("urun_aciklamasi", "")).upper(),
+                                axis=1,
+                            )]
+                        if not filt.empty:
+                            items = []
+                            for _, r in filt.head(50).iterrows():
+                                items.append({
+                                    "label": f'{r.get("urun_kodu", "")} — {r.get("urun_aciklamasi", "")}',
+                                    "urun_kodu": str(r.get("urun_kodu", "")).strip(),
+                                    "urun_aciklamasi": str(r.get("urun_aciklamasi", "")).strip(),
+                                    "afis_fiyat": str(r.get("afis_fiyat", "")).strip() or None,
+                                })
+                            picked = st.selectbox("Ürün:", [it["label"] for it in items], key="mt_sel_excel")
+                            picked_item = items[[it["label"] for it in items].index(picked)]
+                            if st.button("Kaydet (Excel'den)", type="primary", key="mt_btn_save_excel"):
+                                _mt_save(page, bbox, ocr_text, picked_item, "excel_manual")
+                        else:
+                            st.caption("Eşleşen ürün yok.")
                     else:
-                        st.caption("Eşleşen ürün yok.")
-                else:
-                    st.caption("Excel yüklenmedi.")
+                        st.caption("Excel yüklenmedi.")
 
-                st.markdown("---")
-                st.markdown("**Ürün Kodu Gir:**")
-                code_in = st.text_input("Ürün Kodu:", key="mt_code_in")
-                desc_in = st.text_input("Açıklama (opsiyonel):", key="mt_desc_in")
-                if st.button("Kaydet (Kod ile)", key="mt_btn_save_code"):
-                    if code_in:
-                        _mt_save(page, bbox, ocr_text,
-                                 {"urun_kodu": code_in.strip(), "urun_aciklamasi": desc_in.strip() or None, "afis_fiyat": None},
-                                 "code_manual", "unverified")
-                    else:
-                        st.warning("Ürün kodu girin.")
+                    st.markdown("---")
+                    st.markdown("**Ürün Kodu Gir:**")
+                    code_in = st.text_input("Ürün Kodu:", key="mt_code_in")
+                    desc_in = st.text_input("Açıklama (opsiyonel):", key="mt_desc_in")
+                    if st.button("Kaydet (Kod ile)", key="mt_btn_save_code"):
+                        if code_in:
+                            _mt_save(page, bbox, ocr_text,
+                                     {"urun_kodu": code_in.strip(), "urun_aciklamasi": desc_in.strip() or None, "afis_fiyat": None},
+                                     "code_manual", "unverified")
+                        else:
+                            st.warning("Ürün kodu girin.")
 
     # --- Saved mappings table ---
     st.markdown("---")

@@ -12,6 +12,7 @@ _component_func = components.declare_component("bbox_canvas", path=str(_FRONTEND
 
 
 def bbox_canvas(image_b64: str, saved_boxes: list | None = None,
+                active_bbox: dict | None = None,
                 height: int = 800, key: str | None = None):
     """Show an interactive bbox-drawing canvas.
 
@@ -21,6 +22,8 @@ def bbox_canvas(image_b64: str, saved_boxes: list | None = None,
         Base-64 encoded PNG image (no ``data:`` prefix).
     saved_boxes : list[dict] | None
         Previously saved boxes ``[{x0, y0, x1, y1, label}, ...]``.
+    active_bbox : dict | None
+        Currently active selection to redraw after rerun.
     height : int
         Iframe pixel height.
     key : str | None
@@ -34,6 +37,7 @@ def bbox_canvas(image_b64: str, saved_boxes: list | None = None,
     return _component_func(
         image_b64=image_b64,
         saved_boxes=saved_boxes or [],
+        active_bbox=active_bbox,
         height=height,
         key=key,
         default=None,
