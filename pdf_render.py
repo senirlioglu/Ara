@@ -1,22 +1,27 @@
-import fitz
+"""PDF rendering via PyMuPDF — each page to high-quality PNG."""
+
+from __future__ import annotations
+
+import fitz  # PyMuPDF
 
 
 def render_pdf_bytes_to_pages(pdf_bytes: bytes, zoom: float = 3.5) -> list[dict]:
-    pages = []
+    """Render every page of a PDF to PNG.
+
+    Returns:
+        [{page_no: int, png_bytes: bytes, w: int, h: int}, ...]
+        page_no is 1-based.
+    """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        matrix = fitz.Matrix(zoom, zoom)
-        for idx, page in enumerate(doc):
-            pix = page.get_pixmap(matrix=matrix, alpha=False)
-            png_bytes = pix.tobytes("png")
-            pages.append(
-                {
-                    "page_no": idx,
-                    "png_bytes": png_bytes,
-                    "w": pix.width,
-                    "h": pix.height,
-                }
-            )
-    finally:
-        doc.close()
+    pages = []
+    mat = fitz.Matrix(zoom, zoom)
+    for i in range(len(doc)):
+        pix = doc[i].get_pixmap(matrix=mat, alpha=False)
+        pages.append({
+            "page_no": i + 1,
+            "png_bytes": pix.tobytes("png"),
+            "w": pix.width,
+            "h": pix.height,
+        })
+    doc.close()
     return pages

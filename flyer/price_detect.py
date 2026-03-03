@@ -29,11 +29,8 @@ RE_PHONE_0850 = re.compile(r"\b0850\b")
 # TL/₺ indicator words (for contextual validation of small prices)
 TL_INDICATORS = {"TL", "₺", "LIRA"}
 
-# Grocery unit words (proximity indicates this could be a valid small price)
-GROCERY_UNITS = {"KG", "GR", "LT", "L", "ML"}
-
 # Unit words near which a number is NOT a price
-UNIT_INDICATORS = {'"', "CM", "MM", "İNÇ", "INÇ", "INCH"}
+UNIT_INDICATORS = {'"', "CM", "ML", "KG", "LT", "L", "MM", "GR", "İNÇ", "INÇ", "INCH"}
 
 # Min/max price threshold for small prices
 MIN_SMALL_PRICE = 99
@@ -115,7 +112,7 @@ def find_prices(
         if any('"' in nt or '"' in nt or '"' in nt for nt in near_texts):
             continue
 
-        # Reject: near electronics unit indicators (cm, mm, inc)
+        # Reject: near unit indicators (cm, ml, kg, l, mm, gr)
         if any(nt in UNIT_INDICATORS for nt in near_texts):
             continue
 
@@ -123,15 +120,14 @@ def find_prices(
         if RE_PHONE_444.search(near_str) or RE_PHONE_0850.search(near_str):
             continue
 
-        # Validate: near a TL indicator, near grocery units, or near another large price
+        # Validate: near a TL indicator or near another large price
         near_tl = any(nt in TL_INDICATORS for nt in near_texts)
-        near_grocery_unit = any(nt in GROCERY_UNITS for nt in near_texts)
         near_large = any(
             abs(_word_center(p)[0] - cx) < 160 and abs(_word_center(p)[1] - cy) < 80
             for p in prices
         )
 
-        if near_tl or near_large or near_grocery_unit:
+        if near_tl or near_large:
             prices.append({
                 "text": text,
                 "value": text,

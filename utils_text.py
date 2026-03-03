@@ -1,60 +1,50 @@
+"""Text normalization and token extraction utilities."""
+
+from __future__ import annotations
+
 import re
-import string
 
-BRAND_WHITELIST = [
-    "SAMSUNG",
-    "LG",
-    "APPLE",
-    "XIAOMI",
-    "PHILIPS",
-    "ARCELIK",
-    "BEKO",
-    "VESTEL",
-    "BOSCH",
-    "SIEMENS",
-    "ASUS",
-    "HP",
-    "LENOVO",
-]
+_TR_MAP = str.maketrans("İŞĞÖÜÇıişğöüç", "ISGOUCiisgouc")
 
-TR_MAP = str.maketrans(
-    {
-        "İ": "I",
-        "I": "I",
-        "Ş": "S",
-        "Ğ": "G",
-        "Ö": "O",
-        "Ü": "U",
-        "Ç": "C",
-        "ı": "I",
-        "ş": "S",
-        "ğ": "G",
-        "ö": "O",
-        "ü": "U",
-        "ç": "C",
-    }
-)
+BRAND_WHITELIST = {
+    "SAMSUNG", "LG", "SONY", "PHILIPS", "VESTEL", "TOSHIBA", "BEKO",
+    "ARCELIK", "ARÇELIK", "ONVO", "NORDMENDE", "SEG", "GRUNDIG",
+    "PIRANHA", "XIAOMI", "TCL", "HISENSE", "BOSCH", "SIEMENS", "REGAL",
+    "ALTUS", "PROFILO", "FAKIR", "ARZUM", "SINBO", "KARACA", "KUMTEL",
+    "LUXELL", "HOMEND", "KING", "FANTOM", "DYSON", "TEFAL", "BRAUN",
+    "PANASONIC", "KENWOOD", "DELONGHI", "HP", "LENOVO", "APPLE",
+    "HUAWEI", "OPPO", "MONSTER", "CASPER", "EXCALIBUR", "MSI", "ASUS",
+    "ACER", "DELL", "LOGITECH", "JBL", "ANKER", "BASEUS", "UGREEN",
+}
 
 
 def normalize_tr(text: str) -> str:
-    text = (text or "").translate(TR_MAP).upper()
-    text = text.translate(str.maketrans("", "", string.punctuation))
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    """Uppercase, strip punctuation, collapse whitespace."""
+    s = text.upper().translate(_TR_MAP)
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def extract_tokens(text: str) -> dict:
-    raw_txt = (text or "").translate(TR_MAP).upper()
-    txt = normalize_tr(text)
-    model_tokens = set(re.findall(r"\b[A-Z0-9]{6,}\b", txt))
-    four_digit_tokens = set(re.findall(r"\b\d{4}\b", txt))
-    size_tokens = set(
-        re.findall(r"\b\d{2,3}\s*\"\b|\b\d+(?:[.,]\d+)?\s*(?:KG|L|MAH)\b", raw_txt)
+    """Extract structured tokens from text."""
+    upper = normalize_tr(text)
+
+    model_tokens = [
+        m for m in re.findall(r"\b[A-Z0-9\-]{6,}\b", upper)
+        if re.search(r"[A-Z]", m) and re.search(r"\d", m)
+    ]
+
+    code4_tokens = re.findall(r"\b\d{4}\b", upper)
+
+    size_tokens = re.findall(
+        r'\b\d{2,3}\s*(?:"|CM|INC|KG|LT?|MAH)\b', upper,
     )
-    brand_tokens = {b for b in BRAND_WHITELIST if b in txt}
+
+    brand_tokens = [b for b in BRAND_WHITELIST if b in upper or normalize_tr(b) in upper]
+
     return {
-        "model_tokens": model_tokens,
-        "four_digit_tokens": four_digit_tokens,
-        "size_tokens": size_tokens,
-        "brand_tokens": brand_tokens,
+        "model": model_tokens,
+        "code4": code4_tokens,
+        "size": size_tokens,
+        "brand": brand_tokens,
     }

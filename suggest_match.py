@@ -1,41 +1,84 @@
-from rapidfuzz import fuzz
+"""Suggest Excel matches for OCR text — token scoring + fuzzy."""
 
-from utils_text import extract_tokens, normalize_tr
+from __future__ import annotations
+
+import pandas as pd
+
+from utils_text import normalize_tr, extract_tokens
+
+try:
+    from rapidfuzz import fuzz
+except ImportError:
+    fuzz = None
 
 
-def _row_text(row) -> str:
-    return normalize_tr(f"{row.get('ÜRÜN KODU', '')} {row.get('ÜRÜN AÇIKLAMASI', '')}")
+def top_k_candidates(
+    ocr_text: str,
+    excel_df: pd.DataFrame,
+    k: int = 5,
+) -> list[dict]:
+    """Return top-k Excel rows scored against OCR text.
 
+    Returns:
+        [{urun_kodu, urun_aciklamasi, afis_fiyat, score}, ...]
+        Sorted descending by score.
+    """
+    if not ocr_text or excel_df is None or excel_df.empty:
+        return []
 
-def top_k_candidates(ocr_text, excel_df, k=5):
     ocr_norm = normalize_tr(ocr_text)
-    tokens = extract_tokens(ocr_text)
-    ranked = []
+    ocr_tokens = extract_tokens(ocr_text)
+
+    scored: list[dict] = []
 
     for _, row in excel_df.iterrows():
-        row_text = _row_text(row)
-        score = 0
+        kod = str(row.get("urun_kodu") or row.get("ÜRÜN KODU") or "").strip()
+        aciklama = str(
+            row.get("urun_aciklamasi") or row.get("ÜRÜN AÇIKLAMASI") or ""
+        ).strip()
+        fiyat = str(row.get("afis_fiyat") or row.get("AFIS_FIYAT") or "").strip()
 
-        if tokens["model_tokens"] and any(tok in row_text for tok in tokens["model_tokens"]):
-            score += 100
-        if tokens["four_digit_tokens"] and any(tok in row_text for tok in tokens["four_digit_tokens"]):
-            score += 80
-        if tokens["brand_tokens"] and any(tok in row_text for tok in tokens["brand_tokens"]):
-            score += 30
-        if tokens["size_tokens"] and any(tok in row_text for tok in tokens["size_tokens"]):
-            score += 20
+        if not kod and not aciklama:
+            continue
 
-        fuzzy = fuzz.token_set_ratio(ocr_norm, row_text)
-        score += int(fuzzy * 0.30)
+        row_text = normalize_tr(f"{kod} {aciklama}")
+        score = 0.0
 
-        ranked.append(
-            {
-                "urun_kodu": str(row.get("ÜRÜN KODU", "")),
-                "urun_aciklamasi": str(row.get("ÜRÜN AÇIKLAMASI", "")),
-                "afis_fiyat": row.get("AFIS_FIYAT", None),
-                "score": score,
-            }
-        )
+        # Model token exact match (+100 each)
+        for m in ocr_tokens["model"]:
+            if m in row_text:
+                score += 100
 
-    ranked.sort(key=lambda x: x["score"], reverse=True)
-    return ranked[:k]
+        # 4-digit code match (+80 each)
+        for c in ocr_tokens["code4"]:
+            if c in row_text:
+                score += 80
+
+        # Brand match (+30)
+        for b in ocr_tokens["brand"]:
+            if normalize_tr(b) in row_text:
+                score += 30
+
+        # Size match (+20)
+        for s in ocr_tokens["size"]:
+            nums = [n for n in s.split() if n.isdigit()]
+            for n in nums:
+                if n in row_text:
+                    score += 20
+                    break
+
+        # Fuzzy score (+0..30)
+        if fuzz and aciklama:
+            ratio = fuzz.token_set_ratio(ocr_norm, row_text)
+            score += int(ratio * 0.30)
+
+        if score > 0:
+            scored.append({
+                "urun_kodu": kod,
+                "urun_aciklamasi": aciklama,
+                "afis_fiyat": fiyat or None,
+                "score": round(score, 1),
+            })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:k]
