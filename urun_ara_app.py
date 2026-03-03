@@ -920,25 +920,27 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 def _mapping_tool_tab():
     """Manuel bbox seçimi ile ürün eşleştirme aracı."""
-    import base64
     import io
     import json
     import uuid as _uuid
 
     from PIL import Image as _PILImage
 
-    # --- Monkey-patch: streamlit-drawable-canvas uses the removed
-    #     streamlit.elements.image.image_to_url internal API.
-    #     Provide a shim that converts PIL Image → base64 data-URL.
+    # --- Monkey-patch: streamlit-drawable-canvas 0.9.3 calls the removed
+    #     streamlit.elements.image.image_to_url(image, width, clamp, channels,
+    #     output_format, image_id) API.  The function was moved to
+    #     streamlit.elements.lib.image_utils.image_to_url with a new
+    #     signature (LayoutConfig instead of raw width).  We bridge the two.
     import streamlit.elements.image as _st_img_mod
     if not hasattr(_st_img_mod, "image_to_url"):
-        def _image_to_url(image, width, clamp, channels, output_format, image_id):
-            buf = io.BytesIO()
-            image.save(buf, format=output_format)
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            mime = f"image/{output_format.lower()}"
-            return f"data:{mime};base64,{b64}"
-        _st_img_mod.image_to_url = _image_to_url
+        from streamlit.elements.lib.image_utils import image_to_url as _real_image_to_url
+        from streamlit.elements.lib.layout_utils import LayoutConfig as _LayoutConfig
+
+        def _compat_image_to_url(image, width, clamp, channels, output_format, image_id):
+            return _real_image_to_url(
+                image, _LayoutConfig(width=width), clamp, channels, output_format, image_id,
+            )
+        _st_img_mod.image_to_url = _compat_image_to_url
 
     from streamlit_drawable_canvas import st_canvas as _st_canvas
 
@@ -1039,10 +1041,12 @@ def _mapping_tool_tab():
         bg_img = _PILImage.open(io.BytesIO(page["png_bytes"]))
         img_w, img_h = bg_img.size
 
-        # Scale down for display (max 700px wide)
+        # Scale down for display (max 700px wide) and pre-resize
+        # so the component doesn't transfer the full-res image.
         display_w = min(700, img_w)
         scale = display_w / img_w
         display_h = int(img_h * scale)
+        bg_display = bg_img.resize((display_w, display_h), _PILImage.LANCZOS)
 
         # Build initial_drawing with saved boxes so they're visible
         saved = list_mappings(st.session_state["mt_week_id"], page["flyer_filename"], page["page_no"])
@@ -1066,7 +1070,7 @@ def _mapping_tool_tab():
             fill_color="rgba(255, 68, 68, 0.15)",
             stroke_width=2,
             stroke_color="#ff4444",
-            background_image=bg_img,
+            background_image=bg_display,
             drawing_mode="rect",
             height=display_h,
             width=display_w,
