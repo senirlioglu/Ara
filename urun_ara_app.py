@@ -1047,12 +1047,14 @@ def _mapping_tool_tab():
             key=f"mt_canvas_{sel_idx}",
         )
 
-        # Update bbox when user confirms selection
+        # Update bbox when user confirms selection.
+        # After storing we rerun so the component re-renders with active_bbox set.
         if result and isinstance(result, dict) and "x0" in result:
             if result != st.session_state.get("mt_bbox"):
                 st.session_state["mt_bbox"] = result
                 st.session_state["mt_ocr_text"] = None
                 st.session_state["mt_manual_mode"] = False
+                st.rerun()
 
     with col_ctrl:
         bbox = st.session_state["mt_bbox"]
