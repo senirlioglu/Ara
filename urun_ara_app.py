@@ -920,10 +920,12 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 def _mapping_tool_tab():
     """Manuel bbox seçimi ile ürün eşleştirme aracı."""
+    import base64
     import io
     import uuid as _uuid
 
     from PIL import Image as _PILImage
+    from components.bbox_canvas import bbox_canvas
 
     from pdf_render import render_pdf_bytes_to_pages
     from vision_ocr import init_gcp_credentials, ocr_crop, make_ocr_cache_key
@@ -1014,49 +1016,49 @@ def _mapping_tool_tab():
     sel_idx = st.selectbox("Sayfa Seç", range(len(pages)), format_func=lambda i: page_labels[i], key="mt_sel_page")
     page = pages[sel_idx]
 
-    # --- Image display with st.image (always works, fast) ---
-    pil_img = _PILImage.open(io.BytesIO(page["png_bytes"]))
-    img_w, img_h = pil_img.size
+    # --- Interactive canvas: mouse ile kutu çiz ---
+    col_img, col_ctrl = st.columns([3, 2])
 
-    st.image(pil_img, caption=f'{page["flyer_filename"]} — Sayfa {page["page_no"]}', use_container_width=True)
+    with col_img:
+        # Resize for display (max 700px wide) to keep component fast
+        pil_img = _PILImage.open(io.BytesIO(page["png_bytes"]))
+        img_w, img_h = pil_img.size
+        display_w = min(700, img_w)
+        scale = display_w / img_w
+        display_h = int(img_h * scale)
+        display_img = pil_img.resize((display_w, display_h), _PILImage.LANCZOS)
 
-    # --- Bbox selection via sliders ---
-    st.markdown("##### Seçim Alanı (slider ile ayarla)")
-    sl1, sl2 = st.columns(2)
-    with sl1:
-        x0 = st.slider("Sol (x0)", 0.0, 1.0, 0.0, 0.01, key="mt_sl_x0")
-        y0 = st.slider("Üst (y0)", 0.0, 1.0, 0.0, 0.01, key="mt_sl_y0")
-    with sl2:
-        x1 = st.slider("Sağ (x1)", 0.0, 1.0, 1.0, 0.01, key="mt_sl_x1")
-        y1 = st.slider("Alt (y1)", 0.0, 1.0, 1.0, 0.01, key="mt_sl_y1")
+        buf = io.BytesIO()
+        display_img.save(buf, format="PNG", optimize=True)
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-    # Validate & set bbox
-    if x0 >= x1 or y0 >= y1:
-        st.warning("Geçersiz alan: x0 < x1 ve y0 < y1 olmalı.")
-    else:
-        bbox = {"x0": round(x0, 5), "y0": round(y0, 5), "x1": round(x1, 5), "y1": round(y1, 5)}
+        saved = list_mappings(st.session_state["mt_week_id"], page["flyer_filename"], page["page_no"])
+        saved_boxes = [
+            {"x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+             "label": m.get("urun_kodu") or "?"}
+            for m in saved
+        ]
 
-        # --- Crop preview ---
-        crop_left = int(x0 * img_w)
-        crop_upper = int(y0 * img_h)
-        crop_right = int(x1 * img_w)
-        crop_lower = int(y1 * img_h)
-        if crop_right > crop_left and crop_lower > crop_upper:
-            cropped = pil_img.crop((crop_left, crop_upper, crop_right, crop_lower))
-            st.image(cropped, caption="Seçilen Alan (Önizleme)", use_container_width=True)
+        result = bbox_canvas(
+            image_b64=img_b64,
+            saved_boxes=saved_boxes,
+            height=display_h + 50,
+            key=f"mt_canvas_{sel_idx}",
+        )
 
-        if st.button("Bu Alanı Seç", type="primary", key="mt_btn_use_bbox"):
-            st.session_state["mt_bbox"] = bbox
-            st.session_state["mt_ocr_text"] = None
-            st.session_state["mt_manual_mode"] = False
-            st.rerun()
+        # Update bbox when user confirms selection
+        if result and isinstance(result, dict) and "x0" in result:
+            if result != st.session_state.get("mt_bbox"):
+                st.session_state["mt_bbox"] = result
+                st.session_state["mt_ocr_text"] = None
+                st.session_state["mt_manual_mode"] = False
 
-    # --- Controls (OCR + suggestions) ---
-    bbox = st.session_state["mt_bbox"]
-    if not bbox:
-        st.info("Slider ile alanı ayarlayıp 'Bu Alanı Seç' basın.")
-    else:
-        st.markdown(f"**Seçili Alan:** ({bbox['x0']:.3f}, {bbox['y0']:.3f}) → ({bbox['x1']:.3f}, {bbox['y1']:.3f})")
+    with col_ctrl:
+        bbox = st.session_state["mt_bbox"]
+        if not bbox:
+            st.info("Soldaki resimde mouse ile kutu çizin → 'Seçimi Kullan' basın.")
+        else:
+            st.markdown(f"**Seçim:** ({bbox['x0']:.3f}, {bbox['y0']:.3f}) → ({bbox['x1']:.3f}, {bbox['y1']:.3f})")
 
         if st.button("Seçimi Temizle", key="mt_btn_clear"):
             st.session_state["mt_bbox"] = None
