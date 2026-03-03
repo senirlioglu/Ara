@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    #wrap { display: inline-block; position: relative; }
+    #canvas { border: 1px solid #ccc; max-width: 100%; cursor: crosshair; }
+    .controls { margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="canvas"></canvas>
+  </div>
+  <div class="controls">
+    <button id="useBtn">Use Selection</button>
+  </div>
+
+  <script src="https://unpkg.com/streamlit-component-lib/dist/streamlit-component-lib.js"></script>
+  <script>
+    const imgSrc = "__IMAGE_SRC__";
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const image = new Image();
+
+    let startX = 0, startY = 0, currX = 0, currY = 0;
+    let dragging = false;
+    let lastRect = null;
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      if (lastRect) {
+        const x = Math.min(lastRect.x0, lastRect.x1);
+        const y = Math.min(lastRect.y0, lastRect.y1);
+        const w = Math.abs(lastRect.x1 - lastRect.x0);
+        const h = Math.abs(lastRect.y1 - lastRect.y0);
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+      }
+    }
+
+    function getPos(evt) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (evt.clientX - rect.left) * (canvas.width / rect.width),
+        y: (evt.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    canvas.addEventListener('mousedown', (evt) => {
+      const p = getPos(evt);
+      startX = p.x; startY = p.y;
+      currX = p.x; currY = p.y;
+      dragging = true;
+      lastRect = {x0: startX, y0: startY, x1: currX, y1: currY};
+      draw();
+    });
+
+    canvas.addEventListener('mousemove', (evt) => {
+      if (!dragging) return;
+      const p = getPos(evt);
+      currX = p.x; currY = p.y;
+      lastRect = {x0: startX, y0: startY, x1: currX, y1: currY};
+      draw();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+    });
+
+    document.getElementById('useBtn').addEventListener('click', () => {
+      if (!lastRect) return;
+      const x0 = Math.min(lastRect.x0, lastRect.x1) / canvas.width;
+      const y0 = Math.min(lastRect.y0, lastRect.y1) / canvas.height;
+      const x1 = Math.max(lastRect.x0, lastRect.x1) / canvas.width;
+      const y1 = Math.max(lastRect.y0, lastRect.y1) / canvas.height;
+      Streamlit.setComponentValue({x0, y0, x1, y1});
+    });
+
+    image.onload = () => {
+      canvas.width = image.width;
+      canvas.height = image.height;
+      draw();
+      Streamlit.setFrameHeight(canvas.height + 60);
+    };
+    image.src = imgSrc;
+  </script>
+</body>
+</html>
