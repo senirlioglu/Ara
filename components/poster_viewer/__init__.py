@@ -24,7 +24,7 @@ def poster_viewer(
     *,
     current_index: int = 0,
     max_display_width: int = 800,
-    height: int = 750,
+    height: int = 1200,
     key: str = "poster_viewer",
 ) -> dict | None:
     """Render a poster slider with hotspots.

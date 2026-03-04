@@ -3,7 +3,7 @@
 <head>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { background: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow-x: hidden; }
+  body { background: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: visible; }
 
   /* Slider container */
   #slider {
@@ -192,10 +192,14 @@ function sendValue(data) {
   }, "*");
 }
 function setFrameHeight() {
+  /* Calculate real height from image + controls */
+  var h = document.body.scrollHeight;
+  var imgH = img.clientHeight || img.naturalHeight || 0;
+  var total = Math.max(h, imgH + 120); /* 120px for arrows, dots, page-info */
   window.parent.postMessage({
     isStreamlitMessage: true,
     type: "streamlit:setFrameHeight",
-    height: document.body.scrollHeight + 16
+    height: total
   }, "*");
 }
 
@@ -261,6 +265,9 @@ function showPage(idx) {
     img.onload = function() {
       renderHotspots(pg.hotspots || []);
       setFrameHeight();
+      /* Retry after layout settles */
+      setTimeout(setFrameHeight, 200);
+      setTimeout(setFrameHeight, 600);
     };
     img.src = src;
   } else {
