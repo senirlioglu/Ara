@@ -1138,6 +1138,56 @@ def _mapping_tool_tab():
         st.caption("Henüz eşleştirme yok.")
 
 
+# ============================================================================
+# POSTER VIEWER TAB (Slider + Hotspot Önizleme)
+# ============================================================================
+
+def _poster_viewer_tab():
+    """Poster sayfalarını slider ile gösteren, hotspot'ları tıklanabilir yapan tab."""
+    from components.poster_viewer import poster_viewer
+    from storage import list_mappings as _pv_list
+
+    st.subheader("Poster Görüntüle")
+
+    pages = st.session_state.get("mt_pages", [])
+    if not pages:
+        st.info("Önce 'Eşleştir' sekmesinden PDF ve Excel yükleyip 'Haftayı Yükle' basın.")
+        return
+
+    week_id = st.session_state.get("mt_week_id", "")
+
+    # Build viewer pages with hotspots from DB
+    viewer_pages = []
+    for pg in pages:
+        mappings = _pv_list(week_id, pg["flyer_filename"], pg["page_no"])
+        hotspots = []
+        for m in mappings:
+            hotspots.append({
+                "x0": m["x0"], "y0": m["y0"],
+                "x1": m["x1"], "y1": m["y1"],
+                "urun_kodu": m.get("urun_kodu") or "?",
+                "urun_ad": m.get("urun_aciklamasi") or "",
+                "afis_fiyat": m.get("afis_fiyat") or "",
+            })
+        viewer_pages.append({
+            "png_bytes": pg["png_bytes"],
+            "label": f'{pg["flyer_filename"]} - Sayfa {pg["page_no"]}',
+            "hotspots": hotspots,
+        })
+
+    st.caption(f"{len(viewer_pages)} sayfa | Hotspot'lara tıklayın → ürün bilgisi")
+
+    result = poster_viewer(
+        pages=viewer_pages,
+        current_index=st.session_state.get("pv_page_idx", 0),
+        key="poster_viewer_main",
+    )
+
+    # Track page changes
+    if result and isinstance(result, dict) and result.get("type") == "page_change":
+        st.session_state["pv_page_idx"] = result["index"]
+
+
 def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
     """Save a mapping to local SQLite and rerun."""
     from storage import save_mapping as _local_save
@@ -1207,9 +1257,10 @@ def admin_panel():
         return output.getvalue()
 
     # ---- Tabs ----
-    tab_analytics, tab_mapping = st.tabs([
+    tab_analytics, tab_mapping, tab_viewer = st.tabs([
         "Analitikler",
         "Eşleştir (Kutu + Ara)",
+        "Poster Görüntüle",
     ])
 
     with tab_analytics:
@@ -1217,6 +1268,9 @@ def admin_panel():
 
     with tab_mapping:
         _mapping_tool_tab()
+
+    with tab_viewer:
+        _poster_viewer_tab()
 
     # ---- Çıkış ----
     st.markdown("---")
