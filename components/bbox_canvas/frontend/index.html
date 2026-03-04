@@ -133,7 +133,7 @@ window.addEventListener("message", function(event) {
   var args = event.data.args;
   if (!args) return;
 
-  var newSrc = "data:image/png;base64," + args.image_b64;
+  var newSrc = "data:image/jpeg;base64," + args.image_b64;
 
   /* Image changed (new page) → reload */
   if (newSrc !== lastImgSrc) {

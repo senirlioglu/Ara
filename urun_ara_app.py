@@ -915,7 +915,7 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
 
 # ============================================================================
-# MAPPING TOOL TAB (Kutu Çiz + Ürün Ara — OCR'sız, Backend Destekli)
+# MAPPING TOOL TAB (Kutu Çiz + Ürün Ara — OCR'sız)
 # ============================================================================
 
 def _mapping_tool_tab():
@@ -923,23 +923,10 @@ def _mapping_tool_tab():
     import uuid as _uuid
 
     from components.bbox_canvas import bbox_canvas
-    from pdf_render import render_pdf_bytes_to_pages
     from mapping_ui.search import search_products
+    from storage import init_db, list_mappings as _local_list, delete_mapping as _local_delete
 
-    # --- Storage: backend API veya local SQLite fallback ---
-    _use_backend = False
-    try:
-        from mapping_ui import api_client as _api
-        # Test backend connection
-        import httpx
-        httpx.get(f"{_api.BACKEND_URL}/health", timeout=2)
-        _use_backend = True
-    except Exception:
-        pass
-
-    if not _use_backend:
-        from storage import init_db, save_mapping as _local_save, list_mappings as _local_list, delete_mapping as _local_delete
-        init_db()
+    init_db()
 
     # --- Session state defaults ---
     for k, v in {
@@ -953,93 +940,60 @@ def _mapping_tool_tab():
 
     # --- Upload controls ---
     st.subheader("Eşleştirme Aracı — Kutu Çiz + Ürün Ara")
-    st.caption("PDF yükle → sayfa seç → mouse ile kutu çiz → ürün ara → eşleştir")
+    st.caption("PDF yükle → sayfa seç → mouse ile kutu çiz → ürün ara/listeden seç → eşleştir")
 
-    c1, c2, c3 = st.columns([1, 1, 1])
+    c1, c2 = st.columns([1, 1])
     with c1:
         mt_week = st.text_input("Hafta ID", value=st.session_state["mt_week_id"], key="mt_inp_week")
         st.session_state["mt_week_id"] = mt_week
-    with c2:
         mt_excel = st.file_uploader("Excel Ürün Listesi", type=["xlsx", "xls"], key="mt_excel")
-    with c3:
+    with c2:
         mt_pdfs = st.file_uploader("PDF Dosyaları", type=["pdf"], accept_multiple_files=True, key="mt_pdfs")
-
-    mt_zoom = st.slider("Render Zoom", 2.0, 5.0, 3.0, 0.5, key="mt_zoom")
+        mt_zoom = st.slider("Render Zoom", 2.0, 5.0, 3.0, 0.5, key="mt_zoom")
 
     if st.button("Haftayı Yükle", type="primary", key="mt_btn_load"):
         # --- Load Excel products ---
         if mt_excel:
             try:
-                if _use_backend:
-                    _api.upload_excel(mt_week, mt_excel.name, mt_excel.getvalue())
-                    _api.get_products.clear()
-                    prods = _api.get_products(mt_week)
-                    st.session_state["mt_products"] = prods
-                else:
-                    df = pd.read_excel(mt_excel)
-                    col_map = {}
-                    for c in df.columns:
-                        cu = str(c).strip().upper()
-                        if "KOD" in cu:
-                            col_map[c] = "urun_kodu"
-                        elif "AÇIKLAMA" in cu or "ACIKLAMA" in cu:
-                            col_map[c] = "urun_aciklamasi"
-                        elif "FİYAT" in cu or "FIYAT" in cu:
-                            col_map[c] = "afis_fiyat"
-                    if col_map:
-                        df = df.rename(columns=col_map)
-                    # Convert to product dicts for search
-                    prods = []
-                    for _, r in df.iterrows():
-                        prods.append({
-                            "urun_kod": str(r.get("urun_kodu", "")).strip(),
-                            "urun_ad": str(r.get("urun_aciklamasi", "")).strip(),
-                        })
-                    st.session_state["mt_products"] = prods
+                df = pd.read_excel(mt_excel)
+                col_map = {}
+                for c in df.columns:
+                    cu = str(c).strip().upper()
+                    if "KOD" in cu:
+                        col_map[c] = "urun_kodu"
+                    elif "AÇIKLAMA" in cu or "ACIKLAMA" in cu:
+                        col_map[c] = "urun_aciklamasi"
+                    elif "FİYAT" in cu or "FIYAT" in cu:
+                        col_map[c] = "afis_fiyat"
+                if col_map:
+                    df = df.rename(columns=col_map)
+                prods = []
+                for _, r in df.iterrows():
+                    prods.append({
+                        "urun_kod": str(r.get("urun_kodu", "")).strip(),
+                        "urun_ad": str(r.get("urun_aciklamasi", "")).strip(),
+                    })
+                st.session_state["mt_products"] = prods
             except Exception as e:
                 st.error(f"Excel yükleme hatası: {e}")
 
         # --- Load PDF pages ---
         if mt_pdfs:
-            if _use_backend:
-                for f in mt_pdfs:
-                    try:
-                        fid = str(_uuid.uuid4())[:8]
-                        _api.upload_pdf(mt_week, fid, f.name, f.read())
-                    except Exception as e:
-                        st.error(f"PDF yükleme hatası ({f.name}): {e}")
-                _api.get_pages.clear()
-                try:
-                    backend_pages = _api.get_pages(mt_week)
-                    all_pages = []
-                    for p in backend_pages:
-                        if p.get("image_url"):
-                            all_pages.append({
-                                "flyer_id": p["flyer_id"],
-                                "flyer_filename": p.get("flyer_filename", p["flyer_id"]),
-                                "page_no": p["page_no"],
-                                "image_url": _api.image_url(p["image_url"]),
-                                "png_bytes": None,
-                            })
-                    st.session_state["mt_pages"] = all_pages
-                except Exception as e:
-                    st.error(f"Sayfalar alınamadı: {e}")
-            else:
-                all_pages = []
-                for f in mt_pdfs:
-                    raw = f.read()
-                    rendered = render_pdf_bytes_to_pages(raw, zoom=mt_zoom)
-                    for p in rendered:
-                        all_pages.append({
-                            "flyer_id": str(_uuid.uuid4())[:8],
-                            "flyer_filename": f.name,
-                            "page_no": p["page_no"],
-                            "png_bytes": p["png_bytes"],
-                            "image_url": None,
-                            "w": p["w"],
-                            "h": p["h"],
-                        })
-                st.session_state["mt_pages"] = all_pages
+            from pdf_render import render_pdf_bytes_to_pages
+            all_pages = []
+            for f in mt_pdfs:
+                raw = f.read()
+                rendered = render_pdf_bytes_to_pages(raw, zoom=mt_zoom)
+                for p in rendered:
+                    all_pages.append({
+                        "flyer_id": str(_uuid.uuid4())[:8],
+                        "flyer_filename": f.name,
+                        "page_no": p["page_no"],
+                        "png_bytes": p["png_bytes"],
+                        "w": p["w"],
+                        "h": p["h"],
+                    })
+            st.session_state["mt_pages"] = all_pages
 
         st.session_state["mt_bbox"] = None
 
@@ -1049,7 +1003,7 @@ def _mapping_tool_tab():
         return
 
     products = st.session_state["mt_products"]
-    st.success(f"{len(pages)} sayfa yüklendi | {len(products)} ürün")
+    st.success(f"{len(pages)} sayfa | {len(products)} ürün yüklü")
 
     # --- Page selector ---
     page_labels = [f'{p["flyer_filename"]} - s{p["page_no"]}' for p in pages]
@@ -1063,44 +1017,24 @@ def _mapping_tool_tab():
         st.session_state["mt_bbox"] = None
 
     # --- Load saved mappings ---
-    if _use_backend:
-        try:
-            saved = _api.get_mappings(mt_week, page["flyer_id"], page["page_no"])
-        except Exception:
-            saved = []
-    else:
-        saved = _local_list(mt_week, page["flyer_filename"], page["page_no"])
+    saved = _local_list(st.session_state["mt_week_id"], page["flyer_filename"], page["page_no"])
+    saved_boxes = [
+        {"x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+         "label": m.get("urun_kodu") or "?"}
+        for m in saved
+    ]
 
-    saved_boxes = []
-    for m in saved:
-        if _use_backend:
-            b = m.get("bbox", m)
-            saved_boxes.append({
-                "x0": b["x0"], "y0": b["y0"], "x1": b["x1"], "y1": b["y1"],
-                "label": m.get("urun_kod") or "?",
-            })
-        else:
-            saved_boxes.append({
-                "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
-                "label": m.get("urun_kodu") or "?",
-            })
-
-    # --- Interactive canvas ---
+    # --- Interactive canvas + controls ---
     col_img, col_ctrl = st.columns([3, 2])
 
     with col_img:
         canvas_key = f"bbox_{page['flyer_filename']}_p{page['page_no']}"
-
-        if page.get("png_bytes"):
-            result = bbox_canvas(
-                page_png_bytes=page["png_bytes"],
-                saved_boxes=saved_boxes,
-                active_bbox=st.session_state["mt_bbox"],
-                key=canvas_key,
-            )
-        else:
-            st.info("Sayfa resmi yalnızca backend modunda yüklenir.")
-            result = None
+        result = bbox_canvas(
+            page_png_bytes=page["png_bytes"],
+            saved_boxes=saved_boxes,
+            active_bbox=st.session_state["mt_bbox"],
+            key=canvas_key,
+        )
 
         # Update bbox on new selection
         if result and isinstance(result, dict) and "x0" in result:
@@ -1110,115 +1044,91 @@ def _mapping_tool_tab():
 
     with col_ctrl:
         bbox = st.session_state["mt_bbox"]
-        if not bbox:
-            st.info("Soldaki resimde mouse ile kutu çizin → 'Seçimi Kullan' basın.")
-        else:
+        if bbox:
             st.markdown(f"**Seçim:** ({bbox['x0']:.3f}, {bbox['y0']:.3f}) → ({bbox['x1']:.3f}, {bbox['y1']:.3f})")
-
             if st.button("Seçimi Temizle", key="mt_btn_clear"):
                 st.session_state["mt_bbox"] = None
                 st.rerun()
+        else:
+            st.info("Soldaki resimde mouse ile kutu çizin → 'Seçimi Kullan' basın.")
 
-            st.markdown("---")
+        st.markdown("---")
 
-            # ── Ürün Arama (client-side, OCR yok) ──
-            st.markdown("### Ürün Ara")
-            query = st.text_input("Ürün kodu veya adı:", key="mt_search_q", placeholder="Kod veya isim yazın...")
+        # ── Ürün Arama (client-side) ──
+        st.markdown("### Ürün Ara")
+        query = st.text_input("Ürün kodu veya adı:", key="mt_search_q", placeholder="Kod veya isim yazın...")
 
-            if query and products:
-                results = search_products(query, products, limit=15)
-                if results:
-                    for i, p in enumerate(results):
-                        kod = p["urun_kod"]
-                        ad = p.get("urun_ad") or ""
-                        score = p.get("score", 0)
-                        label = f"{kod} — {ad}" if ad else kod
+        if query and products:
+            results = search_products(query, products, limit=15)
+            if results:
+                for i, p in enumerate(results):
+                    kod = p["urun_kod"]
+                    ad = p.get("urun_ad") or ""
+                    label = f"{kod} — {ad}" if ad else kod
+                    if st.button(label, key=f"mt_pick_{i}_{kod}", use_container_width=True, disabled=(bbox is None)):
+                        _mt_save_local(page, bbox, kod, ad, "excel")
+            else:
+                st.caption("Sonuç bulunamadı")
+        elif query and not products:
+            st.warning("Önce Excel yükleyin.")
 
-                        if st.button(label, key=f"mt_pick_{i}_{kod}", help=f"Skor: {score}", use_container_width=True):
-                            _mt_save_v2(page, bbox, kod, ad, "excel", _use_backend, mt_week)
-                else:
-                    st.caption("Sonuç bulunamadı")
-            elif query and not products:
-                st.warning("Ürün listesi yüklenmedi. Önce Excel yükleyin.")
+        # ── Excel Ürün Listesi (her zaman görünür, scroll) ──
+        st.markdown("---")
+        st.markdown(f"### Ürün Listesi ({len(products)})")
+        if products:
+            list_container = st.container(height=350)
+            with list_container:
+                for i, p in enumerate(products):
+                    kod = p["urun_kod"]
+                    ad = p.get("urun_ad") or ""
+                    label = f"{kod} — {ad}" if ad else kod
+                    if st.button(label, key=f"mt_list_{i}_{kod}", use_container_width=True, disabled=(bbox is None)):
+                        _mt_save_local(page, bbox, kod, ad, "excel")
+        else:
+            st.caption("Excel yüklenmedi.")
 
-            st.markdown("---")
-
-            # ── Manuel Giriş ──
-            st.markdown("### Manuel Giriş")
-            code_in = st.text_input("Ürün Kodu:", key="mt_code_in")
-            desc_in = st.text_input("Açıklama (opsiyonel):", key="mt_desc_in")
-            if st.button("Kaydet", disabled=not code_in, key="mt_btn_save_manual"):
-                _mt_save_v2(page, bbox, code_in.strip(), desc_in.strip() or None, "manual", _use_backend, mt_week)
+        # ── Manuel Giriş ──
+        st.markdown("---")
+        st.markdown("### Manuel Giriş")
+        code_in = st.text_input("Ürün Kodu:", key="mt_code_in")
+        desc_in = st.text_input("Açıklama (opsiyonel):", key="mt_desc_in")
+        if st.button("Kaydet", disabled=(not code_in or bbox is None), key="mt_btn_save_manual"):
+            _mt_save_local(page, bbox, code_in.strip(), desc_in.strip() or None, "manual")
 
     # --- Saved mappings table ---
     st.markdown("---")
     if saved:
         st.markdown(f"### Kaydedilen Eşleştirmeler ({len(saved)})")
-        if _use_backend:
-            rows = [{
-                "ID": m["id"], "Ürün Kodu": m.get("urun_kod") or "",
-                "Açıklama": (m.get("urun_ad") or "")[:50], "Kaynak": m.get("source", ""),
-            } for m in saved]
-        else:
-            rows = [{
-                "ID": m["mapping_id"], "Ürün Kodu": m["urun_kodu"] or "",
-                "Açıklama": (m["urun_aciklamasi"] or "")[:50], "Kaynak": m["source"], "Durum": m["status"],
-            } for m in saved]
+        rows = [{
+            "ID": m["mapping_id"], "Ürün Kodu": m["urun_kodu"] or "",
+            "Açıklama": (m["urun_aciklamasi"] or "")[:50], "Kaynak": m["source"],
+        } for m in saved]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-        if _use_backend:
-            del_id = st.text_input("Silinecek ID:", key="mt_del_id")
-            if st.button("Sil", key="mt_btn_del"):
-                if del_id:
-                    try:
-                        _api.delete_mapping(mt_week, del_id)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Silme hatası: {e}")
-        else:
-            del_id = st.number_input("Silinecek ID:", min_value=0, step=1, key="mt_del_id")
-            if st.button("Sil", key="mt_btn_del"):
-                if del_id > 0:
-                    _local_delete(int(del_id))
-                    st.rerun()
+        del_id = st.number_input("Silinecek ID:", min_value=0, step=1, key="mt_del_id")
+        if st.button("Sil", key="mt_btn_del"):
+            if del_id > 0:
+                _local_delete(int(del_id))
+                st.rerun()
     else:
         st.caption("Bu sayfa için henüz eşleştirme yok.")
 
 
-def _mt_save_v2(page, bbox, urun_kod, urun_ad, source, use_backend, week_id):
-    """Save a mapping — backend API or local SQLite."""
-    if use_backend:
-        from mapping_ui import api_client as _api
-        try:
-            _api.save_mapping(
-                week_id, page["flyer_id"], page["page_no"],
-                bbox=bbox, urun_kod=urun_kod, urun_ad=urun_ad, source=source,
-            )
-            st.success(f"Kaydedildi! ({urun_kod})")
-        except Exception as e:
-            st.error(f"Kaydetme hatası: {e}")
-            return
-    else:
-        from storage import save_mapping as _local_save
-        m = {
-            "week_id": week_id,
-            "flyer_filename": page["flyer_filename"],
-            "page_no": page["page_no"],
-            "x0": bbox["x0"], "y0": bbox["y0"], "x1": bbox["x1"], "y1": bbox["y1"],
-            "urun_kodu": urun_kod,
-            "urun_aciklamasi": urun_ad,
-            "afis_fiyat": None,
-            "ocr_text": None,
-            "source": source, "status": "matched",
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        mid = _local_save(m)
-        st.success(f"Kaydedildi! (ID: {mid})")
-
+def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
+    """Save a mapping to local SQLite and rerun."""
+    from storage import save_mapping as _local_save
+    _local_save({
+        "week_id": st.session_state["mt_week_id"],
+        "flyer_filename": page["flyer_filename"],
+        "page_no": page["page_no"],
+        "x0": bbox["x0"], "y0": bbox["y0"], "x1": bbox["x1"], "y1": bbox["y1"],
+        "urun_kodu": urun_kod,
+        "urun_aciklamasi": urun_ad,
+        "afis_fiyat": None,
+        "ocr_text": None,
+        "source": source, "status": "matched",
+        "created_at": datetime.utcnow().isoformat(),
+    })
     st.session_state["mt_bbox"] = None
-    st.session_state.pop("mt_search_q", None)
-    st.session_state.pop("mt_code_in", None)
-    st.session_state.pop("mt_desc_in", None)
     st.rerun()
 
 

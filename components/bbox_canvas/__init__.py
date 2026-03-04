@@ -55,7 +55,7 @@ def bbox_canvas(
         "Seçimi Kullan", else the previously sent value (Streamlit caches
         the last ``setComponentValue``).
     """
-    # ── b64 cache: avoid re-encoding on every rerun ──
+    # ── b64 cache: encode once per page, reuse on every rerun ──
     cache_key = f"_bbox_b64_{key}"
     if cache_key not in st.session_state:
         pil = Image.open(io.BytesIO(page_png_bytes))
@@ -63,9 +63,11 @@ def bbox_canvas(
         dw = min(max_display_width, w)
         scale = dw / w
         dh = int(h * scale)
-        display = pil.resize((dw, dh), Image.LANCZOS)
+        display = pil.resize((dw, dh), Image.BILINEAR)  # faster than LANCZOS
+        if display.mode == "RGBA":
+            display = display.convert("RGB")
         buf = io.BytesIO()
-        display.save(buf, format="PNG", optimize=True)
+        display.save(buf, format="JPEG", quality=82)  # JPEG ~5x smaller/faster than PNG
         st.session_state[cache_key] = base64.b64encode(buf.getvalue()).decode()
 
     img_b64 = st.session_state[cache_key]
