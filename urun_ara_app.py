@@ -1097,19 +1097,42 @@ def _mapping_tool_tab():
         if st.button("Kaydet", disabled=(not code_in or bbox is None), key="mt_btn_save_manual"):
             _mt_save_local(page, bbox, code_in.strip(), desc_in.strip() or None, "manual")
 
-    # --- Saved mappings table ---
+    # --- Saved mappings table + edit ---
     st.markdown("---")
     if saved:
+        from storage import update_mapping as _local_update
+
         st.markdown(f"### Eşleştirmeler ({len(saved)})")
         rows = [{
             "ID": m["mapping_id"], "Ürün Kodu": m["urun_kodu"] or "",
             "Açıklama": (m["urun_aciklamasi"] or "")[:50], "Kaynak": m["source"],
         } for m in saved]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        del_id = st.number_input("Silinecek ID:", min_value=0, step=1, key="mt_del_id")
-        if st.button("Sil", key="mt_btn_del"):
-            if del_id > 0:
-                _local_delete(int(del_id))
+
+        # -- Düzenle / Sil --
+        mapping_ids = [m["mapping_id"] for m in saved]
+        mapping_labels = [f'ID {m["mapping_id"]} — {m["urun_kodu"] or "?"}' for m in saved]
+        sel_map_idx = st.selectbox("Eşleştirme seç:", range(len(mapping_labels)),
+                                    format_func=lambda i: mapping_labels[i], key="mt_edit_pick")
+        sel_map = saved[sel_map_idx]
+
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            new_kod = st.text_input("Ürün Kodu:", value=sel_map["urun_kodu"] or "", key="mt_edit_kod")
+        with ec2:
+            new_desc = st.text_input("Açıklama:", value=sel_map["urun_aciklamasi"] or "", key="mt_edit_desc")
+
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            if st.button("Güncelle", key="mt_btn_update", type="primary", use_container_width=True):
+                _local_update(sel_map["mapping_id"], {
+                    "urun_kodu": new_kod.strip(),
+                    "urun_aciklamasi": new_desc.strip() or None,
+                })
+                st.rerun()
+        with bc2:
+            if st.button("Sil", key="mt_btn_del", use_container_width=True):
+                _local_delete(sel_map["mapping_id"])
                 st.rerun()
     else:
         st.caption("Henüz eşleştirme yok.")

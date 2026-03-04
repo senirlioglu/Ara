@@ -103,6 +103,26 @@ def all_mappings_for_page(
     return list_mappings(week_id, flyer_filename, page_no, db_path)
 
 
+def update_mapping(mapping_id: int, fields: dict, db_path: str | Path | None = None):
+    """Update specific fields of a mapping by ID.
+
+    *fields* is a dict of column-name → new-value.  Only the columns
+    ``urun_kodu``, ``urun_aciklamasi``, ``afis_fiyat``, ``source``,
+    ``status``, ``x0``, ``y0``, ``x1``, ``y1`` are allowed.
+    """
+    allowed = {"urun_kodu", "urun_aciklamasi", "afis_fiyat", "source",
+                "status", "x0", "y0", "x1", "y1"}
+    to_set = {k: v for k, v in fields.items() if k in allowed}
+    if not to_set:
+        return
+    set_clause = ", ".join(f"{k}=?" for k in to_set)
+    vals = list(to_set.values()) + [mapping_id]
+    conn = _conn(db_path)
+    conn.execute(f"UPDATE mappings SET {set_clause} WHERE mapping_id=?", vals)
+    conn.commit()
+    conn.close()
+
+
 def delete_mapping(mapping_id: int, db_path: str | Path | None = None):
     """Delete a single mapping by ID."""
     conn = _conn(db_path)
