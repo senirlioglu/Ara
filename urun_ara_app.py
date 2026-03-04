@@ -924,14 +924,20 @@ def _mapping_tool_tab():
 
     from components.bbox_canvas import bbox_canvas
     from mapping_ui.search import search_products
-    from storage import init_db, list_mappings as _local_list, delete_mapping as _local_delete
 
-    init_db()
+    # init_db sadece bir kez çalışsın
+    if "mt_db_ready" not in st.session_state:
+        from storage import init_db
+        init_db()
+        st.session_state["mt_db_ready"] = True
+
+    from storage import list_mappings as _local_list, delete_mapping as _local_delete
 
     # --- Session state defaults ---
     for k, v in {
         "mt_pages": [],
         "mt_products": [],
+        "mt_product_labels": [],
         "mt_week_id": datetime.now().strftime("%Y-%m-%d"),
         "mt_bbox": None,
     }.items():
@@ -939,8 +945,7 @@ def _mapping_tool_tab():
             st.session_state[k] = v
 
     # --- Upload controls ---
-    st.subheader("Eşleştirme Aracı — Kutu Çiz + Ürün Ara")
-    st.caption("PDF yükle → sayfa seç → mouse ile kutu çiz → ürün ara/listeden seç → eşleştir")
+    st.subheader("Eşleştirme Aracı")
 
     c1, c2 = st.columns([1, 1])
     with c1:
@@ -951,7 +956,6 @@ def _mapping_tool_tab():
         mt_pdfs = st.file_uploader("PDF Dosyaları", type=["pdf"], accept_multiple_files=True, key="mt_pdfs")
 
     if st.button("Haftayı Yükle", type="primary", key="mt_btn_load"):
-        # --- Load Excel products ---
         if mt_excel:
             try:
                 df = pd.read_excel(mt_excel)
@@ -967,16 +971,17 @@ def _mapping_tool_tab():
                 if col_map:
                     df = df.rename(columns=col_map)
                 prods = []
+                labels = []
                 for _, r in df.iterrows():
-                    prods.append({
-                        "urun_kod": str(r.get("urun_kodu", "")).strip(),
-                        "urun_ad": str(r.get("urun_aciklamasi", "")).strip(),
-                    })
+                    kod = str(r.get("urun_kodu", "")).strip()
+                    ad = str(r.get("urun_aciklamasi", "")).strip()
+                    prods.append({"urun_kod": kod, "urun_ad": ad})
+                    labels.append(f"{kod} — {ad}" if ad else kod)
                 st.session_state["mt_products"] = prods
+                st.session_state["mt_product_labels"] = labels
             except Exception as e:
                 st.error(f"Excel yükleme hatası: {e}")
 
-        # --- Load PDF pages ---
         if mt_pdfs:
             from pdf_render import render_pdf_bytes_to_pages
             all_pages = []
@@ -1002,7 +1007,7 @@ def _mapping_tool_tab():
         return
 
     products = st.session_state["mt_products"]
-    st.success(f"{len(pages)} sayfa | {len(products)} ürün yüklü")
+    product_labels = st.session_state["mt_product_labels"]
 
     # --- Page selector ---
     page_labels = [f'{p["flyer_filename"]} - s{p["page_no"]}' for p in pages]
@@ -1035,7 +1040,6 @@ def _mapping_tool_tab():
             key=canvas_key,
         )
 
-        # Update bbox on new selection
         if result and isinstance(result, dict) and "x0" in result:
             if result != st.session_state.get("mt_bbox"):
                 st.session_state["mt_bbox"] = result
@@ -1049,40 +1053,39 @@ def _mapping_tool_tab():
                 st.session_state["mt_bbox"] = None
                 st.rerun()
         else:
-            st.info("Soldaki resimde mouse ile kutu çizin → 'Seçimi Kullan' basın.")
+            st.info("Kutu çizin → 'Seçimi Kullan' basın.")
 
         st.markdown("---")
 
-        # ── Ürün Arama (client-side) ──
+        # ── Ürün Arama → selectbox (tek widget, anında) ──
         st.markdown("### Ürün Ara")
         query = st.text_input("Ürün kodu veya adı:", key="mt_search_q", placeholder="Kod veya isim yazın...")
 
         if query and products:
-            results = search_products(query, products, limit=15)
+            results = search_products(query, products, limit=20)
             if results:
-                for i, p in enumerate(results):
-                    kod = p["urun_kod"]
-                    ad = p.get("urun_ad") or ""
-                    label = f"{kod} — {ad}" if ad else kod
-                    if st.button(label, key=f"mt_pick_{i}_{kod}", use_container_width=True, disabled=(bbox is None)):
-                        _mt_save_local(page, bbox, kod, ad, "excel")
+                search_labels = [f'{r["urun_kod"]} — {r.get("urun_ad") or ""}' for r in results]
+                pick_idx = st.selectbox("Sonuçlar:", range(len(search_labels)),
+                                        format_func=lambda i: search_labels[i], key="mt_search_pick")
+                picked = results[pick_idx]
+                if st.button("Eşleştir", key="mt_btn_search_save", type="primary",
+                             disabled=(bbox is None), use_container_width=True):
+                    _mt_save_local(page, bbox, picked["urun_kod"], picked.get("urun_ad"), "excel")
             else:
                 st.caption("Sonuç bulunamadı")
         elif query and not products:
             st.warning("Önce Excel yükleyin.")
 
-        # ── Excel Ürün Listesi (her zaman görünür, scroll) ──
+        # ── Ürün Listesi → selectbox (tek widget, 220 ürün anında) ──
         st.markdown("---")
         st.markdown(f"### Ürün Listesi ({len(products)})")
-        if products:
-            list_container = st.container(height=350)
-            with list_container:
-                for i, p in enumerate(products):
-                    kod = p["urun_kod"]
-                    ad = p.get("urun_ad") or ""
-                    label = f"{kod} — {ad}" if ad else kod
-                    if st.button(label, key=f"mt_list_{i}_{kod}", use_container_width=True, disabled=(bbox is None)):
-                        _mt_save_local(page, bbox, kod, ad, "excel")
+        if product_labels:
+            list_idx = st.selectbox("Ürün seç:", range(len(product_labels)),
+                                    format_func=lambda i: product_labels[i], key="mt_list_pick")
+            picked_prod = products[list_idx]
+            if st.button("Eşleştir", key="mt_btn_list_save", type="primary",
+                         disabled=(bbox is None), use_container_width=True):
+                _mt_save_local(page, bbox, picked_prod["urun_kod"], picked_prod.get("urun_ad"), "excel")
         else:
             st.caption("Excel yüklenmedi.")
 
@@ -1097,7 +1100,7 @@ def _mapping_tool_tab():
     # --- Saved mappings table ---
     st.markdown("---")
     if saved:
-        st.markdown(f"### Kaydedilen Eşleştirmeler ({len(saved)})")
+        st.markdown(f"### Eşleştirmeler ({len(saved)})")
         rows = [{
             "ID": m["mapping_id"], "Ürün Kodu": m["urun_kodu"] or "",
             "Açıklama": (m["urun_aciklamasi"] or "")[:50], "Kaynak": m["source"],
@@ -1109,7 +1112,7 @@ def _mapping_tool_tab():
                 _local_delete(int(del_id))
                 st.rerun()
     else:
-        st.caption("Bu sayfa için henüz eşleştirme yok.")
+        st.caption("Henüz eşleştirme yok.")
 
 
 def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
