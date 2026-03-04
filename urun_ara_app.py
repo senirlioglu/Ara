@@ -912,6 +912,82 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         elif arama_text:
             st.info("En az 2 karakter girin.")
 
+    # ---- Poster Slider (ön yüz) ----
+    _frontend_poster_viewer()
+
+
+# ============================================================================
+# FRONTEND POSTER VIEWER (Kullanıcı tarafı — ön yüz)
+# ============================================================================
+
+def _frontend_poster_viewer():
+    """Ön yüzde poster sayfalarını slider ile gösteren bölüm."""
+    from components.poster_viewer import poster_viewer
+    from storage import init_db, list_all_weeks, list_mappings_for_week, get_week_pages
+
+    # DB hazır mı
+    if "fe_db_ready" not in st.session_state:
+        init_db()
+        st.session_state["fe_db_ready"] = True
+
+    weeks = list_all_weeks()
+    if not weeks:
+        return  # Henüz poster yok, sessizce geç
+
+    st.markdown("---")
+    st.markdown("### Haftalık Poster")
+
+    # Hafta seçimi (birden fazla varsa)
+    if len(weeks) == 1:
+        selected_week = weeks[0]
+    else:
+        selected_week = st.selectbox(
+            "Hafta:", weeks,
+            format_func=lambda w: f"Hafta: {w}",
+            key="fe_week_select",
+        )
+
+    # Sayfaları yükle (cache)
+    cache_key = f"_fe_pages_{selected_week}"
+    if cache_key not in st.session_state:
+        page_data = get_week_pages(selected_week)
+        if not page_data:
+            st.caption("Bu hafta için poster sayfası bulunamadı.")
+            return
+        st.session_state[cache_key] = page_data
+
+    page_data = st.session_state[cache_key]
+
+    # Her sayfa için hotspot'ları al
+    viewer_pages = []
+    for pg in page_data:
+        mappings = list_mappings_for_week(selected_week, pg["flyer_filename"], pg["page_no"])
+        hotspots = []
+        for m in mappings:
+            hotspots.append({
+                "x0": m["x0"], "y0": m["y0"],
+                "x1": m["x1"], "y1": m["y1"],
+                "urun_kodu": m.get("urun_kodu") or "?",
+                "urun_ad": m.get("urun_aciklamasi") or "",
+                "afis_fiyat": m.get("afis_fiyat") or "",
+            })
+        viewer_pages.append({
+            "png_bytes": pg["png_bytes"],
+            "label": f'{pg["flyer_filename"]} - Sayfa {pg["page_no"]}',
+            "hotspots": hotspots,
+        })
+
+    if not viewer_pages:
+        return
+
+    result = poster_viewer(
+        pages=viewer_pages,
+        current_index=st.session_state.get("fe_pv_idx", 0),
+        key="fe_poster_viewer",
+    )
+
+    if result and isinstance(result, dict) and result.get("type") == "page_change":
+        st.session_state["fe_pv_idx"] = result["index"]
 
 
 # ============================================================================

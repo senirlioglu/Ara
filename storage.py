@@ -129,3 +129,73 @@ def delete_mapping(mapping_id: int, db_path: str | Path | None = None):
     conn.execute("DELETE FROM mappings WHERE mapping_id=?", (mapping_id,))
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Frontend viewer helpers
+# ---------------------------------------------------------------------------
+
+def list_all_weeks(db_path: str | Path | None = None) -> list[str]:
+    """Return all distinct week_ids, most recent first."""
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT DISTINCT week_id FROM mappings ORDER BY week_id DESC"
+    ).fetchall()
+    conn.close()
+    return [r["week_id"] for r in rows]
+
+
+def list_mappings_for_week(
+    week_id: str,
+    flyer_filename: str,
+    page_no: int,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Alias — same as list_mappings, used by frontend viewer."""
+    return list_mappings(week_id, flyer_filename, page_no, db_path)
+
+
+def get_week_pages(
+    week_id: str,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Return distinct (flyer_filename, page_no) pairs for a week.
+
+    Returns list of dicts with keys: flyer_filename, page_no, png_bytes.
+    png_bytes are loaded from the session state cache (mt_pages).
+    If session pages aren't available, returns empty list.
+    """
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """SELECT DISTINCT flyer_filename, page_no
+           FROM mappings
+           WHERE week_id=?
+           ORDER BY flyer_filename, page_no""",
+        (week_id,),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return []
+
+    # Try to get png_bytes from session state (mt_pages)
+    import streamlit as st
+    mt_pages = st.session_state.get("mt_pages", [])
+
+    result = []
+    for r in rows:
+        fname, pno = r["flyer_filename"], r["page_no"]
+        # Find matching page in mt_pages
+        png = None
+        for pg in mt_pages:
+            if pg["flyer_filename"] == fname and pg["page_no"] == pno:
+                png = pg["png_bytes"]
+                break
+        if png:
+            result.append({
+                "flyer_filename": fname,
+                "page_no": pno,
+                "png_bytes": png,
+            })
+
+    return result
