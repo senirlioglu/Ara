@@ -949,7 +949,6 @@ def _mapping_tool_tab():
         mt_excel = st.file_uploader("Excel Ürün Listesi", type=["xlsx", "xls"], key="mt_excel")
     with c2:
         mt_pdfs = st.file_uploader("PDF Dosyaları", type=["pdf"], accept_multiple_files=True, key="mt_pdfs")
-        mt_zoom = st.slider("Render Zoom", 2.0, 5.0, 3.0, 0.5, key="mt_zoom")
 
     if st.button("Haftayı Yükle", type="primary", key="mt_btn_load"):
         # --- Load Excel products ---
@@ -983,7 +982,7 @@ def _mapping_tool_tab():
             all_pages = []
             for f in mt_pdfs:
                 raw = f.read()
-                rendered = render_pdf_bytes_to_pages(raw, zoom=mt_zoom)
+                rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
                 for p in rendered:
                     all_pages.append({
                         "flyer_id": str(_uuid.uuid4())[:8],
