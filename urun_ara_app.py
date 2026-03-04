@@ -1182,28 +1182,13 @@ def admin_panel():
         return output.getvalue()
 
     # ---- Tabs ----
-    tab_analytics, tab_flyer_upload, tab_flyer_review, tab_flyer_view, tab_mapping = st.tabs([
+    tab_analytics, tab_mapping = st.tabs([
         "Analitikler",
-        "Afiş Yükle (v3)",
-        "İncele & Düzelt (v3)",
-        "Afiş Görüntüle (v3)",
         "Eşleştir (Kutu + Ara)",
     ])
 
     with tab_analytics:
         _admin_tab_analytics(df_to_xlsx)
-
-    with tab_flyer_upload:
-        from flyer.admin_bulk_import import bulk_import_page
-        bulk_import_page()
-
-    with tab_flyer_review:
-        from flyer.admin_review import review_page
-        review_page()
-
-    with tab_flyer_view:
-        from flyer.viewer import viewer_page
-        viewer_page()
 
     with tab_mapping:
         _mapping_tool_tab()
