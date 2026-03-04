@@ -1,0 +1,71 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ──
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mapping_engine
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/migrations/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Redis (cache / queue) ──
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI Backend ──
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://postgres:postgres@db:5432/mapping_engine"
+      DATABASE_URL_SYNC: "postgresql://postgres:postgres@db:5432/mapping_engine"
+      REDIS_URL: "redis://redis:6379/0"
+      DATA_DIR: /data
+      API_KEY: "${API_KEY:-dev-key-change-me}"
+      RENDER_ZOOM: "2.0"
+      JPEG_QUALITY: "80"
+    volumes:
+      - appdata:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Streamlit UI ──
+  ui:
+    build:
+      context: ./mapping_ui
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      BACKEND_URL: "http://backend:8000"
+      API_KEY: "${API_KEY:-dev-key-change-me}"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  appdata:

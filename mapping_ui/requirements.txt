@@ -1,0 +1,5 @@
+# Mapping UI (Streamlit thin client)
+streamlit>=1.28.0
+httpx>=0.25.0
+rapidfuzz>=3.5.0
+Pillow>=10.0.0
