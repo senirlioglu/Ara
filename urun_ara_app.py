@@ -921,7 +921,13 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 # ============================================================================
 
 def _frontend_poster_viewer():
-    """Ön yüzde poster sayfalarını slider ile gösteren bölüm."""
+    """Ön yüzde poster sayfalarını slider ile gösteren bölüm.
+
+    Performans:
+    - Sadece aktif sayfanın image'ı component'a gönderilir (tüm sayfalar değil)
+    - Image encode sonucu session_state'te cache'lenir
+    - Hotspot tıklayınca mevcut _pop_arama mekanizması tetiklenir (kod değişmez)
+    """
     from components.poster_viewer import poster_viewer
     from storage import init_db, list_all_weeks, list_mappings_for_week, get_week_pages
 
@@ -935,7 +941,7 @@ def _frontend_poster_viewer():
         return  # Henüz poster yok, sessizce geç
 
     st.markdown("---")
-    st.markdown("### Haftalık Poster")
+    st.markdown("### Haftalık Afiş")
 
     # Hafta seçimi (birden fazla varsa)
     if len(weeks) == 1:
@@ -947,47 +953,81 @@ def _frontend_poster_viewer():
             key="fe_week_select",
         )
 
-    # Sayfaları yükle (cache)
+    # Sayfaları yükle (cache — sadece metadata + png_bytes)
     cache_key = f"_fe_pages_{selected_week}"
     if cache_key not in st.session_state:
         page_data = get_week_pages(selected_week)
         if not page_data:
-            st.caption("Bu hafta için poster sayfası bulunamadı.")
             return
         st.session_state[cache_key] = page_data
 
     page_data = st.session_state[cache_key]
-
-    # Her sayfa için hotspot'ları al
-    viewer_pages = []
-    for pg in page_data:
-        mappings = list_mappings_for_week(selected_week, pg["flyer_filename"], pg["page_no"])
-        hotspots = []
-        for m in mappings:
-            hotspots.append({
-                "x0": m["x0"], "y0": m["y0"],
-                "x1": m["x1"], "y1": m["y1"],
-                "urun_kodu": m.get("urun_kodu") or "?",
-                "urun_ad": m.get("urun_aciklamasi") or "",
-                "afis_fiyat": m.get("afis_fiyat") or "",
-            })
-        viewer_pages.append({
-            "png_bytes": pg["png_bytes"],
-            "label": f'{pg["flyer_filename"]} - Sayfa {pg["page_no"]}',
-            "hotspots": hotspots,
-        })
-
-    if not viewer_pages:
+    if not page_data:
         return
 
+    total_pages = len(page_data)
+
+    # Sayfa navigasyonu (Streamlit tarafında — hafif)
+    if "fe_pv_idx" not in st.session_state:
+        st.session_state["fe_pv_idx"] = 0
+
+    cur_idx = st.session_state["fe_pv_idx"]
+    if cur_idx >= total_pages:
+        cur_idx = 0
+        st.session_state["fe_pv_idx"] = 0
+
+    # SADECE aktif sayfayı hazırla (performans)
+    pg = page_data[cur_idx]
+    mappings = list_mappings_for_week(selected_week, pg["flyer_filename"], pg["page_no"])
+    hotspots = []
+    for m in mappings:
+        hotspots.append({
+            "x0": m["x0"], "y0": m["y0"],
+            "x1": m["x1"], "y1": m["y1"],
+            "urun_kodu": m.get("urun_kodu") or "",
+            "urun_ad": m.get("urun_aciklamasi") or "",
+            "afis_fiyat": m.get("afis_fiyat") or "",
+        })
+
+    single_page = [{
+        "png_bytes": pg["png_bytes"],
+        "label": f'Sayfa {cur_idx + 1} / {total_pages}',
+        "hotspots": hotspots,
+    }]
+
+    # Component: search mode — hotspot tıklayınca urun_kodu döner
     result = poster_viewer(
-        pages=viewer_pages,
-        current_index=st.session_state.get("fe_pv_idx", 0),
+        pages=single_page,
+        current_index=0,
+        click_mode="search",
+        height=1200,
         key="fe_poster_viewer",
     )
 
-    if result and isinstance(result, dict) and result.get("type") == "page_change":
-        st.session_state["fe_pv_idx"] = result["index"]
+    # Sayfa navigasyonu butonları
+    if total_pages > 1:
+        nav1, nav2, nav3 = st.columns([1, 3, 1])
+        with nav1:
+            if st.button("◀ Önceki", key="fe_pv_prev", disabled=(cur_idx == 0), use_container_width=True):
+                st.session_state["fe_pv_idx"] = cur_idx - 1
+                st.rerun()
+        with nav2:
+            st.caption(f"Sayfa {cur_idx + 1} / {total_pages}")
+        with nav3:
+            if st.button("Sonraki ▶", key="fe_pv_next", disabled=(cur_idx >= total_pages - 1), use_container_width=True):
+                st.session_state["fe_pv_idx"] = cur_idx + 1
+                st.rerun()
+
+    # Hotspot tıklandı → mevcut popüler arama mekanizmasını tetikle
+    if result and isinstance(result, dict) and result.get("type") == "hotspot_click":
+        urun_kodu = (result.get("urun_kodu") or "").strip()
+        click_ts = result.get("ts", 0)
+        # Aynı click'i tekrar işleme (rerun loop önleme)
+        if urun_kodu and click_ts != st.session_state.get("_fe_last_click_ts"):
+            st.session_state["_fe_last_click_ts"] = click_ts
+            st.session_state["arama_input"] = urun_kodu
+            st.session_state["_pop_arama"] = urun_kodu
+            st.rerun()
 
 
 # ============================================================================

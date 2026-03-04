@@ -218,6 +218,7 @@ var popupClose= document.getElementById("popupClose");
 var pages      = [];     /* [{image_b64, hotspots: [{x0,y0,x1,y1,urun_kodu,urun_ad,afis_fiyat}]}] */
 var currentIdx = 0;
 var activeHotspot = null;
+var clickMode  = "popup"; /* "popup" (admin) or "search" (frontend) */
 
 /* ── Receive data from Streamlit ── */
 window.addEventListener("message", function(event) {
@@ -227,6 +228,7 @@ window.addEventListener("message", function(event) {
 
   pages = args.pages || [];
   currentIdx = args.current_index || 0;
+  clickMode = args.click_mode || "popup";
 
   if (pages.length === 0) {
     pageInfo.textContent = "Henüz poster yüklenmedi";
@@ -319,7 +321,13 @@ function renderHotspots(hotspots) {
     div.addEventListener("click", (function(hotspot, el) {
       return function(e) {
         e.stopPropagation();
-        showPopup(hotspot, el);
+        if (clickMode === "search") {
+          /* Frontend mode: send product code to trigger search */
+          sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now()});
+        } else {
+          /* Admin mode: show popup */
+          showPopup(hotspot, el);
+        }
       };
     })(h, div));
 

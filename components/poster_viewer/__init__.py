@@ -23,6 +23,7 @@ def poster_viewer(
     pages: list[dict],
     *,
     current_index: int = 0,
+    click_mode: str = "popup",
     max_display_width: int = 800,
     height: int = 1200,
     key: str = "poster_viewer",
@@ -32,20 +33,11 @@ def poster_viewer(
     Parameters
     ----------
     pages : list[dict]
-        Each entry::
-
-            {
-                "png_bytes": bytes,          # raw page image
-                "label": "file.pdf - s1",    # display label
-                "hotspots": [                 # mapped products
-                    {"x0": .1, "y0": .2, "x1": .3, "y1": .4,
-                     "urun_kodu": "ABC", "urun_ad": "...", "afis_fiyat": "99.90"},
-                    ...
-                ],
-            }
-
+        Each entry: {"png_bytes": bytes, "label": str, "hotspots": [...]}
     current_index : int
         Which page to show initially.
+    click_mode : str
+        "popup" = admin preview popup, "search" = send urun_kodu to trigger search.
     max_display_width : int
         Max pixel width for the displayed image.
     height : int
@@ -56,7 +48,8 @@ def poster_viewer(
     Returns
     -------
     dict | None
-        ``{"type": "page_change", "index": N}`` when user navigates.
+        ``{"type": "hotspot_click", "urun_kodu": "..."}`` in search mode,
+        ``{"type": "page_change", "index": N}`` on navigation.
     """
     # Build lightweight page data (b64 images + hotspots)
     cache_key = f"_pv_cache_{key}"
@@ -80,6 +73,7 @@ def poster_viewer(
     return _component_func(
         pages=comp_pages,
         current_index=current_index,
+        click_mode=click_mode,
         key=key,
         default=None,
         height=height,
