@@ -1,9 +1,8 @@
-"""SQLite persistence for flyer bbox-product mappings."""
+"""SQLite persistence for flyer bbox-product mappings and poster pages."""
 
 from __future__ import annotations
 
 import sqlite3
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +20,7 @@ def _conn(db_path: str | Path | None = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: str | Path | None = None):
-    """Create the mappings table if it doesn't exist."""
+    """Create tables if they don't exist."""
     conn = _conn(db_path)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mappings (
@@ -42,9 +41,26 @@ def init_db(db_path: str | Path | None = None):
             created_at   TEXT NOT NULL
         )
     """)
+    # Poster pages — stores actual page images as BLOB
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS poster_pages (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            week_id        TEXT NOT NULL,
+            flyer_filename TEXT NOT NULL,
+            page_no        INTEGER NOT NULL,
+            png_data       BLOB NOT NULL,
+            title          TEXT DEFAULT '',
+            sort_order     INTEGER DEFAULT 0,
+            UNIQUE(week_id, flyer_filename, page_no)
+        )
+    """)
     conn.commit()
     conn.close()
 
+
+# ============================================================================
+# MAPPINGS CRUD
+# ============================================================================
 
 def save_mapping(m: dict, db_path: str | Path | None = None) -> int:
     """Insert a mapping and return its ID."""
@@ -104,12 +120,7 @@ def all_mappings_for_page(
 
 
 def update_mapping(mapping_id: int, fields: dict, db_path: str | Path | None = None):
-    """Update specific fields of a mapping by ID.
-
-    *fields* is a dict of column-name → new-value.  Only the columns
-    ``urun_kodu``, ``urun_aciklamasi``, ``afis_fiyat``, ``source``,
-    ``status``, ``x0``, ``y0``, ``x1``, ``y1`` are allowed.
-    """
+    """Update specific fields of a mapping by ID."""
     allowed = {"urun_kodu", "urun_aciklamasi", "afis_fiyat", "source",
                 "status", "x0", "y0", "x1", "y1"}
     to_set = {k: v for k, v in fields.items() if k in allowed}
@@ -131,15 +142,96 @@ def delete_mapping(mapping_id: int, db_path: str | Path | None = None):
     conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Frontend viewer helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# POSTER PAGES — persistent image storage
+# ============================================================================
 
-def list_all_weeks(db_path: str | Path | None = None) -> list[str]:
-    """Return all distinct week_ids, most recent first."""
+def save_poster_page(
+    week_id: str,
+    flyer_filename: str,
+    page_no: int,
+    png_data: bytes,
+    title: str = "",
+    sort_order: int = 0,
+    db_path: str | Path | None = None,
+):
+    """Save or replace a poster page image in the DB."""
+    conn = _conn(db_path)
+    conn.execute(
+        """INSERT INTO poster_pages (week_id, flyer_filename, page_no, png_data, title, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(week_id, flyer_filename, page_no)
+           DO UPDATE SET png_data=excluded.png_data, title=excluded.title, sort_order=excluded.sort_order""",
+        (week_id, flyer_filename, page_no, png_data, title, sort_order),
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_poster_pages_bulk(pages: list[dict], db_path: str | Path | None = None):
+    """Save multiple poster pages at once. Each dict needs: week_id, flyer_filename, page_no, png_data."""
+    conn = _conn(db_path)
+    for pg in pages:
+        conn.execute(
+            """INSERT INTO poster_pages (week_id, flyer_filename, page_no, png_data, title, sort_order)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(week_id, flyer_filename, page_no)
+               DO UPDATE SET png_data=excluded.png_data""",
+            (pg["week_id"], pg["flyer_filename"], pg["page_no"],
+             pg["png_data"], pg.get("title", ""), pg.get("sort_order", 0)),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_poster_pages(
+    week_id: str,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Return all poster pages for a week, ordered by sort_order then page_no."""
     conn = _conn(db_path)
     rows = conn.execute(
-        "SELECT DISTINCT week_id FROM mappings ORDER BY week_id DESC"
+        """SELECT id, week_id, flyer_filename, page_no, png_data, title, sort_order
+           FROM poster_pages
+           WHERE week_id=?
+           ORDER BY sort_order, flyer_filename, page_no""",
+        (week_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_poster_page(page_id: int, fields: dict, db_path: str | Path | None = None):
+    """Update title or sort_order of a poster page."""
+    allowed = {"title", "sort_order"}
+    to_set = {k: v for k, v in fields.items() if k in allowed}
+    if not to_set:
+        return
+    set_clause = ", ".join(f"{k}=?" for k in to_set)
+    vals = list(to_set.values()) + [page_id]
+    conn = _conn(db_path)
+    conn.execute(f"UPDATE poster_pages SET {set_clause} WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+
+
+def delete_poster_page(page_id: int, db_path: str | Path | None = None):
+    """Delete a poster page by ID."""
+    conn = _conn(db_path)
+    conn.execute("DELETE FROM poster_pages WHERE id=?", (page_id,))
+    conn.commit()
+    conn.close()
+
+
+# ============================================================================
+# Frontend viewer helpers
+# ============================================================================
+
+def list_all_weeks(db_path: str | Path | None = None) -> list[str]:
+    """Return all distinct week_ids that have poster pages, most recent first."""
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT DISTINCT week_id FROM poster_pages ORDER BY week_id DESC"
     ).fetchall()
     conn.close()
     return [r["week_id"] for r in rows]
@@ -153,49 +245,3 @@ def list_mappings_for_week(
 ) -> list[dict]:
     """Alias — same as list_mappings, used by frontend viewer."""
     return list_mappings(week_id, flyer_filename, page_no, db_path)
-
-
-def get_week_pages(
-    week_id: str,
-    db_path: str | Path | None = None,
-) -> list[dict]:
-    """Return distinct (flyer_filename, page_no) pairs for a week.
-
-    Returns list of dicts with keys: flyer_filename, page_no, png_bytes.
-    png_bytes are loaded from the session state cache (mt_pages).
-    If session pages aren't available, returns empty list.
-    """
-    conn = _conn(db_path)
-    rows = conn.execute(
-        """SELECT DISTINCT flyer_filename, page_no
-           FROM mappings
-           WHERE week_id=?
-           ORDER BY flyer_filename, page_no""",
-        (week_id,),
-    ).fetchall()
-    conn.close()
-
-    if not rows:
-        return []
-
-    # Try to get png_bytes from session state (mt_pages)
-    import streamlit as st
-    mt_pages = st.session_state.get("mt_pages", [])
-
-    result = []
-    for r in rows:
-        fname, pno = r["flyer_filename"], r["page_no"]
-        # Find matching page in mt_pages
-        png = None
-        for pg in mt_pages:
-            if pg["flyer_filename"] == fname and pg["page_no"] == pno:
-                png = pg["png_bytes"]
-                break
-        if png:
-            result.append({
-                "flyer_filename": fname,
-                "page_no": pno,
-                "png_bytes": png,
-            })
-
-    return result

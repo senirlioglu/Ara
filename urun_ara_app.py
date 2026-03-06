@@ -924,12 +924,12 @@ def _frontend_poster_viewer():
     """Ön yüzde poster sayfalarını slider ile gösteren bölüm.
 
     Performans:
-    - Sadece aktif sayfanın image'ı component'a gönderilir (tüm sayfalar değil)
-    - Image encode sonucu session_state'te cache'lenir
+    - Poster resimleri DB'den okunur (session bağımsız, her kullanıcı görür)
+    - Sadece aktif sayfanın image'ı component'a gönderilir
     - Hotspot tıklayınca mevcut _pop_arama mekanizması tetiklenir (kod değişmez)
     """
     from components.poster_viewer import poster_viewer
-    from storage import init_db, list_all_weeks, list_mappings_for_week, get_week_pages
+    from storage import init_db, list_all_weeks, list_mappings_for_week, get_poster_pages
 
     # DB hazır mı
     if "fe_db_ready" not in st.session_state:
@@ -941,9 +941,8 @@ def _frontend_poster_viewer():
         return  # Henüz poster yok, sessizce geç
 
     st.markdown("---")
-    st.markdown("### Haftalık Afiş")
 
-    # Hafta seçimi (birden fazla varsa)
+    # En güncel haftayı otomatik seç (birden fazla varsa dropdown)
     if len(weeks) == 1:
         selected_week = weeks[0]
     else:
@@ -953,21 +952,18 @@ def _frontend_poster_viewer():
             key="fe_week_select",
         )
 
-    # Sayfaları yükle (cache — sadece metadata + png_bytes)
-    cache_key = f"_fe_pages_{selected_week}"
+    # Poster sayfalarını DB'den yükle (cache)
+    cache_key = f"_fe_dbpages_{selected_week}"
     if cache_key not in st.session_state:
-        page_data = get_week_pages(selected_week)
-        if not page_data:
-            return
-        st.session_state[cache_key] = page_data
+        st.session_state[cache_key] = get_poster_pages(selected_week)
 
-    page_data = st.session_state[cache_key]
-    if not page_data:
+    poster_pages = st.session_state[cache_key]
+    if not poster_pages:
         return
 
-    total_pages = len(page_data)
+    total_pages = len(poster_pages)
 
-    # Sayfa navigasyonu (Streamlit tarafında — hafif)
+    # Sayfa navigasyonu
     if "fe_pv_idx" not in st.session_state:
         st.session_state["fe_pv_idx"] = 0
 
@@ -976,22 +972,23 @@ def _frontend_poster_viewer():
         cur_idx = 0
         st.session_state["fe_pv_idx"] = 0
 
-    # SADECE aktif sayfayı hazırla (performans)
-    pg = page_data[cur_idx]
+    # Başlık (admin'den ayarlanmış başlık veya varsayılan)
+    pg = poster_pages[cur_idx]
+    page_title = pg["title"] or f'Sayfa {cur_idx + 1}'
+    st.markdown(f"### {page_title}")
+
+    # SADECE aktif sayfanın hotspot'larını al
     mappings = list_mappings_for_week(selected_week, pg["flyer_filename"], pg["page_no"])
-    hotspots = []
-    for m in mappings:
-        hotspots.append({
-            "x0": m["x0"], "y0": m["y0"],
-            "x1": m["x1"], "y1": m["y1"],
-            "urun_kodu": m.get("urun_kodu") or "",
-            "urun_ad": m.get("urun_aciklamasi") or "",
-            "afis_fiyat": m.get("afis_fiyat") or "",
-        })
+    hotspots = [{
+        "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+        "urun_kodu": m.get("urun_kodu") or "",
+        "urun_ad": m.get("urun_aciklamasi") or "",
+        "afis_fiyat": m.get("afis_fiyat") or "",
+    } for m in mappings]
 
     single_page = [{
-        "png_bytes": pg["png_bytes"],
-        "label": f'Sayfa {cur_idx + 1} / {total_pages}',
+        "png_bytes": pg["png_data"],
+        "label": page_title,
         "hotspots": hotspots,
     }]
 
@@ -1004,7 +1001,7 @@ def _frontend_poster_viewer():
         key="fe_poster_viewer",
     )
 
-    # Sayfa navigasyonu butonları
+    # Sayfa navigasyonu butonları (slider)
     if total_pages > 1:
         nav1, nav2, nav3 = st.columns([1, 3, 1])
         with nav1:
@@ -1100,6 +1097,7 @@ def _mapping_tool_tab():
 
         if mt_pdfs:
             from pdf_render import render_pdf_bytes_to_pages
+            from storage import save_poster_pages_bulk
             all_pages = []
             for f in mt_pdfs:
                 raw = f.read()
@@ -1114,6 +1112,14 @@ def _mapping_tool_tab():
                         "h": p["h"],
                     })
             st.session_state["mt_pages"] = all_pages
+
+            # Poster sayfalarını DB'ye kaydet (frontend için)
+            save_poster_pages_bulk([{
+                "week_id": mt_week,
+                "flyer_filename": pg["flyer_filename"],
+                "page_no": pg["page_no"],
+                "png_data": pg["png_bytes"],
+            } for pg in all_pages])
 
         st.session_state["mt_bbox"] = None
 
@@ -1213,93 +1219,125 @@ def _mapping_tool_tab():
         if st.button("Kaydet", disabled=(not code_in or bbox is None), key="mt_btn_save_manual"):
             _mt_save_local(page, bbox, code_in.strip(), desc_in.strip() or None, "manual")
 
-    # --- Saved mappings table + edit ---
+    # --- Saved mappings table with inline edit/delete ---
     st.markdown("---")
     if saved:
         from storage import update_mapping as _local_update
 
         st.markdown(f"### Eşleştirmeler ({len(saved)})")
-        rows = [{
-            "ID": m["mapping_id"], "Ürün Kodu": m["urun_kodu"] or "",
-            "Açıklama": (m["urun_aciklamasi"] or "")[:50], "Kaynak": m["source"],
-        } for m in saved]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-        # -- Düzenle / Sil --
-        mapping_ids = [m["mapping_id"] for m in saved]
-        mapping_labels = [f'ID {m["mapping_id"]} — {m["urun_kodu"] or "?"}' for m in saved]
-        sel_map_idx = st.selectbox("Eşleştirme seç:", range(len(mapping_labels)),
-                                    format_func=lambda i: mapping_labels[i], key="mt_edit_pick")
-        sel_map = saved[sel_map_idx]
-
-        ec1, ec2 = st.columns(2)
-        with ec1:
-            new_kod = st.text_input("Ürün Kodu:", value=sel_map["urun_kodu"] or "", key="mt_edit_kod")
-        with ec2:
-            new_desc = st.text_input("Açıklama:", value=sel_map["urun_aciklamasi"] or "", key="mt_edit_desc")
-
-        bc1, bc2 = st.columns(2)
-        with bc1:
-            if st.button("Güncelle", key="mt_btn_update", type="primary", use_container_width=True):
-                _local_update(sel_map["mapping_id"], {
-                    "urun_kodu": new_kod.strip(),
-                    "urun_aciklamasi": new_desc.strip() or None,
-                })
-                st.rerun()
-        with bc2:
-            if st.button("Sil", key="mt_btn_del", use_container_width=True):
-                _local_delete(sel_map["mapping_id"])
-                st.rerun()
+        for i, m in enumerate(saved):
+            mid = m["mapping_id"]
+            with st.container():
+                rc1, rc2, rc3, rc4, rc5 = st.columns([1, 2.5, 3, 1.5, 1.5])
+                with rc1:
+                    st.caption(f"#{mid}")
+                with rc2:
+                    new_kod = st.text_input(
+                        "Kod", value=m["urun_kodu"] or "", key=f"mt_ek_{mid}",
+                        label_visibility="collapsed",
+                    )
+                with rc3:
+                    new_desc = st.text_input(
+                        "Açıklama", value=m["urun_aciklamasi"] or "", key=f"mt_ed_{mid}",
+                        label_visibility="collapsed",
+                    )
+                with rc4:
+                    if st.button("Kaydet", key=f"mt_eu_{mid}", use_container_width=True):
+                        _local_update(mid, {
+                            "urun_kodu": new_kod.strip(),
+                            "urun_aciklamasi": new_desc.strip() or None,
+                        })
+                        st.rerun()
+                with rc5:
+                    if st.button("Sil", key=f"mt_edel_{mid}", use_container_width=True):
+                        _local_delete(mid)
+                        st.rerun()
     else:
         st.caption("Henüz eşleştirme yok.")
 
 
 # ============================================================================
-# POSTER VIEWER TAB (Slider + Hotspot Önizleme)
+# POSTER VIEWER TAB (Admin — Başlık/Sıralama Yönetimi + Önizleme)
 # ============================================================================
 
 def _poster_viewer_tab():
-    """Poster sayfalarını slider ile gösteren, hotspot'ları tıklanabilir yapan tab."""
+    """Admin poster yönetimi: başlık, sıralama, önizleme."""
     from components.poster_viewer import poster_viewer
-    from storage import list_mappings as _pv_list
+    from storage import (
+        list_mappings as _pv_list,
+        get_poster_pages, update_poster_page, delete_poster_page,
+        list_all_weeks,
+    )
 
-    st.subheader("Poster Görüntüle")
+    st.subheader("Poster Yönetimi")
 
-    pages = st.session_state.get("mt_pages", [])
-    if not pages:
-        st.info("Önce 'Eşleştir' sekmesinden PDF ve Excel yükleyip 'Haftayı Yükle' basın.")
+    weeks = list_all_weeks()
+    if not weeks:
+        st.info("Önce 'Eşleştir' sekmesinden PDF yükleyip 'Haftayı Yükle' basın.")
         return
 
-    week_id = st.session_state.get("mt_week_id", "")
+    selected_week = st.selectbox("Hafta:", weeks, key="pv_admin_week")
+    poster_pages = get_poster_pages(selected_week)
 
-    # Build viewer pages with hotspots from DB
+    if not poster_pages:
+        st.info("Bu hafta için poster sayfası bulunamadı.")
+        return
+
+    # --- Başlık ve Sıralama Yönetimi ---
+    st.markdown("#### Sayfa Başlıkları ve Sıralama")
+    st.caption("Başlık ve sıra numarası girin. Küçük sıra = önce gösterilir.")
+
+    for pg in poster_pages:
+        pid = pg["id"]
+        tc1, tc2, tc3, tc4 = st.columns([3, 2, 1.5, 1.5])
+        with tc1:
+            cur_title = st.text_input(
+                "Başlık", value=pg["title"] or "",
+                key=f"pv_t_{pid}", label_visibility="collapsed",
+                placeholder=f'{pg["flyer_filename"]} s{pg["page_no"]}',
+            )
+        with tc2:
+            cur_sort = st.number_input(
+                "Sıra", value=pg["sort_order"], step=1,
+                key=f"pv_s_{pid}", label_visibility="collapsed",
+            )
+        with tc3:
+            if st.button("Kaydet", key=f"pv_save_{pid}", use_container_width=True):
+                update_poster_page(pid, {"title": cur_title.strip(), "sort_order": int(cur_sort)})
+                st.rerun()
+        with tc4:
+            if st.button("Sil", key=f"pv_del_{pid}", use_container_width=True):
+                delete_poster_page(pid)
+                st.rerun()
+
+    # --- Önizleme ---
+    st.markdown("---")
+    st.markdown("#### Önizleme")
+
     viewer_pages = []
-    for pg in pages:
-        mappings = _pv_list(week_id, pg["flyer_filename"], pg["page_no"])
-        hotspots = []
-        for m in mappings:
-            hotspots.append({
-                "x0": m["x0"], "y0": m["y0"],
-                "x1": m["x1"], "y1": m["y1"],
-                "urun_kodu": m.get("urun_kodu") or "?",
-                "urun_ad": m.get("urun_aciklamasi") or "",
-                "afis_fiyat": m.get("afis_fiyat") or "",
-            })
+    for pg in poster_pages:
+        mappings = _pv_list(selected_week, pg["flyer_filename"], pg["page_no"])
+        hotspots = [{
+            "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+            "urun_kodu": m.get("urun_kodu") or "?",
+            "urun_ad": m.get("urun_aciklamasi") or "",
+            "afis_fiyat": m.get("afis_fiyat") or "",
+        } for m in mappings]
+        label = pg["title"] or f'{pg["flyer_filename"]} - Sayfa {pg["page_no"]}'
         viewer_pages.append({
-            "png_bytes": pg["png_bytes"],
-            "label": f'{pg["flyer_filename"]} - Sayfa {pg["page_no"]}',
+            "png_bytes": pg["png_data"],
+            "label": label,
             "hotspots": hotspots,
         })
-
-    st.caption(f"{len(viewer_pages)} sayfa | Hotspot'lara tıklayın → ürün bilgisi")
 
     result = poster_viewer(
         pages=viewer_pages,
         current_index=st.session_state.get("pv_page_idx", 0),
-        key="poster_viewer_main",
+        click_mode="popup",
+        key="poster_viewer_admin",
     )
 
-    # Track page changes
     if result and isinstance(result, dict) and result.get("type") == "page_change":
         st.session_state["pv_page_idx"] = result["index"]
 
