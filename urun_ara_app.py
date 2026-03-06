@@ -1267,7 +1267,7 @@ def _poster_viewer_tab():
     from storage import (
         list_mappings as _pv_list,
         get_poster_pages, update_poster_page, delete_poster_page,
-        list_all_weeks,
+        delete_week, list_all_weeks,
     )
 
     st.subheader("Poster Yönetimi")
@@ -1277,7 +1277,32 @@ def _poster_viewer_tab():
         st.info("Önce 'Eşleştir' sekmesinden PDF yükleyip 'Haftayı Yükle' basın.")
         return
 
-    selected_week = st.selectbox("Hafta:", weeks, key="pv_admin_week")
+    wc1, wc2 = st.columns([4, 1])
+    with wc1:
+        selected_week = st.selectbox("Hafta:", weeks, key="pv_admin_week")
+    with wc2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Haftayı Sil", key="pv_del_week", type="secondary", use_container_width=True):
+            st.session_state["_confirm_del_week"] = selected_week
+
+    # Hafta silme onayı
+    if st.session_state.get("_confirm_del_week") == selected_week:
+        st.warning(f"**{selected_week}** haftasının tüm afiş sayfaları ve eşleştirmeleri silinecek!")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("Evet, Sil", key="pv_confirm_yes", type="primary", use_container_width=True):
+                delete_week(selected_week)
+                st.session_state.pop("_confirm_del_week", None)
+                # Ön yüz cache'ini temizle
+                for k in list(st.session_state.keys()):
+                    if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
+                        st.session_state.pop(k, None)
+                st.rerun()
+        with cc2:
+            if st.button("İptal", key="pv_confirm_no", use_container_width=True):
+                st.session_state.pop("_confirm_del_week", None)
+                st.rerun()
+
     poster_pages = get_poster_pages(selected_week)
 
     if not poster_pages:

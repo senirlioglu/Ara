@@ -223,6 +223,15 @@ def delete_poster_page(page_id: int, db_path: str | Path | None = None):
     conn.close()
 
 
+def delete_week(week_id: str, db_path: str | Path | None = None):
+    """Delete all poster pages AND mappings for a given week."""
+    conn = _conn(db_path)
+    conn.execute("DELETE FROM poster_pages WHERE week_id=?", (week_id,))
+    conn.execute("DELETE FROM mappings WHERE week_id=?", (week_id,))
+    conn.commit()
+    conn.close()
+
+
 # ============================================================================
 # Frontend viewer helpers
 # ============================================================================
