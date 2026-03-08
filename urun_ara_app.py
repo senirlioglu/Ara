@@ -887,7 +887,6 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
 
     # Popüler Aramalar (Yatay kaydırmalı pill butonlar)
     def set_search_and_run(term):
-        st.session_state.arama_input = term
         st.session_state._pop_arama = term
 
     populer = get_populer_terimler()
