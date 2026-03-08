@@ -1022,7 +1022,6 @@ def _frontend_poster_viewer():
         # Aynı click'i tekrar işleme (rerun loop önleme)
         if urun_kodu and click_ts != st.session_state.get("_fe_last_click_ts"):
             st.session_state["_fe_last_click_ts"] = click_ts
-            st.session_state["arama_input"] = urun_kodu
             st.session_state["_pop_arama"] = urun_kodu
             st.rerun()
 
