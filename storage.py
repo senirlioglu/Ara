@@ -54,6 +54,30 @@ def init_db(db_path: str | Path | None = None):
             UNIQUE(week_id, flyer_filename, page_no)
         )
     """)
+    # Week products — product queue from Excel
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS week_products (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            week_id        TEXT NOT NULL,
+            urun_kodu      TEXT NOT NULL,
+            urun_aciklamasi TEXT,
+            afis_fiyat     TEXT,
+            source_row     INTEGER DEFAULT 0,
+            is_mapped      INTEGER DEFAULT 0,
+            UNIQUE(week_id, urun_kodu)
+        )
+    """)
+    # Week metadata — status tracking
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS poster_weeks (
+            week_id        TEXT PRIMARY KEY,
+            week_name      TEXT DEFAULT '',
+            start_date     TEXT,
+            end_date       TEXT,
+            status         TEXT DEFAULT 'draft',
+            created_at     TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -230,6 +254,129 @@ def delete_week(week_id: str, db_path: str | Path | None = None):
     conn.execute("DELETE FROM mappings WHERE week_id=?", (week_id,))
     conn.commit()
     conn.close()
+
+
+# ============================================================================
+# WEEK PRODUCTS — product queue from Excel
+# ============================================================================
+
+def save_week_products(week_id: str, products: list[dict], db_path: str | Path | None = None):
+    """Bulk save products for a week. Each dict: urun_kodu, urun_aciklamasi, afis_fiyat."""
+    conn = _conn(db_path)
+    conn.execute("DELETE FROM week_products WHERE week_id=?", (week_id,))
+    for i, p in enumerate(products):
+        conn.execute(
+            """INSERT OR IGNORE INTO week_products
+               (week_id, urun_kodu, urun_aciklamasi, afis_fiyat, source_row, is_mapped)
+               VALUES (?, ?, ?, ?, ?, 0)""",
+            (week_id, p.get("urun_kodu", ""), p.get("urun_aciklamasi", ""),
+             p.get("afis_fiyat", ""), i + 1),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_week_products(week_id: str, db_path: str | Path | None = None) -> list[dict]:
+    """Return all products for a week, ordered by source_row."""
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT * FROM week_products WHERE week_id=? ORDER BY source_row",
+        (week_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_product_mapped(week_id: str, urun_kodu: str, db_path: str | Path | None = None):
+    """Mark a product as mapped in the queue."""
+    conn = _conn(db_path)
+    conn.execute(
+        "UPDATE week_products SET is_mapped=1 WHERE week_id=? AND urun_kodu=?",
+        (week_id, urun_kodu),
+    )
+    conn.commit()
+    conn.close()
+
+
+def unmark_product_mapped(week_id: str, urun_kodu: str, db_path: str | Path | None = None):
+    """Unmark a product (e.g. when mapping deleted)."""
+    conn = _conn(db_path)
+    conn.execute(
+        "UPDATE week_products SET is_mapped=0 WHERE week_id=? AND urun_kodu=?",
+        (week_id, urun_kodu),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_mapped_product_codes(week_id: str, db_path: str | Path | None = None) -> set[str]:
+    """Return set of all urun_kodu that have at least one mapping in this week."""
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT DISTINCT urun_kodu FROM mappings WHERE week_id=? AND urun_kodu IS NOT NULL",
+        (week_id,),
+    ).fetchall()
+    conn.close()
+    return {r["urun_kodu"] for r in rows}
+
+
+# ============================================================================
+# POSTER WEEKS — week metadata & status
+# ============================================================================
+
+def save_week(week_id: str, week_name: str = "", start_date: str = "",
+              end_date: str = "", status: str = "draft",
+              db_path: str | Path | None = None):
+    """Create or update a week record."""
+    conn = _conn(db_path)
+    conn.execute(
+        """INSERT INTO poster_weeks (week_id, week_name, start_date, end_date, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(week_id) DO UPDATE SET
+             week_name=excluded.week_name, start_date=excluded.start_date,
+             end_date=excluded.end_date, status=excluded.status""",
+        (week_id, week_name, start_date, end_date, status,
+         datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_week(week_id: str, db_path: str | Path | None = None) -> dict | None:
+    """Return week metadata or None."""
+    conn = _conn(db_path)
+    row = conn.execute(
+        "SELECT * FROM poster_weeks WHERE week_id=?", (week_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_week_status(week_id: str, status: str, db_path: str | Path | None = None):
+    """Update week status (draft/published/archived)."""
+    conn = _conn(db_path)
+    conn.execute(
+        "UPDATE poster_weeks SET status=? WHERE week_id=?", (status, week_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_weeks_with_meta(db_path: str | Path | None = None) -> list[dict]:
+    """Return all weeks with metadata, stats (page count, mapping count)."""
+    conn = _conn(db_path)
+    rows = conn.execute("""
+        SELECT
+            pw.week_id, pw.week_name, pw.start_date, pw.end_date,
+            pw.status, pw.created_at,
+            (SELECT COUNT(*) FROM poster_pages pp WHERE pp.week_id = pw.week_id) as page_count,
+            (SELECT COUNT(*) FROM mappings m WHERE m.week_id = pw.week_id) as mapping_count,
+            (SELECT COUNT(*) FROM week_products wp WHERE wp.week_id = pw.week_id) as product_count
+        FROM poster_weeks pw
+        ORDER BY pw.created_at DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ============================================================================

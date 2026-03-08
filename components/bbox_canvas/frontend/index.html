@@ -271,6 +271,36 @@ btnClear.addEventListener("click", function() {
   sendValue(null);
 });
 
+/* ── Keyboard shortcuts ── */
+document.addEventListener("keydown", function(e) {
+  /* ENTER → submit current box (same as "Seçimi Kullan") */
+  if (e.key === "Enter" && curBox) {
+    e.preventDefault();
+    sendValue(curBox);
+    info.textContent = "Seçim gönderildi ✓  (ENTER)";
+    btnUse.disabled = true;
+  }
+  /* DELETE / BACKSPACE → clear current box */
+  if ((e.key === "Delete" || e.key === "Backspace") && curBox && !e.target.matches("input,textarea")) {
+    e.preventDefault();
+    sel.style.display = "none";
+    activeOvl.style.display = "none";
+    curBox = null;
+    btnUse.disabled = true;
+    info.textContent = "Kutu çizmek için sürükleyin";
+    sendValue(null);
+  }
+  /* ESCAPE → clear */
+  if (e.key === "Escape") {
+    sel.style.display = "none";
+    activeOvl.style.display = "none";
+    curBox = null;
+    btnUse.disabled = true;
+    info.textContent = "Kutu çizmek için sürükleyin";
+    sendValue(null);
+  }
+});
+
 /* ── Boot ── */
 window.parent.postMessage({
   isStreamlitMessage: true,
