@@ -166,6 +166,42 @@ def delete_mapping(mapping_id: int, db_path: str | Path | None = None):
     conn.close()
 
 
+def delete_page_mappings(
+    week_id: str, flyer_filename: str, page_no: int,
+    db_path: str | Path | None = None,
+):
+    """Delete ALL mappings for a specific page."""
+    conn = _conn(db_path)
+    conn.execute(
+        "DELETE FROM mappings WHERE week_id=? AND flyer_filename=? AND page_no=?",
+        (week_id, flyer_filename, page_no),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_last_mapping_id(week_id: str, db_path: str | Path | None = None) -> int | None:
+    """Return the most recent mapping_id for a week, or None."""
+    conn = _conn(db_path)
+    row = conn.execute(
+        "SELECT mapping_id FROM mappings WHERE week_id=? ORDER BY mapping_id DESC LIMIT 1",
+        (week_id,),
+    ).fetchone()
+    conn.close()
+    return row["mapping_id"] if row else None
+
+
+def get_max_sort_order(week_id: str, db_path: str | Path | None = None) -> int:
+    """Return the maximum sort_order for a week's poster pages."""
+    conn = _conn(db_path)
+    row = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), 0) as mx FROM poster_pages WHERE week_id=?",
+        (week_id,),
+    ).fetchone()
+    conn.close()
+    return row["mx"] if row else 0
+
+
 # ============================================================================
 # POSTER PAGES — persistent image storage
 # ============================================================================

@@ -915,6 +915,11 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
     # Kaydedilmiş arama sonuçlarını göster
     if "_fe_search_result" in st.session_state:
         sr = st.session_state["_fe_search_result"]
+        rc1, rc2 = st.columns([6, 1])
+        with rc2:
+            if st.button("Temizle", key="fe_clear_results", use_container_width=True):
+                st.session_state.pop("_fe_search_result", None)
+                st.rerun()
         goster_sonuclar(sr["df"], sr["term"])
 
     # ---- Poster Slider (ön yüz) ----
@@ -1087,7 +1092,10 @@ def _mapping_tool_tab():
     # UPLOAD PHASE
     # ====================================================================
     if st.session_state["mt_mode"] == "upload":
-        st.subheader("Hafta Oluştur")
+        from storage import list_weeks_with_meta, get_poster_pages, list_all_weeks
+
+        # --- Yeni hafta oluştur ---
+        st.subheader("Yeni Hafta Oluştur")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1104,10 +1112,14 @@ def _mapping_tool_tab():
         with bc1:
             if st.button("Haftayı Yükle ve Eşleştirmeye Başla", type="primary",
                          key="mt_btn_load", use_container_width=True):
-                _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
-                                    save_week_products, save_week)
+                # Çakışma kontrolü
+                existing_weeks = list_all_weeks()
+                if mt_week in existing_weeks and not mt_excel and not mt_pdfs:
+                    st.error(f"**{mt_week}** zaten mevcut! Farklı bir ID girin veya aşağıdan devam edin.")
+                else:
+                    _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
+                                        save_week_products, save_week)
         with bc2:
-            # Mevcut haftayı devam ettir
             if st.session_state["mt_pages"]:
                 if st.button("Eşleştirmeye Devam Et", key="mt_btn_continue", use_container_width=True):
                     st.session_state["mt_mode"] = "mapping"
@@ -1124,6 +1136,44 @@ def _mapping_tool_tab():
             if pages:
                 mapped_codes = get_mapped_product_codes(st.session_state["mt_week_id"])
                 mc3.metric("Eşleştirilen", len(mapped_codes))
+
+        # --- Mevcut haftaya devam et (DB'den yükle) ---
+        st.markdown("---")
+        st.subheader("Mevcut Haftaya Devam Et")
+
+        existing_weeks = list_weeks_with_meta()
+        if existing_weeks:
+            ew_options = {w["week_id"]: f'{w.get("week_name") or w["week_id"]} — {w.get("page_count",0)} sayfa, {w.get("mapping_count",0)}/{w.get("product_count",0)} eşleşme' for w in existing_weeks}
+            resume_wid = st.selectbox("Hafta seç:", list(ew_options.keys()),
+                                      format_func=lambda k: ew_options[k], key="mt_resume_week")
+            if st.button("Bu Haftayı Yükle ve Devam Et", key="mt_btn_resume", use_container_width=True):
+                # DB'den poster pages ve products yükle
+                db_pages = get_poster_pages(resume_wid)
+                db_prods = get_week_products(resume_wid)
+                if db_pages:
+                    st.session_state["mt_pages"] = [{
+                        "flyer_id": f"db_{pg['id']}",
+                        "flyer_filename": pg["flyer_filename"],
+                        "page_no": pg["page_no"],
+                        "png_bytes": pg["png_data"],
+                        "w": 0, "h": 0,
+                    } for pg in db_pages]
+                    st.session_state["mt_products"] = [
+                        {"urun_kod": p["urun_kodu"], "urun_ad": p.get("urun_aciklamasi", "")}
+                        for p in db_prods
+                    ]
+                    st.session_state["mt_product_labels"] = [
+                        f'{p["urun_kodu"]} — {p.get("urun_aciklamasi", "")}' for p in db_prods
+                    ]
+                    st.session_state["mt_week_id"] = resume_wid
+                    st.session_state["mt_bbox"] = None
+                    st.session_state["mt_queue_idx"] = 0
+                    st.session_state["mt_mode"] = "mapping"
+                    st.rerun()
+                else:
+                    st.warning("Bu haftada poster sayfası bulunamadı.")
+        else:
+            st.info("Henüz hafta yok. Yukarıdan yeni oluşturun.")
         return
 
     # ====================================================================
@@ -1309,8 +1359,39 @@ def _mapping_tool_tab():
                          key="mt_btn_save_manual", use_container_width=True):
                 _mt_save_local(page, bbox, code_in.strip(), desc_in.strip() or None, "manual")
 
-    # --- Saved mappings table with inline edit/delete ---
+    # --- Hızlı eylemler: Undo + Toplu sil ---
     st.markdown("---")
+    undo_col, clear_col, spacer_col = st.columns([2, 2, 4])
+    with undo_col:
+        last_mid = st.session_state.get("mt_last_mapping_id")
+        if last_mid and st.button("Geri Al (Son Eşleştirme)", key="mt_undo", use_container_width=True):
+            from storage import unmark_product_mapped
+            # Silmeden önce ürün kodunu al
+            undo_target = next((m for m in saved if m["mapping_id"] == last_mid), None)
+            _local_delete(last_mid)
+            if undo_target and undo_target.get("urun_kodu"):
+                unmark_product_mapped(week_id, undo_target["urun_kodu"])
+            st.session_state.pop("mt_last_mapping_id", None)
+            st.rerun()
+    with clear_col:
+        if saved:
+            if st.button(f"Tümünü Sil ({len(saved)})", key="mt_clear_page", use_container_width=True):
+                st.session_state["_confirm_clear_page"] = True
+    if st.session_state.get("_confirm_clear_page"):
+        st.warning(f"Bu sayfadaki **{len(saved)}** eşleştirme silinecek!")
+        yc1, yc2 = st.columns(2)
+        with yc1:
+            if st.button("Evet, Tümünü Sil", key="mt_clear_yes", type="primary", use_container_width=True):
+                from storage import delete_page_mappings
+                delete_page_mappings(week_id, page["flyer_filename"], page["page_no"])
+                st.session_state.pop("_confirm_clear_page", None)
+                st.rerun()
+        with yc2:
+            if st.button("İptal", key="mt_clear_no", use_container_width=True):
+                st.session_state.pop("_confirm_clear_page", None)
+                st.rerun()
+
+    # --- Saved mappings table with inline edit/delete ---
     if saved:
         with st.expander(f"Bu Sayfadaki Eşleştirmeler ({len(saved)})", expanded=False):
             for i, m in enumerate(saved):
@@ -1473,7 +1554,8 @@ def _poster_viewer_tab():
                                      accept_multiple_files=True, key="pv_new_pdf")
         if new_pdfs and st.button("Yükle", key="pv_upload_new", type="primary", use_container_width=True):
             from pdf_render import render_pdf_bytes_to_pages
-            from storage import save_poster_pages_bulk
+            from storage import save_poster_pages_bulk, get_max_sort_order
+            base_sort = get_max_sort_order(selected_week) + 1
             new_pages = []
             for f in new_pdfs:
                 raw = f.read()
@@ -1484,13 +1566,12 @@ def _poster_viewer_tab():
                         "flyer_filename": f.name,
                         "page_no": p["page_no"],
                         "png_data": p["png_bytes"],
+                        "sort_order": base_sort,
                     })
+                    base_sort += 1
             if new_pages:
                 save_poster_pages_bulk(new_pages)
-                # Cache temizle
-                for k in list(st.session_state.keys()):
-                    if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
-                        st.session_state.pop(k, None)
+                _clear_week_session_state()
                 st.success(f"{len(new_pages)} sayfa eklendi!")
                 st.rerun()
 
@@ -1643,21 +1724,36 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
 
 def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
     """Save a mapping to local SQLite, advance queue, and rerun."""
-    from storage import save_mapping as _local_save, mark_product_mapped
-    _local_save({
-        "week_id": st.session_state["mt_week_id"],
+    from storage import save_mapping as _local_save, mark_product_mapped, get_week_products
+
+    # Excel'den afis_fiyat bilgisini bul
+    afis_fiyat = None
+    week_id = st.session_state["mt_week_id"]
+    try:
+        wp = get_week_products(week_id)
+        for p in wp:
+            if p.get("urun_kodu") == urun_kod:
+                afis_fiyat = p.get("afis_fiyat") or None
+                break
+    except Exception:
+        pass
+
+    mid = _local_save({
+        "week_id": week_id,
         "flyer_filename": page["flyer_filename"],
         "page_no": page["page_no"],
         "x0": bbox["x0"], "y0": bbox["y0"], "x1": bbox["x1"], "y1": bbox["y1"],
         "urun_kodu": urun_kod,
         "urun_aciklamasi": urun_ad,
-        "afis_fiyat": None,
+        "afis_fiyat": afis_fiyat,
         "ocr_text": None,
         "source": source, "status": "matched",
         "created_at": datetime.utcnow().isoformat(),
     })
+    # Son eşleştirme ID'sini kaydet (Undo için)
+    st.session_state["mt_last_mapping_id"] = mid
     # Mark product as mapped in queue
-    mark_product_mapped(st.session_state["mt_week_id"], urun_kod)
+    mark_product_mapped(week_id, urun_kod)
     # Clear bbox for next draw, auto-advance NOT needed (queue rebuilds from mapped_codes)
     st.session_state["mt_bbox"] = None
     st.rerun()
