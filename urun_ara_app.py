@@ -1343,6 +1343,31 @@ def _mapping_tool_tab():
         st.caption("Bu sayfada henüz eşleştirme yok.")
 
 
+def _clear_week_session_state(week_id: str | None = None):
+    """Hafta silindiğinde tüm ilişkili session state'i temizle."""
+    # Prefix-based temizlik
+    prefixes = ("_fe_dbpages_", "_pv_cache_", "_confirm_del_page_",
+                "_confirm_del_week", "_confirm_del_wl_")
+    for k in list(st.session_state.keys()):
+        if any(k.startswith(p) for p in prefixes):
+            st.session_state.pop(k, None)
+
+    # Mapping mode: silinen hafta aktif haftaysa upload'a dön
+    if week_id and st.session_state.get("mt_week_id") == week_id:
+        for k in ("mt_pages", "mt_products", "mt_product_labels",
+                  "mt_bbox", "mt_queue_idx"):
+            st.session_state.pop(k, None)
+        st.session_state["mt_mode"] = "upload"
+
+    # Frontend viewer state
+    st.session_state.pop("fe_pv_idx", None)
+    st.session_state.pop("_fe_search_result", None)
+    st.session_state.pop("_fe_last_click_ts", None)
+
+    # Admin poster viewer state
+    st.session_state.pop("pv_page_idx", None)
+
+
 # ============================================================================
 # POSTER VIEWER TAB (Admin — Başlık/Sıralama Yönetimi + Önizleme)
 # ============================================================================
@@ -1386,10 +1411,7 @@ def _poster_viewer_tab():
         if new_status != current_status:
             if st.button("Durumu Güncelle", key="pv_status_update", use_container_width=True):
                 update_week_status(selected_week, new_status)
-                # Ön yüz cache temizle
-                for k in list(st.session_state.keys()):
-                    if k.startswith("_fe_dbpages_"):
-                        st.session_state.pop(k, None)
+                _clear_week_session_state()
                 st.rerun()
     with wc3:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -1403,10 +1425,7 @@ def _poster_viewer_tab():
         with cc1:
             if st.button("Evet, Sil", key="pv_confirm_yes", type="primary", use_container_width=True):
                 delete_week(selected_week)
-                st.session_state.pop("_confirm_del_week", None)
-                for k in list(st.session_state.keys()):
-                    if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
-                        st.session_state.pop(k, None)
+                _clear_week_session_state(selected_week)
                 st.rerun()
         with cc2:
             if st.button("İptal", key="pv_confirm_no", use_container_width=True):
@@ -1513,10 +1532,7 @@ def _poster_viewer_tab():
             with dc1:
                 if st.button("Evet, Sil", key=f"pv_cdel_y_{pid}", type="primary", use_container_width=True):
                     delete_poster_page(pid)
-                    st.session_state.pop(f"_confirm_del_page_{pid}", None)
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
-                            st.session_state.pop(k, None)
+                    _clear_week_session_state()
                     st.rerun()
             with dc2:
                 if st.button("İptal", key=f"pv_cdel_n_{pid}", use_container_width=True):
@@ -1790,10 +1806,7 @@ def _admin_tab_weeks():
                 with dc1:
                     if st.button("Evet, Sil", key=f"wl_cdel_y_{wid}", type="primary", use_container_width=True):
                         delete_week(wid)
-                        st.session_state.pop(f"_confirm_del_wl_{wid}", None)
-                        for k in list(st.session_state.keys()):
-                            if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
-                                st.session_state.pop(k, None)
+                        _clear_week_session_state(wid)
                         st.rerun()
                 with dc2:
                     if st.button("İptal", key=f"wl_cdel_n_{wid}", use_container_width=True):
