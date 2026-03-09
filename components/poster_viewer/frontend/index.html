@@ -256,7 +256,7 @@ function buildDots() {
   }
 }
 
-function showPage(idx) {
+function showPage(idx, fromUser) {
   if (idx < 0 || idx >= pages.length) return;
   currentIdx = idx;
   var pg = pages[idx];
@@ -290,8 +290,10 @@ function showPage(idx) {
   /* Close popup */
   closePopup();
 
-  /* Notify Streamlit of current page */
-  sendValue({type: "page_change", index: idx});
+  /* Only notify Streamlit on user-initiated navigation (not on init render) */
+  if (fromUser) {
+    sendValue({type: "page_change", index: idx});
+  }
 }
 
 function renderHotspots(hotspots) {
@@ -385,7 +387,7 @@ btnPrev.addEventListener("click", function() { goTo(currentIdx - 1); });
 btnNext.addEventListener("click", function() { goTo(currentIdx + 1); });
 
 function goTo(idx) {
-  if (idx >= 0 && idx < pages.length) showPage(idx);
+  if (idx >= 0 && idx < pages.length) showPage(idx, true);
 }
 
 /* Keyboard navigation */

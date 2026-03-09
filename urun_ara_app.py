@@ -902,14 +902,20 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         pop_term = st.session_state.pop('_pop_arama')
         with st.spinner("Aranıyor..."):
             df = ara_urun(pop_term)
-            goster_sonuclar(df, pop_term)
+            # Sonuçları session state'e kaydet (poster rerun'larına dayanıklı)
+            st.session_state["_fe_search_result"] = {"df": df, "term": pop_term}
     elif ara_btn:
         if arama_text and len(arama_text) >= 2:
             with st.spinner("Aranıyor..."):
                 df = ara_urun(arama_text)
-                goster_sonuclar(df, arama_text)
+                st.session_state["_fe_search_result"] = {"df": df, "term": arama_text}
         elif arama_text:
             st.info("En az 2 karakter girin.")
+
+    # Kaydedilmiş arama sonuçlarını göster
+    if "_fe_search_result" in st.session_state:
+        sr = st.session_state["_fe_search_result"]
+        goster_sonuclar(sr["df"], sr["term"])
 
     # ---- Poster Slider (ön yüz) ----
     _frontend_poster_viewer()
@@ -981,10 +987,30 @@ def _frontend_poster_viewer():
         cur_idx = 0
         st.session_state["fe_pv_idx"] = 0
 
-    # Başlık (admin'den ayarlanmış başlık veya varsayılan)
+    # Hafta adını al (metadata'dan)
+    week_meta = get_week(selected_week)
+    week_display_name = (week_meta.get("week_name") if week_meta else None) or selected_week
+
+    # Başlık: hafta adı + sayfa başlığı
     pg = poster_pages[cur_idx]
     page_title = pg["title"] or f'Sayfa {cur_idx + 1}'
-    st.markdown(f"### {page_title}")
+    st.markdown(f"### {week_display_name}")
+    if pg["title"]:
+        st.caption(page_title)
+
+    # Sayfa navigasyonu butonları — AFİŞİN ÜSTÜNde (afiş ile içerik arası)
+    if total_pages > 1:
+        nav1, nav2, nav3 = st.columns([1, 3, 1])
+        with nav1:
+            if st.button("◀ Önceki", key="fe_pv_prev", disabled=(cur_idx == 0), use_container_width=True):
+                st.session_state["fe_pv_idx"] = cur_idx - 1
+                st.rerun()
+        with nav2:
+            st.caption(f"Sayfa {cur_idx + 1} / {total_pages}")
+        with nav3:
+            if st.button("Sonraki ▶", key="fe_pv_next", disabled=(cur_idx >= total_pages - 1), use_container_width=True):
+                st.session_state["fe_pv_idx"] = cur_idx + 1
+                st.rerun()
 
     # SADECE aktif sayfanın hotspot'larını al
     mappings = list_mappings_for_week(selected_week, pg["flyer_filename"], pg["page_no"])
@@ -1009,20 +1035,6 @@ def _frontend_poster_viewer():
         height=1200,
         key="fe_poster_viewer",
     )
-
-    # Sayfa navigasyonu butonları (slider)
-    if total_pages > 1:
-        nav1, nav2, nav3 = st.columns([1, 3, 1])
-        with nav1:
-            if st.button("◀ Önceki", key="fe_pv_prev", disabled=(cur_idx == 0), use_container_width=True):
-                st.session_state["fe_pv_idx"] = cur_idx - 1
-                st.rerun()
-        with nav2:
-            st.caption(f"Sayfa {cur_idx + 1} / {total_pages}")
-        with nav3:
-            if st.button("Sonraki ▶", key="fe_pv_next", disabled=(cur_idx >= total_pages - 1), use_container_width=True):
-                st.session_state["fe_pv_idx"] = cur_idx + 1
-                st.rerun()
 
     # Hotspot tıklandı → mevcut popüler arama mekanizmasını tetikle
     if result and isinstance(result, dict) and result.get("type") == "hotspot_click":
@@ -1435,14 +1447,43 @@ def _poster_viewer_tab():
 
     if not poster_pages:
         st.info("Bu hafta için poster sayfası bulunamadı.")
+
+    # --- Yeni Afiş Ekleme (mevcut haftaya) ---
+    with st.expander("Bu Haftaya Yeni Afiş Ekle", expanded=False):
+        new_pdfs = st.file_uploader("PDF Dosyası", type=["pdf"],
+                                     accept_multiple_files=True, key="pv_new_pdf")
+        if new_pdfs and st.button("Yükle", key="pv_upload_new", type="primary", use_container_width=True):
+            from pdf_render import render_pdf_bytes_to_pages
+            from storage import save_poster_pages_bulk
+            new_pages = []
+            for f in new_pdfs:
+                raw = f.read()
+                rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
+                for p in rendered:
+                    new_pages.append({
+                        "week_id": selected_week,
+                        "flyer_filename": f.name,
+                        "page_no": p["page_no"],
+                        "png_data": p["png_bytes"],
+                    })
+            if new_pages:
+                save_poster_pages_bulk(new_pages)
+                # Cache temizle
+                for k in list(st.session_state.keys()):
+                    if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
+                        st.session_state.pop(k, None)
+                st.success(f"{len(new_pages)} sayfa eklendi!")
+                st.rerun()
+
+    if not poster_pages:
         return
 
-    # --- Başlık ve Sıralama Yönetimi ---
-    with st.expander("Sayfa Başlıkları ve Sıralama", expanded=False):
-        st.caption("Başlık ve sıra numarası girin. Küçük sıra = önce gösterilir.")
-        for pg in poster_pages:
-            pid = pg["id"]
-            tc1, tc2, tc3, tc4 = st.columns([3, 2, 1.5, 1.5])
+    # --- Afiş Sayfaları: Başlık, Sıralama, Silme ---
+    st.markdown("#### Afiş Sayfaları")
+    for pg in poster_pages:
+        pid = pg["id"]
+        with st.container(border=True):
+            tc1, tc2, tc3, tc4, tc5 = st.columns([3, 2, 1, 1, 1])
             with tc1:
                 cur_title = st.text_input(
                     "Başlık", value=pg["title"] or "",
@@ -1450,17 +1491,36 @@ def _poster_viewer_tab():
                     placeholder=f'{pg["flyer_filename"]} s{pg["page_no"]}',
                 )
             with tc2:
+                st.caption(f'{pg["flyer_filename"]} — s{pg["page_no"]}')
+            with tc3:
                 cur_sort = st.number_input(
                     "Sıra", value=pg["sort_order"], step=1,
                     key=f"pv_s_{pid}", label_visibility="collapsed",
                 )
-            with tc3:
+            with tc4:
                 if st.button("Kaydet", key=f"pv_save_{pid}", use_container_width=True):
                     update_poster_page(pid, {"title": cur_title.strip(), "sort_order": int(cur_sort)})
                     st.rerun()
-            with tc4:
-                if st.button("Sil", key=f"pv_del_{pid}", use_container_width=True):
+            with tc5:
+                if st.button("Sil", key=f"pv_del_{pid}", type="primary", use_container_width=True):
+                    st.session_state[f"_confirm_del_page_{pid}"] = True
+                    st.rerun()
+
+        # Sayfa silme onayı
+        if st.session_state.get(f"_confirm_del_page_{pid}"):
+            st.warning(f"**{pg['flyer_filename']} s{pg['page_no']}** silinecek (eşleştirmeleri dahil)!")
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                if st.button("Evet, Sil", key=f"pv_cdel_y_{pid}", type="primary", use_container_width=True):
                     delete_poster_page(pid)
+                    st.session_state.pop(f"_confirm_del_page_{pid}", None)
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
+                            st.session_state.pop(k, None)
+                    st.rerun()
+            with dc2:
+                if st.button("İptal", key=f"pv_cdel_n_{pid}", use_container_width=True):
+                    st.session_state.pop(f"_confirm_del_page_{pid}", None)
                     st.rerun()
 
     # --- Önizleme ---
@@ -1684,12 +1744,13 @@ def _admin_tab_weeks():
 
     if weeks:
         for w in weeks:
+            wid = w["week_id"]
             with st.container(border=True):
-                wc1, wc2, wc3, wc4, wc5 = st.columns([3, 1.5, 1.5, 1.5, 1.5])
+                wc1, wc2, wc3, wc4, wc5, wc6 = st.columns([3, 1.5, 1.5, 1.5, 1.5, 1])
                 with wc1:
-                    name = w.get("week_name") or w["week_id"]
+                    name = w.get("week_name") or wid
                     st.markdown(f"**{name}**")
-                    st.caption(f"ID: {w['week_id']}")
+                    st.caption(f"ID: {wid}")
                 with wc2:
                     s = w.get("status", "draft")
                     st.markdown(
@@ -1699,7 +1760,6 @@ def _admin_tab_weeks():
                         unsafe_allow_html=True,
                     )
                 with wc3:
-                    st.metric("Sayfa", w.get("page_count", 0), label_visibility="collapsed")
                     st.caption(f"{w.get('page_count', 0)} sayfa")
                 with wc4:
                     mapped = w.get("mapping_count", 0)
@@ -1708,17 +1768,37 @@ def _admin_tab_weeks():
                 with wc5:
                     s = w.get("status", "draft")
                     if s == "draft":
-                        if st.button("Yayınla", key=f"wl_pub_{w['week_id']}", use_container_width=True):
-                            update_week_status(w["week_id"], "published")
+                        if st.button("Yayınla", key=f"wl_pub_{wid}", use_container_width=True):
+                            update_week_status(wid, "published")
                             st.rerun()
                     elif s == "published":
-                        if st.button("Arşivle", key=f"wl_arch_{w['week_id']}", use_container_width=True):
-                            update_week_status(w["week_id"], "archived")
+                        if st.button("Arşivle", key=f"wl_arch_{wid}", use_container_width=True):
+                            update_week_status(wid, "archived")
                             st.rerun()
                     else:
-                        if st.button("Taslak Yap", key=f"wl_draft_{w['week_id']}", use_container_width=True):
-                            update_week_status(w["week_id"], "draft")
+                        if st.button("Taslak Yap", key=f"wl_draft_{wid}", use_container_width=True):
+                            update_week_status(wid, "draft")
                             st.rerun()
+                with wc6:
+                    if st.button("Sil", key=f"wl_del_{wid}", use_container_width=True):
+                        st.session_state[f"_confirm_del_wl_{wid}"] = True
+
+            # Hafta silme onayı
+            if st.session_state.get(f"_confirm_del_wl_{wid}"):
+                st.warning(f"**{w.get('week_name') or wid}** — tüm afişler, eşleştirmeler ve ürünler silinecek!")
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    if st.button("Evet, Sil", key=f"wl_cdel_y_{wid}", type="primary", use_container_width=True):
+                        delete_week(wid)
+                        st.session_state.pop(f"_confirm_del_wl_{wid}", None)
+                        for k in list(st.session_state.keys()):
+                            if k.startswith("_fe_dbpages_") or k.startswith("_pv_cache_"):
+                                st.session_state.pop(k, None)
+                        st.rerun()
+                with dc2:
+                    if st.button("İptal", key=f"wl_cdel_n_{wid}", use_container_width=True):
+                        st.session_state.pop(f"_confirm_del_wl_{wid}", None)
+                        st.rerun()
     else:
         st.info("Henüz hafta oluşturulmamış. 'Eşleştir' sekmesinden başlayın.")
 

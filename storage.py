@@ -240,18 +240,29 @@ def update_poster_page(page_id: int, fields: dict, db_path: str | Path | None = 
 
 
 def delete_poster_page(page_id: int, db_path: str | Path | None = None):
-    """Delete a poster page by ID."""
+    """Delete a poster page by ID, including its mappings."""
     conn = _conn(db_path)
+    # Get page info to delete associated mappings
+    row = conn.execute(
+        "SELECT week_id, flyer_filename, page_no FROM poster_pages WHERE id=?", (page_id,)
+    ).fetchone()
+    if row:
+        conn.execute(
+            "DELETE FROM mappings WHERE week_id=? AND flyer_filename=? AND page_no=?",
+            (row["week_id"], row["flyer_filename"], row["page_no"]),
+        )
     conn.execute("DELETE FROM poster_pages WHERE id=?", (page_id,))
     conn.commit()
     conn.close()
 
 
 def delete_week(week_id: str, db_path: str | Path | None = None):
-    """Delete all poster pages AND mappings for a given week."""
+    """Delete all data for a given week: pages, mappings, products, metadata."""
     conn = _conn(db_path)
     conn.execute("DELETE FROM poster_pages WHERE week_id=?", (week_id,))
     conn.execute("DELETE FROM mappings WHERE week_id=?", (week_id,))
+    conn.execute("DELETE FROM week_products WHERE week_id=?", (week_id,))
+    conn.execute("DELETE FROM poster_weeks WHERE week_id=?", (week_id,))
     conn.commit()
     conn.close()
 
