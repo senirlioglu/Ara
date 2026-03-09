@@ -1105,7 +1105,7 @@ def _mapping_tool_tab():
                                          placeholder="Örn: Hafta 12 - Mart")
         with c2:
             mt_excel = st.file_uploader("Excel Ürün Listesi", type=["xlsx", "xls"], key="mt_excel")
-            mt_pdfs = st.file_uploader("PDF Dosyaları", type=["pdf"],
+            mt_pdfs = st.file_uploader("Afiş Dosyaları (PDF / JPEG / PNG)", type=["pdf", "jpeg", "jpg", "png"],
                                        accept_multiple_files=True, key="mt_pdfs")
 
         bc1, bc2 = st.columns(2)
@@ -1550,21 +1550,33 @@ def _poster_viewer_tab():
 
     # --- Yeni Afiş Ekleme (mevcut haftaya) ---
     with st.expander("Bu Haftaya Yeni Afiş Ekle", expanded=False):
-        new_pdfs = st.file_uploader("PDF Dosyası", type=["pdf"],
+        new_pdfs = st.file_uploader("Afiş Dosyası (PDF / JPEG / PNG)", type=["pdf", "jpeg", "jpg", "png"],
                                      accept_multiple_files=True, key="pv_new_pdf")
         if new_pdfs and st.button("Yükle", key="pv_upload_new", type="primary", use_container_width=True):
-            from pdf_render import render_pdf_bytes_to_pages
+            from pdf_render import render_pdf_bytes_to_pages, render_image_bytes_to_page
             from storage import save_poster_pages_bulk, get_max_sort_order
             base_sort = get_max_sort_order(selected_week) + 1
             new_pages = []
             for f in new_pdfs:
                 raw = f.read()
-                rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
-                for p in rendered:
+                ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
+                if ext == "pdf":
+                    rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
+                    for p in rendered:
+                        new_pages.append({
+                            "week_id": selected_week,
+                            "flyer_filename": f.name,
+                            "page_no": p["page_no"],
+                            "png_data": p["png_bytes"],
+                            "sort_order": base_sort,
+                        })
+                        base_sort += 1
+                elif ext in ("jpeg", "jpg", "png"):
+                    p = render_image_bytes_to_page(raw, f.name, page_no=1)
                     new_pages.append({
                         "week_id": selected_week,
                         "flyer_filename": f.name,
-                        "page_no": p["page_no"],
+                        "page_no": 1,
                         "png_data": p["png_bytes"],
                         "sort_order": base_sort,
                     })
@@ -1689,12 +1701,28 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
             return
 
     if mt_pdfs:
-        from pdf_render import render_pdf_bytes_to_pages
+        from pdf_render import render_pdf_bytes_to_pages, render_image_bytes_to_page
         all_pages = []
+        img_counter = {}  # filename → page counter for multi-image uploads
         for f in mt_pdfs:
             raw = f.read()
-            rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
-            for p in rendered:
+            ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
+            if ext == "pdf":
+                rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
+                for p in rendered:
+                    all_pages.append({
+                        "flyer_id": str(_uuid.uuid4())[:8],
+                        "flyer_filename": f.name,
+                        "page_no": p["page_no"],
+                        "png_bytes": p["png_bytes"],
+                        "w": p["w"],
+                        "h": p["h"],
+                    })
+            elif ext in ("jpeg", "jpg", "png"):
+                # Her resim dosyası = 1 sayfa
+                page_no = img_counter.get(f.name, 0) + 1
+                img_counter[f.name] = page_no
+                p = render_image_bytes_to_page(raw, f.name, page_no=page_no)
                 all_pages.append({
                     "flyer_id": str(_uuid.uuid4())[:8],
                     "flyer_filename": f.name,
