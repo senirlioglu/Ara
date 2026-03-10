@@ -47,27 +47,35 @@ st.set_page_config(
 # Modern CSS Tasarımı
 st.markdown("""
 <style>
-    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%); }
+    .stApp { background: #f5f7fa; }
     header[data-testid="stHeader"] { background: transparent; }
+
+    /* Bloklar arası boşluğu sıkılaştır */
+    .block-container { padding-top: 0 !important; gap: 0 !important; }
+    .element-container { margin-bottom: 0 !important; }
+    [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stVerticalBlock"] { gap: 0.3rem !important; }
+    hr { margin: 0.3rem 0 !important; }
+
     .main-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem 1rem;
-        border-radius: 0 0 20px 20px;
-        margin: -1rem -1rem 1.5rem -1rem;
+        padding: 1rem 0.75rem 0.8rem;
+        border-radius: 0 0 16px 16px;
+        margin: -1rem -1rem 0.5rem -1rem;
         text-align: center;
         box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
     }
-    .main-header h1 { color: white !important; font-size: 1.8rem !important; font-weight: 700 !important; margin: 0 !important; }
-    .main-header p { color: rgba(255,255,255,0.85); font-size: 0.9rem; margin: 0.5rem 0 0 0; }
-    .search-container { background: white; padding: 1rem; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 1rem; }
-    .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.75rem 1rem !important; font-size: 1rem !important; }
+    .main-header h1 { color: white !important; font-size: 1.5rem !important; font-weight: 700 !important; margin: 0 !important; }
+    .main-header p { color: rgba(255,255,255,0.85); font-size: 0.82rem; margin: 0.3rem 0 0 0; }
+
+    .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.6rem 0.8rem !important; font-size: 0.95rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
 
-    /* Button styling (Ara butonu - orijinal boyut) */
-    .stButton > button { border-radius: 12px !important; padding: 0.75rem 1.5rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
-    .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
+    /* Ara butonu */
+    .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
+    .stButton > button:hover { box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
 
-    /* Pill satırları: 3+ kolonlu yatay bloklar kaydırılabilir olsun */
+    /* Pill satırları */
     [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) {
         overflow-x: auto !important;
         flex-wrap: nowrap !important;
@@ -75,7 +83,7 @@ st.markdown("""
         scrollbar-width: none;
         -ms-overflow-style: none;
         gap: 4px !important;
-        padding-bottom: 4px;
+        padding-bottom: 2px;
     }
     [data-testid="stHorizontalBlock"]:has(> :nth-child(3))::-webkit-scrollbar { display: none; }
     [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) > [data-testid="stColumn"] {
@@ -83,18 +91,17 @@ st.markdown("""
         width: auto !important;
         min-width: fit-content !important;
     }
-    /* Pill satırlarındaki butonlar küçük pill olsun */
     [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
         background: #f0f1f6 !important;
         color: #555 !important;
         border: 1px solid #e0e2ea !important;
         border-radius: 20px !important;
-        padding: 0.4rem 1rem !important;
-        font-size: 0.85rem !important;
+        padding: 0.35rem 0.85rem !important;
+        font-size: 0.82rem !important;
         font-weight: 500 !important;
         white-space: nowrap !important;
         min-height: unset !important;
-        line-height: 1.4 !important;
+        line-height: 1.3 !important;
     }
     [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button:hover {
         background: #e4e5f0 !important;
@@ -105,22 +112,39 @@ st.markdown("""
     }
 
     .popular-title {
-        font-size: 0.95rem;
+        font-size: 0.85rem;
         font-weight: 600;
-        color: #333;
-        margin: 0.8rem 0 0.3rem 0.2rem;
+        color: #555;
+        margin: 0.2rem 0 0.1rem 0.2rem;
     }
 
-    .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 1rem; }
-    .streamlit-expanderHeader { background: white !important; border-radius: 12px !important; border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; padding: 0.75rem 1rem !important; font-weight: 500 !important; }
+    /* Sarı badge (afiş başlığı) */
+    .poster-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%);
+        color: #333;
+        font-weight: 700;
+        font-size: 1rem;
+        padding: 0.4rem 1.2rem;
+        border-radius: 8px;
+        margin: 0.3rem 0 0.2rem 0;
+        box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35);
+        letter-spacing: 0.3px;
+    }
+
+    .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 0.5rem; }
+    .streamlit-expanderHeader { background: white !important; border-radius: 12px !important; border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; padding: 0.6rem 0.8rem !important; font-weight: 500 !important; }
     .streamlit-expanderContent { background: white !important; border-radius: 0 0 12px 12px !important; border: none !important; padding: 0.5rem !important; }
 
     @media (max-width: 768px) {
-        .block-container { padding: 0.5rem !important; }
+        .block-container { padding: 0.3rem !important; }
+        .main-header { padding: 0.7rem 0.5rem 0.6rem; margin-bottom: 0.3rem; }
+        .main-header h1 { font-size: 1.2rem !important; }
         [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
-            padding: 0.35rem 0.75rem !important;
-            font-size: 0.8rem !important;
+            padding: 0.3rem 0.65rem !important;
+            font-size: 0.78rem !important;
         }
+        .poster-badge { font-size: 0.9rem; padding: 0.3rem 1rem; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -736,19 +760,24 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
 
 def main():
     st.markdown("""
-    <div class="main-header">
-        <h1>🔍 Ürün Ara</h1>
+    <div class="main-header" id="top-anchor">
+        <h1>Ürün Ara</h1>
         <p>Hangi mağazada ürün var? Hızlıca öğren!</p>
     </div>
     """, unsafe_allow_html=True)
 
+    # Hotspot tıklama sonrası sayfayı yukarı kaydır
+    if st.session_state.pop("_fe_scroll_top", False):
+        import streamlit.components.v1 as _sc
+        _sc.html('<script>window.parent.document.querySelector(".main").scrollTo({top:0,behavior:"smooth"});</script>', height=0)
+
     client = get_supabase_client()
     if not client:
-        st.error("⚠️ Veritabanı bağlantısı kurulamadı.")
+        st.error("Veritabanı bağlantısı kurulamadı.")
         st.info("Lütfen ayarları kontrol edin.")
         return
 
-    # Arama kutusu (form ile - her tuşta DB çağrısı yok, sadece Enter/buton)
+    # Arama kutusu
     with st.form("arama_form", clear_on_submit=False):
         col1, col2 = st.columns([5, 1])
         with col1:
@@ -960,8 +989,6 @@ def _frontend_poster_viewer():
     if not weeks:
         return
 
-    st.markdown("---")
-
     # En güncel haftayı otomatik seç (birden fazla varsa dropdown)
     if len(weeks) == 1:
         selected_week = weeks[0]
@@ -996,60 +1023,50 @@ def _frontend_poster_viewer():
     week_meta = get_week(selected_week)
     week_display_name = (week_meta.get("week_name") if week_meta else None) or selected_week
 
-    # Başlık: hafta adı + sayfa başlığı
+    # Sarı badge başlık
+    st.markdown(f'<div class="poster-badge">{week_display_name}</div>', unsafe_allow_html=True)
+
     pg = poster_pages[cur_idx]
-    page_title = pg["title"] or f'Sayfa {cur_idx + 1}'
-    st.markdown(f"### {week_display_name}")
-    if pg["title"]:
-        st.caption(page_title)
 
-    # Sayfa navigasyonu butonları — AFİŞİN ÜSTÜNde (afiş ile içerik arası)
-    if total_pages > 1:
-        nav1, nav2, nav3 = st.columns([1, 3, 1])
-        with nav1:
-            if st.button("◀ Önceki", key="fe_pv_prev", disabled=(cur_idx == 0), use_container_width=True):
-                st.session_state["fe_pv_idx"] = cur_idx - 1
-                st.rerun()
-        with nav2:
-            st.caption(f"Sayfa {cur_idx + 1} / {total_pages}")
-        with nav3:
-            if st.button("Sonraki ▶", key="fe_pv_next", disabled=(cur_idx >= total_pages - 1), use_container_width=True):
-                st.session_state["fe_pv_idx"] = cur_idx + 1
-                st.rerun()
+    # Tüm sayfaları component'a gönder — navigasyon tamamen component içinde
+    all_comp_pages = []
+    for i, pp in enumerate(poster_pages):
+        m = list_mappings_for_week(selected_week, pp["flyer_filename"], pp["page_no"])
+        hs = [{
+            "x0": mx["x0"], "y0": mx["y0"], "x1": mx["x1"], "y1": mx["y1"],
+            "urun_kodu": mx.get("urun_kodu") or "",
+            "urun_ad": mx.get("urun_aciklamasi") or "",
+            "afis_fiyat": mx.get("afis_fiyat") or "",
+        } for mx in m]
+        all_comp_pages.append({
+            "png_bytes": pp["png_data"],
+            "label": pp["title"] or f'Sayfa {i + 1}',
+            "hotspots": hs,
+        })
 
-    # SADECE aktif sayfanın hotspot'larını al
-    mappings = list_mappings_for_week(selected_week, pg["flyer_filename"], pg["page_no"])
-    hotspots = [{
-        "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
-        "urun_kodu": m.get("urun_kodu") or "",
-        "urun_ad": m.get("urun_aciklamasi") or "",
-        "afis_fiyat": m.get("afis_fiyat") or "",
-    } for m in mappings]
-
-    single_page = [{
-        "png_bytes": pg["png_data"],
-        "label": page_title,
-        "hotspots": hotspots,
-    }]
-
-    # Component: search mode — hotspot tıklayınca urun_kodu döner
+    # Component: search mode — navigasyon component içinde, hotspot tıklayınca urun_kodu döner
     result = poster_viewer(
-        pages=single_page,
-        current_index=0,
+        pages=all_comp_pages,
+        current_index=cur_idx,
         click_mode="search",
-        height=1200,
+        height=900,
         key="fe_poster_viewer",
     )
 
-    # Hotspot tıklandı → mevcut popüler arama mekanizmasını tetikle
-    if result and isinstance(result, dict) and result.get("type") == "hotspot_click":
-        urun_kodu = (result.get("urun_kodu") or "").strip()
-        click_ts = result.get("ts", 0)
-        # Aynı click'i tekrar işleme (rerun loop önleme)
-        if urun_kodu and click_ts != st.session_state.get("_fe_last_click_ts"):
-            st.session_state["_fe_last_click_ts"] = click_ts
-            st.session_state["_pop_arama"] = urun_kodu
-            st.rerun()
+    # Hotspot tıklandı → arama tetikle + scroll to top
+    if result and isinstance(result, dict):
+        if result.get("type") == "hotspot_click":
+            urun_kodu = (result.get("urun_kodu") or "").strip()
+            click_ts = result.get("ts", 0)
+            if urun_kodu and click_ts != st.session_state.get("_fe_last_click_ts"):
+                st.session_state["_fe_last_click_ts"] = click_ts
+                st.session_state["_pop_arama"] = urun_kodu
+                st.session_state["_fe_scroll_top"] = True
+                st.rerun()
+        elif result.get("type") == "page_change":
+            new_idx = result.get("index", 0)
+            if new_idx != cur_idx:
+                st.session_state["fe_pv_idx"] = new_idx
 
 
 # ============================================================================
