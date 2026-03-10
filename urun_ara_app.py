@@ -1085,9 +1085,11 @@ def _mapping_tool_tab():
         st.session_state["mt_db_ready"] = True
 
     from storage import (
-        list_mappings as _local_list, delete_mapping as _local_delete,
-        update_mapping as _local_update, save_week_products, get_week_products,
-        get_mapped_product_codes, save_week,
+        list_mappings as _db_list_mappings, delete_mapping as _db_delete_mapping,
+        update_mapping as _db_update_mapping, save_week_products, get_week_products,
+        get_mapped_product_codes as _db_get_mapped_codes, save_week,
+        save_mapping as _db_save_mapping, mark_product_mapped as _db_mark_mapped,
+        unmark_product_mapped as _db_unmark_mapped,
     )
 
     # --- Session state defaults ---
@@ -1099,6 +1101,15 @@ def _mapping_tool_tab():
         "mt_bbox": None,
         "mt_queue_idx": 0,       # active product index in queue
         "mt_mode": "upload",     # upload | mapping
+        "mt_pending_mappings": [],      # new mappings not yet saved to Supabase
+        "mt_pending_deletes": [],       # DB mapping_ids to delete on flush
+        "mt_pending_updates": {},       # {mapping_id: {field: val}} to update on flush
+        "mt_pending_mapped_codes": set(),  # codes mapped in pending
+        "mt_pending_unmapped_codes": set(),  # codes un-mapped (deleted) in pending
+        "mt_db_cache": {},              # {page_key: [mapping_dicts]} — cached DB reads
+        "mt_db_mapped_codes": None,     # cached DB mapped codes (loaded once)
+        "mt_dirty": False,              # has unsaved changes
+        "mt_next_temp_id": -1,          # temp IDs for pending mappings
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -1213,7 +1224,13 @@ def _mapping_tool_tab():
         sel_idx = st.selectbox("Sayfa", range(len(pages)),
                                format_func=lambda i: page_labels[i], key="mt_sel_page")
     with hdr2:
-        mapped_codes = get_mapped_product_codes(week_id)
+        # Load DB mapped codes once, then merge with pending
+        if st.session_state["mt_db_mapped_codes"] is None:
+            st.session_state["mt_db_mapped_codes"] = _db_get_mapped_codes(week_id)
+        mapped_codes = (
+            st.session_state["mt_db_mapped_codes"]
+            | st.session_state["mt_pending_mapped_codes"]
+        ) - st.session_state["mt_pending_unmapped_codes"]
         total_prods = len(products)
         mapped_count = len(mapped_codes)
         remaining = total_prods - mapped_count
@@ -1235,8 +1252,26 @@ def _mapping_tool_tab():
         st.session_state["mt_current_page"] = page_id
         st.session_state["mt_bbox"] = None
 
-    # --- Load saved mappings ---
-    saved = _local_list(week_id, page["flyer_filename"], page["page_no"])
+    # --- Load saved mappings (DB cache + pending) ---
+    page_key = f'{page["flyer_filename"]}_p{page["page_no"]}'
+    if page_key not in st.session_state["mt_db_cache"]:
+        st.session_state["mt_db_cache"][page_key] = _db_list_mappings(
+            week_id, page["flyer_filename"], page["page_no"])
+    db_saved = st.session_state["mt_db_cache"][page_key]
+    # Filter out DB mappings that are pending delete
+    del_ids = set(st.session_state["mt_pending_deletes"])
+    db_filtered = [m for m in db_saved if m["mapping_id"] not in del_ids]
+    # Apply pending updates to DB mappings
+    upd = st.session_state["mt_pending_updates"]
+    for m in db_filtered:
+        if m["mapping_id"] in upd:
+            m.update(upd[m["mapping_id"]])
+    # Merge: DB (filtered) + pending for this page
+    pending_for_page = [
+        m for m in st.session_state["mt_pending_mappings"]
+        if m["flyer_filename"] == page["flyer_filename"] and m["page_no"] == page["page_no"]
+    ]
+    saved = db_filtered + pending_for_page
     saved_boxes = [
         {"x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
          "label": m.get("urun_kodu") or "?"}
@@ -1374,18 +1409,52 @@ def _mapping_tool_tab():
                          key="mt_btn_save_manual", use_container_width=True):
                 _mt_save_local(page, bbox, code_in.strip(), desc_in.strip() or None, "manual")
 
-    # --- Hızlı eylemler: Undo + Toplu sil ---
+    # --- Hızlı eylemler: Kaydet + Undo + Toplu sil ---
     st.markdown("---")
+
+    # "Değişiklikleri Kaydet" butonu (Supabase'e flush)
+    if st.session_state["mt_dirty"]:
+        pending_count = len(st.session_state["mt_pending_mappings"])
+        del_count = len(st.session_state["mt_pending_deletes"])
+        upd_count = len(st.session_state["mt_pending_updates"])
+        change_parts = []
+        if pending_count:
+            change_parts.append(f"{pending_count} yeni")
+        if del_count:
+            change_parts.append(f"{del_count} silme")
+        if upd_count:
+            change_parts.append(f"{upd_count} güncelleme")
+        change_text = ", ".join(change_parts)
+        save_col1, save_col2 = st.columns([3, 5])
+        with save_col1:
+            if st.button(f"Kaydet ({change_text})", key="mt_flush_save",
+                         type="primary", use_container_width=True):
+                _mt_flush_to_supabase()
+                st.success("Tüm değişiklikler Supabase'e kaydedildi!")
+                st.rerun()
+        with save_col2:
+            st.caption("Kaydedilmemiş değişiklikleriniz var")
+
     undo_col, clear_col, spacer_col = st.columns([2, 2, 4])
     with undo_col:
         last_mid = st.session_state.get("mt_last_mapping_id")
         if last_mid and st.button("Geri Al (Son Eşleştirme)", key="mt_undo", use_container_width=True):
-            from storage import unmark_product_mapped
             # Silmeden önce ürün kodunu al
             undo_target = next((m for m in saved if m["mapping_id"] == last_mid), None)
-            _local_delete(last_mid)
+            if last_mid < 0:
+                # Pending mapping — remove from list
+                st.session_state["mt_pending_mappings"] = [
+                    m for m in st.session_state["mt_pending_mappings"]
+                    if m["mapping_id"] != last_mid
+                ]
+            else:
+                # DB mapping — schedule for deletion
+                st.session_state["mt_pending_deletes"].append(last_mid)
             if undo_target and undo_target.get("urun_kodu"):
-                unmark_product_mapped(week_id, undo_target["urun_kodu"])
+                code = undo_target["urun_kodu"]
+                st.session_state["mt_pending_mapped_codes"].discard(code)
+                st.session_state["mt_pending_unmapped_codes"].add(code)
+            st.session_state["mt_dirty"] = True
             st.session_state.pop("mt_last_mapping_id", None)
             st.rerun()
     with clear_col:
@@ -1397,8 +1466,20 @@ def _mapping_tool_tab():
         yc1, yc2 = st.columns(2)
         with yc1:
             if st.button("Evet, Tümünü Sil", key="mt_clear_yes", type="primary", use_container_width=True):
-                from storage import delete_page_mappings
-                delete_page_mappings(week_id, page["flyer_filename"], page["page_no"])
+                # Pending ones — remove from list
+                st.session_state["mt_pending_mappings"] = [
+                    m for m in st.session_state["mt_pending_mappings"]
+                    if not (m["flyer_filename"] == page["flyer_filename"] and m["page_no"] == page["page_no"])
+                ]
+                # DB ones — schedule for deletion
+                for m in db_filtered:
+                    st.session_state["mt_pending_deletes"].append(m["mapping_id"])
+                # Unmark all affected product codes
+                for m in saved:
+                    if m.get("urun_kodu"):
+                        st.session_state["mt_pending_mapped_codes"].discard(m["urun_kodu"])
+                        st.session_state["mt_pending_unmapped_codes"].add(m["urun_kodu"])
+                st.session_state["mt_dirty"] = True
                 st.session_state.pop("_confirm_clear_page", None)
                 st.rerun()
         with yc2:
@@ -1411,9 +1492,11 @@ def _mapping_tool_tab():
         with st.expander(f"Bu Sayfadaki Eşleştirmeler ({len(saved)})", expanded=False):
             for i, m in enumerate(saved):
                 mid = m["mapping_id"]
+                is_pending = mid < 0
                 rc1, rc2, rc3, rc4, rc5 = st.columns([1, 2.5, 3, 1.5, 1.5])
                 with rc1:
-                    st.caption(f"#{mid}")
+                    label = f"*{abs(mid)}" if is_pending else f"#{mid}"
+                    st.caption(label)
                 with rc2:
                     new_kod = st.text_input(
                         "Kod", value=m["urun_kodu"] or "", key=f"mt_ek_{mid}",
@@ -1425,15 +1508,35 @@ def _mapping_tool_tab():
                         label_visibility="collapsed",
                     )
                 with rc4:
-                    if st.button("Kaydet", key=f"mt_eu_{mid}", use_container_width=True):
-                        _local_update(mid, {
-                            "urun_kodu": new_kod.strip(),
-                            "urun_aciklamasi": new_desc.strip() or None,
-                        })
+                    if st.button("Güncelle", key=f"mt_eu_{mid}", use_container_width=True):
+                        if is_pending:
+                            # Update in pending list directly
+                            for pm in st.session_state["mt_pending_mappings"]:
+                                if pm["mapping_id"] == mid:
+                                    pm["urun_kodu"] = new_kod.strip()
+                                    pm["urun_aciklamasi"] = new_desc.strip() or None
+                                    break
+                        else:
+                            # Schedule DB update
+                            st.session_state["mt_pending_updates"][mid] = {
+                                "urun_kodu": new_kod.strip(),
+                                "urun_aciklamasi": new_desc.strip() or None,
+                            }
+                        st.session_state["mt_dirty"] = True
                         st.rerun()
                 with rc5:
                     if st.button("Sil", key=f"mt_edel_{mid}", use_container_width=True):
-                        _local_delete(mid)
+                        if is_pending:
+                            st.session_state["mt_pending_mappings"] = [
+                                pm for pm in st.session_state["mt_pending_mappings"]
+                                if pm["mapping_id"] != mid
+                            ]
+                        else:
+                            st.session_state["mt_pending_deletes"].append(mid)
+                        if m.get("urun_kodu"):
+                            st.session_state["mt_pending_mapped_codes"].discard(m["urun_kodu"])
+                            st.session_state["mt_pending_unmapped_codes"].add(m["urun_kodu"])
+                        st.session_state["mt_dirty"] = True
                         st.rerun()
     else:
         st.caption("Bu sayfada henüz eşleştirme yok.")
@@ -1479,6 +1582,23 @@ def _poster_viewer_tab():
     )
 
     st.subheader("Poster Yönetimi")
+
+    # Kaydedilmemiş değişiklik uyarısı
+    if st.session_state.get("mt_dirty"):
+        pending_n = len(st.session_state.get("mt_pending_mappings", []))
+        del_n = len(st.session_state.get("mt_pending_deletes", []))
+        upd_n = len(st.session_state.get("mt_pending_updates", {}))
+        parts = []
+        if pending_n:
+            parts.append(f"{pending_n} yeni eşleştirme")
+        if del_n:
+            parts.append(f"{del_n} silme")
+        if upd_n:
+            parts.append(f"{upd_n} güncelleme")
+        st.warning(
+            f"Kaydedilmemiş değişiklikleriniz var: **{', '.join(parts)}**. "
+            f"Lütfen önce 'Eşleştir' sekmesindeki **Kaydet** butonuna basın!"
+        )
 
     weeks = list_all_weeks()
     if not weeks:
@@ -1766,22 +1886,21 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
 
 
 def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
-    """Save a mapping to local SQLite, advance queue, and rerun."""
-    from storage import save_mapping as _local_save, mark_product_mapped, get_week_products
-
-    # Excel'den afis_fiyat bilgisini bul
+    """Save a mapping to session_state (in-memory). Flushed to Supabase on explicit save."""
+    # Excel'den afis_fiyat bilgisini bul (session_state'ten, DB'den değil)
     afis_fiyat = None
     week_id = st.session_state["mt_week_id"]
-    try:
-        wp = get_week_products(week_id)
-        for p in wp:
-            if p.get("urun_kodu") == urun_kod:
-                afis_fiyat = p.get("afis_fiyat") or None
-                break
-    except Exception:
-        pass
+    for p in st.session_state.get("mt_products", []):
+        if p.get("urun_kod") == urun_kod:
+            afis_fiyat = p.get("afis_fiyat") or None
+            break
 
-    mid = _local_save({
+    # Temp negatif ID ata
+    temp_id = st.session_state["mt_next_temp_id"]
+    st.session_state["mt_next_temp_id"] = temp_id - 1
+
+    mapping = {
+        "mapping_id": temp_id,
         "week_id": week_id,
         "flyer_filename": page["flyer_filename"],
         "page_no": page["page_no"],
@@ -1792,14 +1911,57 @@ def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
         "ocr_text": None,
         "source": source, "status": "matched",
         "created_at": datetime.utcnow().isoformat(),
-    })
+    }
+    st.session_state["mt_pending_mappings"].append(mapping)
+    st.session_state["mt_pending_mapped_codes"].add(urun_kod)
+    st.session_state["mt_pending_unmapped_codes"].discard(urun_kod)
+    st.session_state["mt_dirty"] = True
+
     # Son eşleştirme ID'sini kaydet (Undo için)
-    st.session_state["mt_last_mapping_id"] = mid
-    # Mark product as mapped in queue
-    mark_product_mapped(week_id, urun_kod)
-    # Clear bbox for next draw, auto-advance NOT needed (queue rebuilds from mapped_codes)
+    st.session_state["mt_last_mapping_id"] = temp_id
+    # Clear bbox for next draw
     st.session_state["mt_bbox"] = None
     st.rerun()
+
+
+def _mt_flush_to_supabase():
+    """Flush all pending mappings/deletes/updates to Supabase."""
+    from storage import (
+        save_mapping as _db_save, delete_mapping as _db_delete,
+        update_mapping as _db_update, mark_product_mapped as _db_mark,
+        unmark_product_mapped as _db_unmark,
+    )
+    week_id = st.session_state["mt_week_id"]
+
+    # 1. Insert pending mappings
+    for m in st.session_state["mt_pending_mappings"]:
+        row = {k: v for k, v in m.items() if k != "mapping_id"}  # strip temp ID
+        _db_save(row)
+
+    # 2. Delete pending deletes
+    for mid in st.session_state["mt_pending_deletes"]:
+        _db_delete(mid)
+
+    # 3. Apply pending updates
+    for mid, fields in st.session_state["mt_pending_updates"].items():
+        _db_update(mid, fields)
+
+    # 4. Mark/unmark products
+    for code in st.session_state["mt_pending_mapped_codes"]:
+        _db_mark(week_id, code)
+    for code in st.session_state["mt_pending_unmapped_codes"]:
+        _db_unmark(week_id, code)
+
+    # 5. Clear pending state
+    st.session_state["mt_pending_mappings"] = []
+    st.session_state["mt_pending_deletes"] = []
+    st.session_state["mt_pending_updates"] = {}
+    st.session_state["mt_pending_mapped_codes"] = set()
+    st.session_state["mt_pending_unmapped_codes"] = set()
+    st.session_state["mt_db_cache"] = {}  # invalidate cache
+    st.session_state["mt_db_mapped_codes"] = None
+    st.session_state["mt_dirty"] = False
+    st.session_state["mt_next_temp_id"] = -1
 
 
 # ============================================================================
