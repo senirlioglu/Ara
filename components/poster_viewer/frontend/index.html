@@ -42,6 +42,7 @@
     display: inline-block;
     max-width: calc(100% - 80px);
     flex: 1;
+    overflow: hidden;
   }
   #page-wrap img {
     display: block;
@@ -49,6 +50,10 @@
     height: auto;
     border-radius: 6px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+    transition: opacity 0.25s ease;
+  }
+  #page-wrap img.fading {
+    opacity: 0;
   }
 
   /* Hotspot overlay */
@@ -59,6 +64,8 @@
     cursor: pointer;
     z-index: 5;
     transition: background 0.2s, border-color 0.2s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(30, 58, 95, 0.2);
   }
   .hotspot:hover {
     background: rgba(30, 58, 95, 0.2);
@@ -201,6 +208,7 @@ var pages      = [];
 var currentIdx = 0;
 var activeHotspot = null;
 var clickMode  = "popup";
+var localNav   = false;   /* true when user navigated locally (skip Streamlit reset) */
 
 /* ── Receive data from Streamlit ── */
 window.addEventListener("message", function(event) {
@@ -208,9 +216,24 @@ window.addEventListener("message", function(event) {
   var args = event.data.args;
   if (!args) return;
 
-  pages = args.pages || [];
-  currentIdx = args.current_index || 0;
-  clickMode = args.click_mode || "popup";
+  var newPages = args.pages || [];
+  var newClickMode = args.click_mode || "popup";
+  var serverIdx = args.current_index || 0;
+
+  /* If user navigated locally, don't let Streamlit reset page index */
+  if (localNav && newPages.length === pages.length) {
+    pages = newPages;
+    clickMode = newClickMode;
+    /* Only re-render hotspots for current page (image unchanged) */
+    var pg = pages[currentIdx];
+    if (pg) renderHotspots(pg.hotspots || []);
+    return;
+  }
+
+  /* Pages actually changed — full rebuild */
+  pages = newPages;
+  clickMode = newClickMode;
+  localNav = false;
 
   if (pages.length === 0) {
     counter.textContent = "";
@@ -219,7 +242,7 @@ window.addEventListener("message", function(event) {
   }
 
   buildDots();
-  showPage(currentIdx);
+  showPage(serverIdx, false);
 });
 
 function buildDots() {
@@ -242,16 +265,23 @@ function showPage(idx, fromUser) {
   currentIdx = idx;
   var pg = pages[idx];
 
-  /* Update image */
+  /* Update image with fade transition */
   var src = "data:image/jpeg;base64," + pg.image_b64;
   if (img.src !== src) {
+    if (fromUser) img.classList.add("fading");
     img.onload = function() {
+      img.classList.remove("fading");
       renderHotspots(pg.hotspots || []);
       setFrameHeight();
       setTimeout(setFrameHeight, 200);
       setTimeout(setFrameHeight, 500);
     };
-    img.src = src;
+    /* Small delay for fade-out before changing src */
+    if (fromUser) {
+      setTimeout(function() { img.src = src; }, 80);
+    } else {
+      img.src = src;
+    }
   } else {
     renderHotspots(pg.hotspots || []);
   }
@@ -279,6 +309,7 @@ function showPage(idx, fromUser) {
   closePopup();
 
   if (fromUser) {
+    localNav = true;
     sendValue({type: "page_change", index: idx});
   }
 }
@@ -372,14 +403,34 @@ document.addEventListener("keydown", function(e) {
   else if (e.key === "Escape") closePopup();
 });
 
-/* Touch swipe */
+/* Touch swipe — ignore swipes that start on a hotspot */
 var touchStartX = 0;
+var touchStartY = 0;
+var touchOnHotspot = false;
+
 document.addEventListener("touchstart", function(e) {
   touchStartX = e.touches[0].clientX;
-});
+  touchStartY = e.touches[0].clientY;
+  /* Check if touch started on a hotspot */
+  var el = e.target;
+  touchOnHotspot = false;
+  while (el && el !== document.body) {
+    if (el.classList && el.classList.contains("hotspot")) {
+      touchOnHotspot = true;
+      break;
+    }
+    el = el.parentElement;
+  }
+}, {passive: true});
+
 document.addEventListener("touchend", function(e) {
+  /* If touch was on a hotspot, let click handler deal with it */
+  if (touchOnHotspot) return;
+
   var dx = e.changedTouches[0].clientX - touchStartX;
-  if (Math.abs(dx) > 50) {
+  var dy = e.changedTouches[0].clientY - touchStartY;
+  /* Only swipe if horizontal movement is dominant and > 50px */
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
     if (dx > 0) goTo(currentIdx - 1);
     else goTo(currentIdx + 1);
   }
