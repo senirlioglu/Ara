@@ -367,22 +367,26 @@ def save_week_products(week_id: str, products: list[dict], db_path=None):
     sb = _get_client()
     # Clear existing
     sb.table("week_products").delete().eq("week_id", week_id).execute()
-    # Insert in batches of 100
+    # Deduplicate by urun_kodu (keep first occurrence)
+    seen = set()
     rows = []
     for i, p in enumerate(products):
+        code = p.get("urun_kodu", "")
+        if not code or code in seen:
+            continue
+        seen.add(code)
         rows.append({
             "week_id": week_id,
-            "urun_kodu": p.get("urun_kodu", ""),
+            "urun_kodu": code,
             "urun_aciklamasi": p.get("urun_aciklamasi", ""),
             "afis_fiyat": p.get("afis_fiyat", ""),
             "source_row": i + 1,
             "is_mapped": False,
         })
+    # Insert in batches of 100
     for batch_start in range(0, len(rows), 100):
         batch = rows[batch_start:batch_start + 100]
-        sb.table("week_products").upsert(
-            batch, on_conflict="week_id,urun_kodu"
-        ).execute()
+        sb.table("week_products").insert(batch).execute()
 
 
 def get_week_products(week_id: str, db_path=None) -> list[dict]:
