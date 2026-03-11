@@ -766,7 +766,7 @@ def main():
     if oneriler:
         import json
         import streamlit.components.v1 as components
-        _ac_data = json.dumps(oneriler, ensure_ascii=False)
+        _ac_data = json.dumps(oneriler, ensure_ascii=True)
         _ac_js = """
 <script>
 (function(){
