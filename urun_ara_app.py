@@ -22,7 +22,33 @@ from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
 import threading
+import subprocess
 from pathlib import Path
+
+
+# --- Günlük Pipeline (günde 1 kez, lazy tetikleme) ---
+def _pipeline_gunluk_guncelle():
+    """oneri_listesi.json bugün güncellenmemişse pipeline'ı arka planda çalıştırır."""
+    json_path = Path("data/oneri_listesi.json")
+    if json_path.exists():
+        from datetime import date
+        son_degisim = datetime.fromtimestamp(json_path.stat().st_mtime).date()
+        if son_degisim >= date.today():
+            return  # Bugün zaten güncellendi
+    try:
+        subprocess.Popen(
+            ["python", "urun_master_pipeline.py"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+# Uygulama ilk yüklendiğinde kontrol et (günde 1 kez çalışır)
+if not hasattr(st, '_pipeline_checked_today'):
+    st._pipeline_checked_today = True
+    threading.Thread(target=_pipeline_gunluk_guncelle, daemon=True).start()
+
 
 # --- Performans için Önceden Derlenmiş Regexler ---
 RE_TV_NEGATIF = re.compile(
