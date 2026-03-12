@@ -815,9 +815,9 @@ wr.style.position='relative';wr.appendChild(dd);
 dd.addEventListener('click',function(e){
   var it=e.target.closest('[data-t]');if(!it)return;
   var t=it.getAttribute('data-t') || '';
-  var sep=t.indexOf(' - ');
-  var ad=(sep>-1 ? t.slice(sep+3).trim() : t.trim());
-  var kod=(sep>-1 ? t.slice(0,sep).trim() : '');
+  var parts=t.split(' - ');
+  var kod=parts.length>=2?parts[0].trim():'';
+  var ad=parts.length>=2?parts[1].trim():t.trim();
   // Input'a ürün adını yaz (kullanıcı kodu görmesin)
   var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
   st.call(inp,ad);
@@ -838,12 +838,13 @@ function norm(s){
 }
 
 var IDX=S.map(function(raw){
-  var sep=raw.indexOf(' - ');
-  var kod=sep>-1?raw.slice(0,sep):'';
-  var ad=sep>-1?raw.slice(sep+3):raw;
+  var parts=raw.split(' - ');
+  var kod=parts.length>=2?parts[0].trim():'';
+  var ad=parts.length>=2?parts[1].trim():raw;
+  var fiyat=parts.length>=3?parts[2].trim():'';
   var nKod=norm(kod);
   var nAd=norm(ad);
-  return {raw:raw,kod:kod,ad:ad,nKod:nKod,nAd:nAd};
+  return {raw:raw,kod:kod,ad:ad,fiyat:fiyat,nKod:nKod,nAd:nAd};
 });
 
 function show(v){
@@ -883,18 +884,20 @@ function show(v){
   for(var i=0;i<IDX.length;i++){
     var it=IDX[i];
     var sc=score(it);
-    if(sc>0){m.push({s:it.raw,sc:sc});}
+    if(sc>0){m.push({it:it,sc:sc});}
   }
-  m.sort(function(a,b){return b.sc-a.sc || a.s.length-b.s.length;});
-  m=m.slice(0,12).map(function(x){return x.s;});
+  m.sort(function(a,b){return b.sc-a.sc || a.it.raw.length-b.it.raw.length;});
+  m=m.slice(0,12).map(function(x){return x.it;});
   if(!m.length){dd.style.display='none';return;}
-  dd.innerHTML=m.map(function(s){
-    var sep=s.indexOf(' - ');
-    var kod=(sep>-1 ? s.slice(0,sep).trim() : '');
-    var ad=(sep>-1 ? s.slice(sep+3).trim() : s);
-    var label=(kod ? '<span style="color:#999;font-size:0.8rem;min-width:68px;">'+esc(kod)+'</span><span style="color:#999;padding:0 4px;">-</span><span style="color:#333;font-size:0.92rem;">'+esc(ad)+'</span>' : '<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span>');
-    return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
-    +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+  dd.innerHTML=m.map(function(it){
+    var kod=it.kod,ad=it.ad,fiyat=it.fiyat,s=it.raw;
+    var label='<span style="color:#333;font-size:0.92rem;">';
+    if(kod) label+=esc(kod)+'-'+esc(ad);
+    else label+=esc(ad);
+    if(fiyat) label+='<span style="color:#e53935;font-weight:600;margin-left:4px;">'+esc(fiyat)+'TL</span>';
+    label+='</span>';
+    return '<div data-t="'+esc(s)+'" style="padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
+    +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#bbb" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
     +label+'</div>';
   }).join('');
   dd.style.display='block';
