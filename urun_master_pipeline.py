@@ -76,7 +76,7 @@ def _fetch_page_with_retry(client, last_id: int, page_size: int, max_retries: in
     for attempt in range(max_retries):
         try:
             result = client.table('stok_gunluk')\
-                .select('id, urun_kod, urun_ad')\
+                .select('id, urun_kod, urun_ad, birim_fiyat')\
                 .order('id')\
                 .gt('id', last_id)\
                 .limit(page_size)\
@@ -111,7 +111,7 @@ def _fetch_urunler_raw(client, page_size: int = 5000, max_rows: int = 900000):
         time.sleep(0.3)
 
     if not rows_out:
-        return pd.DataFrame(columns=['urun_kod', 'urun_ad'])
+        return pd.DataFrame(columns=['urun_kod', 'urun_ad', 'birim_fiyat'])
 
     df = pd.DataFrame(rows_out)
     df.drop(columns=['id'], errors='ignore', inplace=True)
@@ -119,6 +119,8 @@ def _fetch_urunler_raw(client, page_size: int = 5000, max_rows: int = 900000):
         df['urun_kod'] = ''
     if 'urun_ad' not in df.columns:
         df['urun_ad'] = ''
+    if 'birim_fiyat' not in df.columns:
+        df['birim_fiyat'] = None
 
     df['urun_kod'] = df['urun_kod'].fillna('').astype(str).str.strip()
     df['urun_ad'] = df['urun_ad'].fillna('').astype(str).str.strip()
@@ -142,20 +144,32 @@ def build_and_save_urun_master() -> tuple[int, int]:
     master_df = raw_df.drop_duplicates(subset=['urun_kod', 'urun_ad']).reset_index(drop=True)
     master_df['urun_ad_normalized'] = master_df['urun_ad'].map(normalize_urun_ad)
 
-    # Öneri kaynağı: kod + ad bazında frekans (ham satırdan)
+    # Öneri kaynağı: kod + ad + fiyat bazında frekans (ham satırdan)
+    if 'birim_fiyat' not in raw_df.columns:
+        raw_df['birim_fiyat'] = None
+
     oneri_df = (
         raw_df.groupby(['urun_kod', 'urun_ad'], as_index=False)
-        .size()
-        .rename(columns={'size': 'frekans'})
+        .agg(frekans=('urun_ad', 'size'), birim_fiyat=('birim_fiyat', 'first'))
         .sort_values(['frekans', 'urun_ad', 'urun_kod'], ascending=[False, True, True])
     )
 
     def _format_oneri(row) -> str:
         kod = str(row['urun_kod']).strip()
         ad = str(row['urun_ad']).strip()
-        if kod:
-            return f"{kod} - {ad}"
-        return ad
+        fiyat = row.get('birim_fiyat')
+        fiyat_str = ""
+        if fiyat and pd.notna(fiyat):
+            try:
+                fiyat_val = float(fiyat)
+                if fiyat_val > 0:
+                    fiyat_str = f"{fiyat_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
+            except (ValueError, TypeError):
+                pass
+        parts = [kod, ad] if kod else [ad]
+        if fiyat_str:
+            parts.append(fiyat_str)
+        return " - ".join(parts)
 
     oneri_listesi = oneri_df.apply(_format_oneri, axis=1).drop_duplicates().tolist()
 

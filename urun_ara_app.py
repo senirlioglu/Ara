@@ -280,9 +280,9 @@ def _build_oneri_lookup():
                 data = json.load(f)
             for entry in data:
                 if isinstance(entry, str) and ' - ' in entry:
-                    parts = entry.split(' - ', 1)
+                    parts = entry.split(' - ')
                     kod = parts[0].strip()
-                    ad = parts[1].strip()
+                    ad = parts[1].strip() if len(parts) >= 2 else ''
                     if kod.isdigit() and ad:
                         lookup[ad.lower()] = kod
     except Exception:
@@ -788,9 +788,9 @@ wr.style.position='relative';wr.appendChild(dd);
 dd.addEventListener('click',function(e){
   var it=e.target.closest('[data-t]');if(!it)return;
   var t=it.getAttribute('data-t') || '';
-  var sep=t.indexOf(' - ');
-  var ad=(sep>-1 ? t.slice(sep+3).trim() : t.trim());
-  var kod=(sep>-1 ? t.slice(0,sep).trim() : '');
+  var parts=t.split(' - ');
+  var ad=(parts.length>=2 ? parts[1].trim() : t.trim());
+  var kod=(parts.length>=2 ? parts[0].trim() : '');
   // Input'a ürün adını yaz (kullanıcı kodu görmesin)
   var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
   st.call(inp,ad);
@@ -811,9 +811,9 @@ function norm(s){
 }
 
 var IDX=S.map(function(raw){
-  var sep=raw.indexOf(' - ');
-  var kod=sep>-1?raw.slice(0,sep):'';
-  var ad=sep>-1?raw.slice(sep+3):raw;
+  var parts=raw.split(' - ');
+  var kod=parts.length>=2?parts[0].trim():'';
+  var ad=parts.length>=2?parts[1].trim():raw;
   var nKod=norm(kod);
   var nAd=norm(ad);
   return {raw:raw,kod:kod,ad:ad,nKod:nKod,nAd:nAd};
@@ -862,12 +862,23 @@ function show(v){
   m=m.slice(0,12).map(function(x){return x.s;});
   if(!m.length){dd.style.display='none';return;}
   dd.innerHTML=m.map(function(s){
-    var sep=s.indexOf(' - ');
-    var kod=(sep>-1 ? s.slice(0,sep).trim() : '');
-    var ad=(sep>-1 ? s.slice(sep+3).trim() : s);
-    var label=(kod ? '<span style="color:#999;font-size:0.8rem;min-width:68px;">'+esc(kod)+'</span><span style="color:#999;padding:0 4px;">-</span><span style="color:#333;font-size:0.92rem;">'+esc(ad)+'</span>' : '<span style="color:#333;font-size:0.92rem;">'+esc(s)+'</span>');
-    return '<div data-t="'+esc(s)+'" style="padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
-    +'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+    var parts=s.split(' - ');
+    var kod=(parts.length>=2 ? parts[0].trim() : '');
+    var ad=(parts.length>=2 ? parts[1].trim() : s);
+    var fiyat=(parts.length>=3 ? parts[2].trim() : '');
+    var label='';
+    if(kod){
+      label='<span style="color:#555;font-size:0.82rem;font-weight:600;">'+esc(kod)+'</span>'
+        +'<span style="color:#ccc;padding:0 3px;">-</span>'
+        +'<span style="color:#333;font-size:0.88rem;">'+esc(ad)+'</span>';
+      if(fiyat){
+        label+='<span style="color:#00b894;font-size:0.78rem;font-weight:600;margin-left:auto;white-space:nowrap;">'+esc(fiyat)+'</span>';
+      }
+    } else {
+      label='<span style="color:#333;font-size:0.88rem;">'+esc(s)+'</span>';
+    }
+    return '<div data-t="'+esc(s)+'" style="padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:6px;border-bottom:1px solid #f5f5f5;transition:background 0.15s;" onmouseover="this.style.background=\\'#f5f5fa\\'" onmouseout="this.style.background=\\'white\\'">'
+    +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#bbb" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
     +label+'</div>';
   }).join('');
   dd.style.display='block';
