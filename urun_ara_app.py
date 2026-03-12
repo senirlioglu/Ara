@@ -22,7 +22,42 @@ from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
 import threading
+import subprocess
 from pathlib import Path
+
+
+# --- Günlük Pipeline (günde 1 kez, lazy tetikleme) ---
+def _pipeline_gunluk_guncelle():
+    """oneri_listesi.json bugün güncellenmemişse pipeline'ı arka planda çalıştırır."""
+    from datetime import date
+    json_path = Path("data/oneri_listesi.json")
+    if json_path.exists():
+        son_degisim = datetime.fromtimestamp(json_path.stat().st_mtime).date()
+        if son_degisim >= date.today():
+            return  # Bugün zaten güncellendi
+    try:
+        subprocess.run(
+            ["python", "urun_master_pipeline.py"],
+            timeout=600,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+def _pipeline_kontrol():
+    from datetime import date
+    now = datetime.now()
+    # Stok sabah 09:00'da yükleniyor, pipeline 10:30'dan sonra çalışsın
+    if now.hour < 10 or (now.hour == 10 and now.minute < 30):
+        return
+    bugun = str(date.today())
+    if getattr(st, '_pipeline_last_check', None) != bugun:
+        st._pipeline_last_check = bugun
+        threading.Thread(target=_pipeline_gunluk_guncelle, daemon=True).start()
+
+_pipeline_kontrol()
+
 
 # --- Performans için Önceden Derlenmiş Regexler ---
 RE_TV_NEGATIF = re.compile(
@@ -302,9 +337,9 @@ def _build_oneri_lookup():
                 data = json.load(f)
             for entry in data:
                 if isinstance(entry, str) and ' - ' in entry:
-                    parts = entry.split(' - ', 1)
+                    parts = entry.split(' - ')
                     kod = parts[0].strip()
-                    ad = parts[1].strip()
+                    ad = parts[1].strip() if len(parts) >= 2 else ''
                     if kod.isdigit() and ad:
                         lookup[ad.lower()] = kod
     except Exception:
@@ -793,7 +828,7 @@ def main():
     if oneriler:
         import json
         import streamlit.components.v1 as components
-        _ac_data = json.dumps(oneriler, ensure_ascii=False)
+        _ac_data = json.dumps(oneriler, ensure_ascii=True)
         _ac_js = """
 <script>
 (function(){

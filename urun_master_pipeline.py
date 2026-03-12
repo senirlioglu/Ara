@@ -146,6 +146,9 @@ def build_and_save_urun_master() -> tuple[int, int]:
     master_df['urun_ad_normalized'] = master_df['urun_ad'].map(normalize_urun_ad)
 
     # Öneri kaynağı: kod + ad + fiyat bazında frekans (ham satırdan)
+    if 'birim_fiyat' not in raw_df.columns:
+        raw_df['birim_fiyat'] = None
+
     oneri_df = (
         raw_df.groupby(['urun_kod', 'urun_ad'], as_index=False)
         .agg(frekans=('birim_fiyat', 'size'), birim_fiyat=('birim_fiyat', 'median'))
