@@ -47,6 +47,10 @@ def _pipeline_gunluk_guncelle():
 
 def _pipeline_kontrol():
     from datetime import date
+    now = datetime.now()
+    # Stok sabah 09:00'da yükleniyor, pipeline 10:30'dan sonra çalışsın
+    if now.hour < 10 or (now.hour == 10 and now.minute < 30):
+        return
     bugun = str(date.today())
     if getattr(st, '_pipeline_last_check', None) != bugun:
         st._pipeline_last_check = bugun
