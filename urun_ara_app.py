@@ -616,73 +616,10 @@ def _get_oneri_listesi_impl():
     return [], debug_info
 
 @st.cache_data(ttl=3600)
-def _fetch_price_map() -> dict:
-    """Runtime'da Supabase'den ürün fiyatlarını çek (kod→fiyat).
-
-    Cursor-based pagination ile tüm fiyatlı satırları tarar.
-    DESC sıralama: en güncel fiyat ilk gelir, kod bazında ilk gelen kazanır.
-    """
-    try:
-        client = get_supabase_client()
-        if not client:
-            return {}
-        price_map = {}
-        page_size = 10000
-        last_id = None
-        max_pages = 100  # güvenlik sınırı
-
-        for _ in range(max_pages):
-            q = client.table('stok_gunluk') \
-                .select('id, urun_kod, birim_fiyat') \
-                .gt('birim_fiyat', 0) \
-                .order('id', desc=True) \
-                .limit(page_size)
-            if last_id is not None:
-                q = q.lt('id', last_id)
-            resp = q.execute()
-            rows = resp.data or []
-            if not rows:
-                break
-            for r in rows:
-                kod = str(r.get('urun_kod', '')).strip()
-                fiyat = r.get('birim_fiyat')
-                if kod and fiyat and kod not in price_map:
-                    price_map[kod] = float(fiyat)
-            last_id = rows[-1]['id']
-            if len(rows) < page_size:
-                break
-        return price_map
-    except Exception:
-        return {}
-
-
-@st.cache_data(ttl=3600)
 def get_oneri_listesi():
-    """Cached wrapper — dosyadan liste + runtime fiyat zenginleştirme."""
+    """Cached wrapper — pipeline'ın ürettiği dosyadan okur."""
     liste, _ = _get_oneri_listesi_impl()
-    if not liste:
-        return liste
-    # Zaten fiyat içeren format varsa (pipeline güncel) doğrudan dön
-    # Kontrol: ilk 5 elemanda " - " 2 kez geçiyorsa fiyat var demek
-    sample = liste[:5]
-    has_price = any(s.count(' - ') >= 2 for s in sample)
-    if has_price:
-        return liste
-    # Fiyat yoksa runtime'dan ekle
-    price_map = _fetch_price_map()
-    if not price_map:
-        return liste
-    enriched = []
-    for entry in liste:
-        parts = entry.split(' - ', 1)
-        kod = parts[0].strip() if len(parts) >= 2 else ''
-        fiyat = price_map.get(kod)
-        if fiyat and fiyat > 0:
-            fiyat_str = f"{fiyat:.0f}" if fiyat == int(fiyat) else f"{fiyat:.2f}"
-            enriched.append(f"{entry} - {fiyat_str}")
-        else:
-            enriched.append(entry)
-    return enriched
+    return liste
 
 
 

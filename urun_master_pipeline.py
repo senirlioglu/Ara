@@ -145,13 +145,13 @@ def build_and_save_urun_master() -> tuple[int, int]:
     master_df = raw_df.drop_duplicates(subset=['urun_kod', 'urun_ad']).reset_index(drop=True)
     master_df['urun_ad_normalized'] = master_df['urun_ad'].map(normalize_urun_ad)
 
-    # Öneri kaynağı: kod + ad + fiyat bazında frekans (ham satırdan)
+    # Öneri kaynağı: kod + ad + fiyat (son geçerli fiyat, hafif hesaplama)
     if 'birim_fiyat' not in raw_df.columns:
         raw_df['birim_fiyat'] = None
 
     oneri_df = (
         raw_df.groupby(['urun_kod', 'urun_ad'], as_index=False)
-        .agg(frekans=('birim_fiyat', 'size'), birim_fiyat=('birim_fiyat', 'median'))
+        .agg(frekans=('birim_fiyat', 'size'), birim_fiyat=('birim_fiyat', 'last'))
         .sort_values(['frekans', 'urun_ad', 'urun_kod'], ascending=[False, True, True])
     )
 
