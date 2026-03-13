@@ -616,10 +616,57 @@ def _get_oneri_listesi_impl():
     return [], debug_info
 
 @st.cache_data(ttl=3600)
+def _fetch_price_map() -> dict:
+    """Runtime'da Supabase'den ürün fiyatlarını çek (kod→fiyat)."""
+    try:
+        client = get_supabase_client()
+        if not client:
+            return {}
+        # Distinct ürün kodu + en güncel fiyat (son 50k satır yeterli)
+        resp = client.table('stok_gunluk') \
+            .select('urun_kod, birim_fiyat') \
+            .gt('birim_fiyat', 0) \
+            .order('id', desc=True) \
+            .limit(50000) \
+            .execute()
+        price_map = {}
+        for r in (resp.data or []):
+            kod = str(r.get('urun_kod', '')).strip()
+            fiyat = r.get('birim_fiyat')
+            if kod and fiyat and kod not in price_map:
+                price_map[kod] = float(fiyat)
+        return price_map
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=3600)
 def get_oneri_listesi():
-    """Cached wrapper"""
+    """Cached wrapper — dosyadan liste + runtime fiyat zenginleştirme."""
     liste, _ = _get_oneri_listesi_impl()
-    return liste
+    if not liste:
+        return liste
+    # Zaten fiyat içeren format varsa (pipeline güncel) doğrudan dön
+    # Kontrol: ilk 5 elemanda " - " 2 kez geçiyorsa fiyat var demek
+    sample = liste[:5]
+    has_price = any(s.count(' - ') >= 2 for s in sample)
+    if has_price:
+        return liste
+    # Fiyat yoksa runtime'dan ekle
+    price_map = _fetch_price_map()
+    if not price_map:
+        return liste
+    enriched = []
+    for entry in liste:
+        parts = entry.split(' - ', 1)
+        kod = parts[0].strip() if len(parts) >= 2 else ''
+        fiyat = price_map.get(kod)
+        if fiyat and fiyat > 0:
+            fiyat_str = f"{fiyat:.0f}" if fiyat == int(fiyat) else f"{fiyat:.2f}"
+            enriched.append(f"{entry} - {fiyat_str}")
+        else:
+            enriched.append(entry)
+    return enriched
 
 
 
