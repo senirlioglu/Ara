@@ -3,10 +3,10 @@ name: Build urun master
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '30 7 * * *'   # Her gün 07:30 UTC = 10:30 Türkiye
   push:
     branches:
-      - 'iokvoq-codex/fix-autocomplete-and-search-suggestions'
+      - main
 
 permissions:
   contents: write
