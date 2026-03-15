@@ -1071,8 +1071,6 @@ def _frontend_poster_viewer():
         hs = [{
             "x0": mx["x0"], "y0": mx["y0"], "x1": mx["x1"], "y1": mx["y1"],
             "urun_kodu": mx.get("urun_kodu") or "",
-            "urun_ad": mx.get("urun_aciklamasi") or "",
-            "afis_fiyat": mx.get("afis_fiyat") or "",
         } for mx in m]
         all_comp_pages.append({
             "png_bytes": pp["png_data"],
