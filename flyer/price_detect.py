@@ -113,7 +113,10 @@ def find_prices(
             continue
 
         # Reject: near unit indicators (cm, ml, kg, l, mm, gr)
-        if any(nt in UNIT_INDICATORS for nt in near_texts):
+        # BUT allow if a TL indicator is also nearby (e.g. "1 Kg ... 349 TL")
+        near_unit = any(nt in UNIT_INDICATORS for nt in near_texts)
+        near_tl = any(nt in TL_INDICATORS for nt in near_texts)
+        if near_unit and not near_tl:
             continue
 
         # Reject: part of phone pattern (444 xx xx, 0850)
@@ -121,7 +124,6 @@ def find_prices(
             continue
 
         # Validate: near a TL indicator or near another large price
-        near_tl = any(nt in TL_INDICATORS for nt in near_texts)
         near_large = any(
             abs(_word_center(p)[0] - cx) < 160 and abs(_word_center(p)[1] - cy) < 80
             for p in prices

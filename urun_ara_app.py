@@ -1203,6 +1203,8 @@ def _mapping_tool_tab():
         c1, c2 = st.columns(2)
         with c1:
             mt_week = st.text_input("Hafta ID", value=st.session_state["mt_week_id"], key="mt_inp_week")
+            if mt_week != st.session_state["mt_week_id"]:
+                st.session_state["mt_db_cache"] = {}  # clear cache on week change
             st.session_state["mt_week_id"] = mt_week
             mt_week_name = st.text_input("Hafta Adı (opsiyonel)", key="mt_week_name",
                                          placeholder="Örn: Hafta 12 - Mart")
@@ -1330,7 +1332,7 @@ def _mapping_tool_tab():
         st.session_state["mt_bbox"] = None
 
     # --- Load saved mappings (DB cache + pending) ---
-    page_key = f'{page["flyer_filename"]}_p{page["page_no"]}'
+    page_key = f'{week_id}_{page["flyer_filename"]}_p{page["page_no"]}'
     if page_key not in st.session_state["mt_db_cache"]:
         st.session_state["mt_db_cache"][page_key] = _db_list_mappings(
             week_id, page["flyer_filename"], page["page_no"])
@@ -2015,9 +2017,9 @@ def _mt_flush_to_supabase():
         row = {k: v for k, v in m.items() if k != "mapping_id"}  # strip temp ID
         _db_save(row)
 
-    # 2. Delete pending deletes
+    # 2. Delete pending deletes (with week_id guard)
     for mid in st.session_state["mt_pending_deletes"]:
-        _db_delete(mid)
+        _db_delete(mid, week_id=week_id)
 
     # 3. Apply pending updates
     for mid, fields in st.session_state["mt_pending_updates"].items():
