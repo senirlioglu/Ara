@@ -1097,12 +1097,14 @@ def _frontend_poster_viewer():
             click_ts = result.get("ts", 0)
             if urun_kodu and click_ts != st.session_state.get("_fe_last_click_ts"):
                 st.session_state["_fe_last_click_ts"] = click_ts
-                st.session_state["_pop_arama"] = urun_kodu
                 st.session_state["_fe_scroll_top"] = True
                 # Preserve current page index from client
                 page_idx = result.get("page_index")
                 if page_idx is not None:
                     st.session_state["fe_pv_idx"] = page_idx
+                # Aramayı direkt yap — gereksiz rerun'u kaldırarak badge çift görünme sorununu çöz
+                df = ara_urun(urun_kodu)
+                st.session_state["_fe_search_result"] = {"df": df, "term": urun_kodu}
                 st.rerun()
 
 

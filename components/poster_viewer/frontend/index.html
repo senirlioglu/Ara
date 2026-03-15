@@ -390,6 +390,7 @@ function renderHotspots(hotspots) {
         return function(e) {
           if (isDragging || isSliding) return;
           e.stopPropagation();
+          localNav = true;
           sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now(), page_index: currentIdx});
         };
       })(h));
@@ -412,6 +413,7 @@ function renderHotspots(hotspots) {
         return function(e) {
           if (isDragging || isSliding) return;
           e.stopPropagation();
+          localNav = true;
           showPopup(hotspot, el);
         };
       })(h, div));
