@@ -110,6 +110,19 @@ def list_mappings(
     return res.data or []
 
 
+def list_all_mappings_for_week(week_id: str, db_path=None) -> list[dict]:
+    """Return all mappings for a week in a single query."""
+    sb = _get_client()
+    res = (
+        sb.table("mappings")
+        .select("*")
+        .eq("week_id", week_id)
+        .order("mapping_id")
+        .execute()
+    )
+    return res.data or []
+
+
 def all_mappings_for_page(
     week_id: str, flyer_filename: str, page_no: int, db_path=None,
 ) -> list[dict]:

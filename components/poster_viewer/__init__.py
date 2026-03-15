@@ -91,5 +91,5 @@ def _encode_page(png_bytes: bytes, max_w: int) -> str:
     if display.mode == "RGBA":
         display = display.convert("RGB")
     buf = io.BytesIO()
-    display.save(buf, format="JPEG", quality=82)
+    display.save(buf, format="JPEG", quality=72)
     return base64.b64encode(buf.getvalue()).decode()
