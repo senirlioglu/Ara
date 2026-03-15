@@ -853,10 +853,10 @@ dd.addEventListener('click',function(e){
   var parts=t.split(' - ');
   var kod=parts.length>=2?parts[0].trim():'';
   var ad=parts.length>=2?parts[1].trim():t.trim();
-  // Input'a ürün adını yaz (kullanıcı kodu görmesin)
+  // Set product name in input
   var st=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
   st.call(inp,ad);
-  // Seçilen kodu gizli attribute'ta sakla
+  // Store selected code in hidden attribute
   inp.setAttribute('data-selected-kod', kod);
   inp.dispatchEvent(new Event('input',{bubbles:true}));
   setTimeout(function(){inp.dispatchEvent(new Event('change',{bubbles:true}));inp.blur();},50);
@@ -865,7 +865,7 @@ dd.addEventListener('click',function(e){
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 function norm(s){
-  var map={'İ':'i','I':'i','ı':'i','Ğ':'g','ğ':'g','Ü':'u','ü':'u','Ş':'s','ş':'s','Ö':'o','ö':'o','Ç':'c','ç':'c'};
+  var map={'\\u0130':'i','I':'i','\\u0131':'i','\\u011e':'g','\\u011f':'g','\\u00dc':'u','\\u00fc':'u','\\u015e':'s','\\u015f':'s','\\u00d6':'o','\\u00f6':'o','\\u00c7':'c','\\u00e7':'c'};
   var out='';
   for(var i=0;i<s.length;i++){out+=map[s[i]]||s[i];}
   if(out.normalize){out=out.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
@@ -899,14 +899,13 @@ function show(v){
       if(adWords[i].indexOf(q)===0) return 820;
     }
 
-    // Kısa sorgularda (ke/ac gibi) gürültüyü azalt:
-    // sadece kelime başlangıcı eşleşmelerini göster.
+    // Short queries: only match word-start to reduce noise
     if(!isShort && ad.indexOf(q)!==-1) return 560;
 
     if(kod && kod.indexOf(q)===0) return isShort ? 280 : 320;
     if(!isShort && kod && kod.indexOf(q)!==-1) return 180;
 
-    // Kısa sorguda alakasız ortadan-eşleşmeleri bastır.
+    // Short query: try compact match
     if(isShort){
       var compact=ad.replace(/\s+/g,'');
       if(compact.indexOf(q)===0) return 700;
