@@ -141,10 +141,13 @@ def update_mapping(mapping_id: int, fields: dict, db_path=None):
     sb.table("mappings").update(to_set).eq("mapping_id", mapping_id).execute()
 
 
-def delete_mapping(mapping_id: int, db_path=None):
-    """Delete a single mapping by ID."""
+def delete_mapping(mapping_id: int, db_path=None, week_id: str = None):
+    """Delete a single mapping by ID, optionally guarded by week_id."""
     sb = _get_client()
-    sb.table("mappings").delete().eq("mapping_id", mapping_id).execute()
+    q = sb.table("mappings").delete().eq("mapping_id", mapping_id)
+    if week_id:
+        q = q.eq("week_id", week_id)
+    q.execute()
 
 
 def delete_page_mappings(

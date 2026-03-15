@@ -55,8 +55,11 @@ def poster_viewer(
     cache_key = f"_pv_cache_{key}"
     cached = st.session_state.get(cache_key)
 
-    # Check if pages changed (compare count + first page label)
-    pages_sig = (len(pages), pages[0]["label"] if pages else "")
+    # Build signature from all pages: labels + hotspot counts + image sizes
+    pages_sig = tuple(
+        (pg.get("label", ""), len(pg.get("hotspots", [])), len(pg.get("png_bytes", b"")))
+        for pg in pages
+    )
     if cached and cached.get("sig") == pages_sig:
         comp_pages = cached["data"]
     else:
