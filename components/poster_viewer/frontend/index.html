@@ -97,6 +97,38 @@
     opacity: 1;
   }
 
+  /* Magnifying glass icon — bottom-right of hotspot */
+  .hotspot-search-btn {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(30, 58, 95, 0.85);
+    color: #fff;
+    font-size: 14px;
+    line-height: 26px;
+    text-align: center;
+    cursor: pointer;
+    z-index: 6;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    transition: background 0.2s, transform 0.15s;
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .hotspot-search-btn:hover {
+    background: rgba(30, 58, 95, 1);
+    transform: scale(1.15);
+  }
+  .hotspot-search-btn:active {
+    background: #e53935;
+    transform: scale(0.95);
+  }
+
   /* Product popup */
   #popup {
     display: none;
@@ -335,16 +367,27 @@ function renderHotspots(hotspots) {
     lbl.textContent = h.urun_kodu || "?";
     div.appendChild(lbl);
 
-    div.addEventListener("click", (function(hotspot, el) {
-      return function(e) {
-        e.stopPropagation();
-        if (clickMode === "search") {
+    if (clickMode === "search") {
+      /* In search mode: magnifying glass icon triggers search, hotspot area does NOT reload page */
+      var btn = document.createElement("button");
+      btn.className = "hotspot-search-btn";
+      btn.innerHTML = "&#128269;"; /* 🔍 magnifying glass */
+      btn.addEventListener("click", (function(hotspot) {
+        return function(e) {
+          e.stopPropagation();
           sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now()});
-        } else {
+        };
+      })(h));
+      div.appendChild(btn);
+    } else {
+      /* In popup mode: clicking hotspot area shows popup */
+      div.addEventListener("click", (function(hotspot, el) {
+        return function(e) {
+          e.stopPropagation();
           showPopup(hotspot, el);
-        }
-      };
-    })(h, div));
+        };
+      })(h, div));
+    }
 
     pageWrap.appendChild(div);
   }
