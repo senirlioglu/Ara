@@ -521,11 +521,13 @@ var isDragging = false;
 var dragOffset = 0;
 var dirLocked = false;   /* true once we decide horizontal vs vertical */
 var isHorizontal = false;
+var touchStartTime = 0;
 
 pageWrap.addEventListener("touchstart", function(e) {
   if (isSliding) return;
   touchStartX = e.touches[0].clientX;
   touchStartY = e.touches[0].clientY;
+  touchStartTime = Date.now();
   isDragging = false;
   dragOffset = 0;
   dirLocked = false;
@@ -554,7 +556,7 @@ pageWrap.addEventListener("touchmove", function(e) {
   var dy = e.touches[0].clientY - touchStartY;
 
   /* Lock direction on first significant move */
-  if (!dirLocked && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+  if (!dirLocked && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
     dirLocked = true;
     isHorizontal = Math.abs(dx) > Math.abs(dy);
   }
@@ -578,9 +580,13 @@ pageWrap.addEventListener("touchend", function(e) {
   }
 
   var wrapW = pageWrap.clientWidth;
-  var threshold = wrapW * 0.2;
+  var threshold = wrapW * 0.08;           /* 8% of width — very sensitive */
+  var elapsed = Date.now() - touchStartTime;
+  var velocity = Math.abs(dragOffset) / (elapsed || 1);  /* px/ms */
+  /* Trigger slide if: enough distance OR fast flick (>0.3 px/ms with >15px move) */
+  var shouldSlide = Math.abs(dragOffset) > threshold || (velocity > 0.3 && Math.abs(dragOffset) > 15);
 
-  if (Math.abs(dragOffset) > threshold) {
+  if (shouldSlide) {
     var direction = dragOffset > 0 ? 1 : -1;   /* 1=right(prev), -1=left(next) */
     var targetIdx = currentIdx - direction;
 
