@@ -1098,11 +1098,11 @@ def _frontend_poster_viewer():
                 st.session_state["_fe_last_click_ts"] = click_ts
                 st.session_state["_pop_arama"] = urun_kodu
                 st.session_state["_fe_scroll_top"] = True
+                # Preserve current page index from client
+                page_idx = result.get("page_index")
+                if page_idx is not None:
+                    st.session_state["fe_pv_idx"] = page_idx
                 st.rerun()
-        elif result.get("type") == "page_change":
-            new_idx = result.get("index", 0)
-            if new_idx != cur_idx:
-                st.session_state["fe_pv_idx"] = new_idx
 
 
 # ============================================================================

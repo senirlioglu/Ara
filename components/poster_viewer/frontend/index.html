@@ -77,6 +77,17 @@
     border-width: 3px;
   }
 
+  /* Search mode: invisible hotspot — no border, no background */
+  .hotspot.search-mode {
+    border: none;
+    background: transparent;
+    cursor: default;
+  }
+  .hotspot.search-mode:hover {
+    background: transparent;
+    border: none;
+  }
+
   /* Hotspot label */
   .hotspot-label {
     position: absolute;
@@ -96,21 +107,20 @@
   .hotspot.active .hotspot-label {
     opacity: 1;
   }
+  /* Search mode: hide label completely */
+  .hotspot.search-mode .hotspot-label {
+    display: none;
+  }
 
-  /* Magnifying glass icon — bottom-right of hotspot */
+  /* Magnifying glass icon — bottom-right of hotspot, size set dynamically via JS */
   .hotspot-search-btn {
     position: absolute;
     bottom: 2px;
     right: 2px;
-    width: 26px;
-    height: 26px;
     border-radius: 50%;
     border: none;
-    background: rgba(30, 58, 95, 0.85);
+    background: rgba(30, 58, 95, 0.75);
     color: #fff;
-    font-size: 14px;
-    line-height: 26px;
-    text-align: center;
     cursor: pointer;
     z-index: 6;
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
@@ -119,6 +129,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 0;
   }
   .hotspot-search-btn:hover {
     background: rgba(30, 58, 95, 1);
@@ -342,7 +353,9 @@ function showPage(idx, fromUser) {
 
   if (fromUser) {
     localNav = true;
-    sendValue({type: "page_change", index: idx});
+    /* Don't sendValue here — it triggers a full Streamlit rerun.
+       Page navigation is handled entirely client-side.
+       The current page index is sent along with hotspot clicks instead. */
   }
 }
 
@@ -355,11 +368,13 @@ function renderHotspots(hotspots) {
   for (var i = 0; i < hotspots.length; i++) {
     var h = hotspots[i];
     var div = document.createElement("div");
-    div.className = "hotspot";
+    var hsW = (h.x1 - h.x0) * iw;
+    var hsH = (h.y1 - h.y0) * ih;
+    div.className = clickMode === "search" ? "hotspot search-mode" : "hotspot";
     div.style.left   = (h.x0 * iw) + "px";
     div.style.top    = (h.y0 * ih) + "px";
-    div.style.width  = ((h.x1 - h.x0) * iw) + "px";
-    div.style.height = ((h.y1 - h.y0) * ih) + "px";
+    div.style.width  = hsW + "px";
+    div.style.height = hsH + "px";
     div.dataset.idx = i;
 
     var lbl = document.createElement("span");
@@ -368,14 +383,21 @@ function renderHotspots(hotspots) {
     div.appendChild(lbl);
 
     if (clickMode === "search") {
-      /* In search mode: magnifying glass icon triggers search, hotspot area does NOT reload page */
+      /* Magnifying glass sized proportionally to hotspot area */
+      var shorter = Math.min(hsW, hsH);
+      var btnSize = Math.max(16, Math.min(34, Math.round(shorter * 0.35)));
+      var fontSize = Math.max(10, Math.round(btnSize * 0.55));
+
       var btn = document.createElement("button");
       btn.className = "hotspot-search-btn";
-      btn.innerHTML = "&#128269;"; /* 🔍 magnifying glass */
+      btn.style.width = btnSize + "px";
+      btn.style.height = btnSize + "px";
+      btn.style.fontSize = fontSize + "px";
+      btn.innerHTML = "&#128269;"; /* 🔍 */
       btn.addEventListener("click", (function(hotspot) {
         return function(e) {
           e.stopPropagation();
-          sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now()});
+          sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now(), page_index: currentIdx});
         };
       })(h));
       div.appendChild(btn);
