@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background: transparent; overflow: hidden; }
+  #wrap {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #wrap img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+  #loading {
+    padding: 40px;
+    text-align: center;
+    color: #888;
+    font-family: sans-serif;
+    font-size: 14px;
+  }
+  /* Live selection rectangle (red solid) */
+  #sel {
+    position: absolute;
+    border: 2px solid #ff4444;
+    background: rgba(255, 68, 68, 0.18);
+    pointer-events: none;
+    display: none;
+    z-index: 10;
+  }
+  /* Saved boxes (green) */
+  .saved-box {
+    position: absolute;
+    border: 2px solid #00cc66;
+    background: rgba(0, 204, 102, 0.10);
+    pointer-events: none;
+    z-index: 5;
+  }
+  .saved-label {
+    position: absolute;
+    background: #00cc66;
+    color: #fff;
+    font-size: 11px;
+    padding: 1px 5px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 6;
+  }
+  /* Active box overlay (red dashed — restored from session_state) */
+  #active-overlay {
+    position: absolute;
+    border: 3px dashed #ff4444;
+    background: rgba(255, 68, 68, 0.12);
+    pointer-events: none;
+    display: none;
+    z-index: 8;
+  }
+  #bar {
+    margin-top: 6px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 6px 18px;
+    font-size: 14px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  #btnUse { background: #1e3a5f; color: #fff; }
+  #btnUse:disabled { background: #999; cursor: default; }
+  #btnClear { background: #e0e0e0; color: #333; }
+  #info { font-size: 12px; color: #666; font-family: monospace; }
+</style>
+</head>
+<body>
+<div id="loading">Sayfa resmi yükleniyor...</div>
+<div id="wrap" style="display:none">
+  <img id="img" />
+  <div id="sel"></div>
+  <div id="active-overlay"></div>
+</div>
+<div id="bar" style="display:none">
+  <button id="btnUse" disabled>Seçimi Kullan</button>
+  <button id="btnClear">Temizle</button>
+  <span id="info">Kutu çizmek için sürükleyin</span>
+</div>
+
+<script>
+/* ================================================================
+   Mapping Canvas — Streamlit Custom Component (declare_component)
+   ================================================================
+   New architecture: images loaded from URL (not base64).
+   Protocol: apiVersion 1
+   ================================================================ */
+
+/* ── Streamlit messaging ── */
+function sendValue(data) {
+  window.parent.postMessage({
+    isStreamlitMessage: true,
+    type: "streamlit:setComponentValue",
+    value: data
+  }, "*");
+}
+function setFrameHeight() {
+  window.parent.postMessage({
+    isStreamlitMessage: true,
+    type: "streamlit:setFrameHeight",
+    height: document.body.scrollHeight + 12
+  }, "*");
+}
+
+/* ── DOM refs ── */
+var img       = document.getElementById("img");
+var wrap      = document.getElementById("wrap");
+var sel       = document.getElementById("sel");
+var activeOvl = document.getElementById("active-overlay");
+var btnUse    = document.getElementById("btnUse");
+var btnClear  = document.getElementById("btnClear");
+var info      = document.getElementById("info");
+var loading   = document.getElementById("loading");
+var bar       = document.getElementById("bar");
+
+/* ── Drawing state ── */
+var drawing  = false;
+var startX   = 0, startY = 0;
+var curBox   = null;
+var lastUrl  = "";
+
+/* ── Receive render events from Streamlit ── */
+window.addEventListener("message", function(event) {
+  if (!event.data || event.data.type !== "streamlit:render") return;
+  var args = event.data.args;
+  if (!args) return;
+
+  var newUrl = args.image_url || "";
+
+  /* Image changed → load new image from URL */
+  if (newUrl && newUrl !== lastUrl) {
+    lastUrl = newUrl;
+    loading.style.display = "block";
+    wrap.style.display = "none";
+    bar.style.display = "none";
+
+    img.onload = function() {
+      loading.style.display = "none";
+      wrap.style.display = "inline-block";
+      bar.style.display = "flex";
+      drawOverlays(args.saved_boxes, args.active_bbox);
+      setFrameHeight();
+    };
+    img.onerror = function() {
+      loading.textContent = "Resim yüklenemedi: " + newUrl;
+    };
+    img.src = newUrl;
+  } else if (newUrl === lastUrl && img.complete && img.naturalWidth > 0) {
+    /* Same image, just re-draw overlays */
+    wrap.style.display = "inline-block";
+    bar.style.display = "flex";
+    loading.style.display = "none";
+    drawOverlays(args.saved_boxes, args.active_bbox);
+    setFrameHeight();
+  }
+});
+
+/* ── Overlay drawing ── */
+function drawOverlays(savedBoxes, activeBbox) {
+  var iw = img.clientWidth, ih = img.clientHeight;
+  if (iw === 0 || ih === 0) return;
+
+  /* 1. Clear old saved boxes */
+  wrap.querySelectorAll(".saved-box, .saved-label").forEach(function(el) { el.remove(); });
+
+  /* 2. Draw saved (green) boxes */
+  var boxes = savedBoxes || [];
+  for (var i = 0; i < boxes.length; i++) {
+    var b = boxes[i];
+    var div = document.createElement("div");
+    div.className = "saved-box";
+    div.style.left   = (b.x0 * iw) + "px";
+    div.style.top    = (b.y0 * ih) + "px";
+    div.style.width  = ((b.x1 - b.x0) * iw) + "px";
+    div.style.height = ((b.y1 - b.y0) * ih) + "px";
+    wrap.appendChild(div);
+    if (b.label) {
+      var lbl = document.createElement("div");
+      lbl.className = "saved-label";
+      lbl.style.left = (b.x0 * iw) + "px";
+      lbl.style.top  = Math.max(0, b.y0 * ih - 18) + "px";
+      lbl.textContent = b.label;
+      wrap.appendChild(lbl);
+    }
+  }
+
+  /* 3. Active (red dashed) overlay — restored from Python session_state */
+  if (activeBbox && activeBbox.x0 != null && !curBox) {
+    activeOvl.style.display = "block";
+    activeOvl.style.left   = (activeBbox.x0 * iw) + "px";
+    activeOvl.style.top    = (activeBbox.y0 * ih) + "px";
+    activeOvl.style.width  = ((activeBbox.x1 - activeBbox.x0) * iw) + "px";
+    activeOvl.style.height = ((activeBbox.y1 - activeBbox.y0) * ih) + "px";
+    info.textContent = "Seçili: x0=" + activeBbox.x0.toFixed(3) + " y0=" + activeBbox.y0.toFixed(3)
+                     + " x1=" + activeBbox.x1.toFixed(3) + " y1=" + activeBbox.y1.toFixed(3);
+  } else if (!curBox) {
+    activeOvl.style.display = "none";
+  }
+}
+
+/* ── Mouse drawing ── */
+wrap.addEventListener("mousedown", function(e) {
+  if (e.target !== img && e.target !== wrap && e.target !== activeOvl) return;
+  e.preventDefault();
+  var r = img.getBoundingClientRect();
+  startX = e.clientX - r.left;
+  startY = e.clientY - r.top;
+  drawing = true;
+  activeOvl.style.display = "none";
+  sel.style.display = "block";
+  sel.style.left   = startX + "px";
+  sel.style.top    = startY + "px";
+  sel.style.width  = "0px";
+  sel.style.height = "0px";
+  curBox = null;
+  btnUse.disabled = true;
+});
+
+wrap.addEventListener("mousemove", function(e) {
+  if (!drawing) return;
+  e.preventDefault();
+  var r  = img.getBoundingClientRect();
+  var mx = Math.max(0, Math.min(e.clientX - r.left, img.clientWidth));
+  var my = Math.max(0, Math.min(e.clientY - r.top,  img.clientHeight));
+  sel.style.left   = Math.min(startX, mx) + "px";
+  sel.style.top    = Math.min(startY, my) + "px";
+  sel.style.width  = Math.abs(mx - startX) + "px";
+  sel.style.height = Math.abs(my - startY) + "px";
+});
+
+/* Listen on document so mouseup outside the image still finalizes */
+document.addEventListener("mouseup", function(e) {
+  if (!drawing) return;
+  drawing = false;
+  var r   = img.getBoundingClientRect();
+  var mx  = Math.max(0, Math.min(e.clientX - r.left, img.clientWidth));
+  var my  = Math.max(0, Math.min(e.clientY - r.top,  img.clientHeight));
+  var iw  = img.clientWidth, ih = img.clientHeight;
+
+  var x0 = Math.min(startX, mx) / iw;
+  var y0 = Math.min(startY, my) / ih;
+  var x1 = Math.max(startX, mx) / iw;
+  var y1 = Math.max(startY, my) / ih;
+
+  /* Ignore tiny accidental clicks */
+  if ((x1 - x0) < 0.01 || (y1 - y0) < 0.01) {
+    sel.style.display = "none";
+    return;
+  }
+
+  /* Round to 4 decimal places */
+  curBox = {
+    x0: Math.round(x0 * 10000) / 10000,
+    y0: Math.round(y0 * 10000) / 10000,
+    x1: Math.round(x1 * 10000) / 10000,
+    y1: Math.round(y1 * 10000) / 10000
+  };
+  btnUse.disabled = false;
+  info.textContent = "x0=" + curBox.x0.toFixed(3) + " y0=" + curBox.y0.toFixed(3)
+                   + " → x1=" + curBox.x1.toFixed(3) + " y1=" + curBox.y1.toFixed(3);
+});
+
+/* ── Buttons ── */
+btnUse.addEventListener("click", function() {
+  if (!curBox) return;
+  sendValue(curBox);
+  info.textContent = "Seçim gönderildi ✓  " + JSON.stringify(curBox);
+  btnUse.disabled = true;
+});
+
+btnClear.addEventListener("click", function() {
+  sel.style.display = "none";
+  activeOvl.style.display = "none";
+  curBox = null;
+  btnUse.disabled = true;
+  info.textContent = "Kutu çizmek için sürükleyin";
+  sendValue(null);
+});
+
+/* ── Boot ── */
+window.parent.postMessage({
+  isStreamlitMessage: true,
+  type: "streamlit:componentReady",
+  apiVersion: 1
+}, "*");
+</script>
+</body>
+</html>
