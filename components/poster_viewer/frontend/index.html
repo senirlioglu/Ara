@@ -481,7 +481,8 @@ function slideTo(idx) {
   slideTrack.classList.add("animating");
   slideTrack.style.transform = "translateX(" + (direction * wrapW) + "px)";
 
-  slideTrack.addEventListener("transitionend", function onEnd() {
+  slideTrack.addEventListener("transitionend", function onEnd(ev) {
+    if (ev.target !== slideTrack || ev.propertyName !== "transform") return;
     slideTrack.removeEventListener("transitionend", onEnd);
 
     /* Phase 2: instantly position off-screen on opposite side, load new page */
@@ -495,7 +496,8 @@ function slideTo(idx) {
         slideTrack.classList.add("animating");
         slideTrack.style.transform = "translateX(0)";
 
-        slideTrack.addEventListener("transitionend", function onEnd2() {
+        slideTrack.addEventListener("transitionend", function onEnd2(ev2) {
+          if (ev2.target !== slideTrack || ev2.propertyName !== "transform") return;
           slideTrack.removeEventListener("transitionend", onEnd2);
           slideTrack.classList.remove("animating");
           slideTrack.style.transform = "";
@@ -596,7 +598,8 @@ pageWrap.addEventListener("touchend", function(e) {
       slideTrack.classList.add("animating");
       slideTrack.style.transform = "translateX(" + (direction * wrapW) + "px)";
 
-      slideTrack.addEventListener("transitionend", function onEnd() {
+      slideTrack.addEventListener("transitionend", function onEnd(ev) {
+        if (ev.target !== slideTrack || ev.propertyName !== "transform") return;
         slideTrack.removeEventListener("transitionend", onEnd);
         slideTrack.classList.remove("animating");
         slideTrack.style.transform = "translateX(" + (-direction * wrapW) + "px)";
@@ -606,7 +609,8 @@ pageWrap.addEventListener("touchend", function(e) {
           requestAnimationFrame(function() {
             slideTrack.classList.add("animating");
             slideTrack.style.transform = "translateX(0)";
-            slideTrack.addEventListener("transitionend", function onEnd2() {
+            slideTrack.addEventListener("transitionend", function onEnd2(ev2) {
+              if (ev2.target !== slideTrack || ev2.propertyName !== "transform") return;
               slideTrack.removeEventListener("transitionend", onEnd2);
               slideTrack.classList.remove("animating");
               slideTrack.style.transform = "";
@@ -631,7 +635,8 @@ pageWrap.addEventListener("touchend", function(e) {
 function snapBack() {
   slideTrack.classList.add("animating");
   slideTrack.style.transform = "translateX(0)";
-  slideTrack.addEventListener("transitionend", function onSnap() {
+  slideTrack.addEventListener("transitionend", function onSnap(ev) {
+    if (ev.target !== slideTrack || ev.propertyName !== "transform") return;
     slideTrack.removeEventListener("transitionend", onSnap);
     slideTrack.classList.remove("animating");
     slideTrack.style.transform = "";
