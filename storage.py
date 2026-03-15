@@ -482,15 +482,18 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
     weeks_res = sb.table("poster_weeks").select("*").order("created_at", desc=True).execute()
     weeks = weeks_res.data or []
 
-    # Batch-fetch counts per week_id in single queries to avoid N+1 HTTP calls
-    pg_res = sb.table("poster_pages").select("week_id").execute()
-    mp_res = sb.table("mappings").select("week_id").execute()
-    pr_res = sb.table("week_products").select("week_id").execute()
-
-    from collections import Counter
-    page_counts = Counter(r["week_id"] for r in (pg_res.data or []))
-    mapping_counts = Counter(r["week_id"] for r in (mp_res.data or []))
-    product_counts = Counter(r["week_id"] for r in (pr_res.data or []))
+    # Use lightweight count-only queries per week (HEAD request, no data transfer)
+    page_counts = {}
+    mapping_counts = {}
+    product_counts = {}
+    for w in weeks:
+        wid = w["week_id"]
+        pg = sb.table("poster_pages").select("*", count="exact", head=True).eq("week_id", wid).execute()
+        page_counts[wid] = pg.count or 0
+        mp = sb.table("mappings").select("*", count="exact", head=True).eq("week_id", wid).execute()
+        mapping_counts[wid] = mp.count or 0
+        pr = sb.table("week_products").select("*", count="exact", head=True).eq("week_id", wid).execute()
+        product_counts[wid] = pr.count or 0
 
     result = []
     for w in weeks:
