@@ -342,7 +342,9 @@ function showPage(idx, fromUser) {
 
   if (fromUser) {
     localNav = true;
-    sendValue({type: "page_change", index: idx});
+    /* Don't sendValue here — it triggers a full Streamlit rerun.
+       Page navigation is handled entirely client-side.
+       The current page index is sent along with hotspot clicks instead. */
   }
 }
 
@@ -375,7 +377,7 @@ function renderHotspots(hotspots) {
       btn.addEventListener("click", (function(hotspot) {
         return function(e) {
           e.stopPropagation();
-          sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now()});
+          sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now(), page_index: currentIdx});
         };
       })(h));
       div.appendChild(btn);
