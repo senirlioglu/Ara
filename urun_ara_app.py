@@ -976,18 +976,27 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
         elif arama_text:
             st.info("En az 2 karakter girin.")
 
-    # Kaydedilmiş arama sonuçlarını göster
-    if "_fe_search_result" in st.session_state:
-        sr = st.session_state["_fe_search_result"]
-        rc1, rc2 = st.columns([6, 1])
-        with rc2:
-            if st.button("Temizle", key="fe_clear_results", use_container_width=True):
-                st.session_state.pop("_fe_search_result", None)
-                st.rerun()
-        goster_sonuclar(sr["df"], sr["term"])
+    # Sonuçlar için poster üstünde placeholder
+    result_slot = st.empty()
 
     # ---- Poster Slider (ön yüz) ----
-    _frontend_poster_viewer()
+    click_result = _frontend_poster_viewer()
+
+    # Hotspot tıklandı → aramayı yap, sonucu kaydet
+    if click_result:
+        df = ara_urun(click_result)
+        st.session_state["_fe_search_result"] = {"df": df, "term": click_result}
+
+    # Kaydedilmiş arama sonuçlarını göster (poster üstünde placeholder'a)
+    if "_fe_search_result" in st.session_state:
+        sr = st.session_state["_fe_search_result"]
+        with result_slot.container():
+            rc1, rc2 = st.columns([6, 1])
+            with rc2:
+                if st.button("Temizle", key="fe_clear_results", use_container_width=True):
+                    st.session_state.pop("_fe_search_result", None)
+                    st.rerun()
+            goster_sonuclar(sr["df"], sr["term"])
 
 
 # ============================================================================
@@ -1090,7 +1099,7 @@ def _frontend_poster_viewer():
         key="fe_poster_viewer",
     )
 
-    # Hotspot tıklandı → arama tetikle + scroll to top
+    # Hotspot tıklandı → ürün kodunu döndür (rerun yok, çağıran fonksiyon işleyecek)
     if result and isinstance(result, dict):
         if result.get("type") == "hotspot_click":
             urun_kodu = (result.get("urun_kodu") or "").strip()
@@ -1098,14 +1107,11 @@ def _frontend_poster_viewer():
             if urun_kodu and click_ts != st.session_state.get("_fe_last_click_ts"):
                 st.session_state["_fe_last_click_ts"] = click_ts
                 st.session_state["_fe_scroll_top"] = True
-                # Preserve current page index from client
                 page_idx = result.get("page_index")
                 if page_idx is not None:
                     st.session_state["fe_pv_idx"] = page_idx
-                # Aramayı direkt yap — gereksiz rerun'u kaldırarak badge çift görünme sorununu çöz
-                df = ara_urun(urun_kodu)
-                st.session_state["_fe_search_result"] = {"df": df, "term": urun_kodu}
-                st.rerun()
+                return urun_kodu
+    return None
 
 
 # ============================================================================
