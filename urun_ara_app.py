@@ -25,6 +25,12 @@ import threading
 import subprocess
 from pathlib import Path
 
+# Kontrol karakterlerini temizle (null byte, vb. — Streamlit InvalidCharacterError'ı önler)
+_CTRL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+def _safe_str(val) -> str:
+    """Convert value to string and strip control characters that break Streamlit HTML rendering."""
+    s = str(val) if val is not None else ""
+    return _CTRL_RE.sub('', s)
 
 # --- Günlük Pipeline (günde 1 kez, lazy tetikleme) ---
 def _pipeline_gunluk_guncelle():
@@ -682,8 +688,8 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
         st.success(f"**{len(urunler)}** farklı ürün bulundu")
 
     for _, urun in gosterilecek_urunler.iterrows():
-        urun_kod = urun['urun_kod']
-        urun_ad = urun['urun_ad'] if urun['urun_ad'] else urun_kod
+        urun_kod = _safe_str(urun['urun_kod'])
+        urun_ad = _safe_str(urun['urun_ad']) if urun['urun_ad'] else urun_kod
         stoklu_magaza = int(urun['stoklu_magaza'])
 
         urun_df = df[df['urun_kod'] == urun_kod].copy()
@@ -728,13 +734,13 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     except:
                         seviye, renk = "Normal", "#3498db"
 
-                    magaza_ad = html.escape(str(row['magaza_ad'] or row['magaza_kod']))
+                    magaza_ad = html.escape(_safe_str(row['magaza_ad'] or row['magaza_kod']))
 
                     # Güvenli Veri Çekme
-                    sm = html.escape(str(row.get('sm_kod') or "-"))
-                    bs = html.escape(str(row.get('bs_kod') or "-"))
-                    magaza_kod = html.escape(str(row.get('magaza_kod') or "-"))
-                    seviye_escaped = html.escape(str(seviye))
+                    sm = html.escape(_safe_str(row.get('sm_kod') or "-"))
+                    bs = html.escape(_safe_str(row.get('bs_kod') or "-"))
+                    magaza_kod = html.escape(_safe_str(row.get('magaza_kod') or "-"))
+                    seviye_escaped = html.escape(_safe_str(seviye))
 
                     # Harita Linki
                     lat = row.get('latitude')
@@ -1068,7 +1074,7 @@ def _frontend_poster_viewer():
     week_display_name = (week_meta.get("week_name") if week_meta else None) or selected_week
 
     # Sarı badge başlık
-    st.markdown(f'<div class="poster-badge">{week_display_name}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="poster-badge">{html.escape(_safe_str(week_display_name))}</div>', unsafe_allow_html=True)
 
     pg = poster_pages[cur_idx]
 
