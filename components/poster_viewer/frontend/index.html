@@ -388,6 +388,7 @@ function renderHotspots(hotspots) {
       div.style.cursor = "pointer";
       div.addEventListener("click", (function(hotspot) {
         return function(e) {
+          if (isDragging || isSliding) return;
           e.stopPropagation();
           sendValue({type: "hotspot_click", urun_kodu: hotspot.urun_kodu || "", ts: Date.now(), page_index: currentIdx});
         };
@@ -409,6 +410,7 @@ function renderHotspots(hotspots) {
       /* In popup mode: clicking hotspot area shows popup */
       div.addEventListener("click", (function(hotspot, el) {
         return function(e) {
+          if (isDragging || isSliding) return;
           e.stopPropagation();
           showPopup(hotspot, el);
         };
@@ -535,7 +537,7 @@ pageWrap.addEventListener("touchstart", function(e) {
   dirLocked = false;
   isHorizontal = false;
 
-  /* Check if touch started on a hotspot */
+  /* Check if touch started on a hotspot (used to suppress tap, not swipe) */
   var el = e.target;
   touchOnHotspot = false;
   while (el && el !== document.body) {
@@ -552,7 +554,7 @@ pageWrap.addEventListener("touchstart", function(e) {
 }, {passive: true});
 
 pageWrap.addEventListener("touchmove", function(e) {
-  if (isSliding || touchOnHotspot || pages.length <= 1) return;
+  if (isSliding || pages.length <= 1) return;
 
   var dx = e.touches[0].clientX - touchStartX;
   var dy = e.touches[0].clientY - touchStartY;
@@ -576,7 +578,7 @@ pageWrap.addEventListener("touchmove", function(e) {
 }, {passive: true});
 
 pageWrap.addEventListener("touchend", function(e) {
-  if (isSliding || touchOnHotspot || !isDragging) {
+  if (isSliding || !isDragging) {
     slideTrack.style.transform = "";
     return;
   }
@@ -628,7 +630,9 @@ pageWrap.addEventListener("touchend", function(e) {
     snapBack();
   }
 
-  isDragging = false;
+  /* Delay clearing isDragging so the subsequent click event (fired after touchend)
+     still sees it and skips the hotspot action */
+  setTimeout(function() { isDragging = false; }, 0);
   dragOffset = 0;
 });
 
