@@ -482,20 +482,24 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
     weeks_res = sb.table("poster_weeks").select("*").order("created_at", desc=True).execute()
     weeks = weeks_res.data or []
 
+    # Batch-fetch counts per week_id in single queries to avoid N+1 HTTP calls
+    pg_res = sb.table("poster_pages").select("week_id").execute()
+    mp_res = sb.table("mappings").select("week_id").execute()
+    pr_res = sb.table("week_products").select("week_id").execute()
+
+    from collections import Counter
+    page_counts = Counter(r["week_id"] for r in (pg_res.data or []))
+    mapping_counts = Counter(r["week_id"] for r in (mp_res.data or []))
+    product_counts = Counter(r["week_id"] for r in (pr_res.data or []))
+
     result = []
     for w in weeks:
         wid = w["week_id"]
-        # Count pages
-        pg_res = sb.table("poster_pages").select("id", count="exact").eq("week_id", wid).execute()
-        # Count mappings
-        mp_res = sb.table("mappings").select("mapping_id", count="exact").eq("week_id", wid).execute()
-        # Count products
-        pr_res = sb.table("week_products").select("id", count="exact").eq("week_id", wid).execute()
         result.append({
             **w,
-            "page_count": pg_res.count or 0,
-            "mapping_count": mp_res.count or 0,
-            "product_count": pr_res.count or 0,
+            "page_count": page_counts.get(wid, 0),
+            "mapping_count": mapping_counts.get(wid, 0),
+            "product_count": product_counts.get(wid, 0),
         })
     return result
 
