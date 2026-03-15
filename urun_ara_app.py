@@ -160,7 +160,7 @@ st.markdown("""
         font-size: 1rem;
         padding: 0.4rem 1.2rem;
         border-radius: 8px;
-        margin: 0.3rem 0 0.2rem 0;
+        margin: 0.3rem 0 0.6rem 0;
         box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35);
         letter-spacing: 0.3px;
     }
@@ -1003,7 +1003,7 @@ def _frontend_poster_viewer():
     - Hotspot tıklayınca mevcut _pop_arama mekanizması tetiklenir (kod değişmez)
     """
     from components.poster_viewer import poster_viewer
-    from storage import init_db, list_all_weeks, list_mappings_for_week, get_poster_pages, get_week
+    from storage import init_db, list_all_weeks, list_mappings_for_week, list_all_mappings_for_week, get_poster_pages, get_week
 
     # DB hazır mı
     if "fe_db_ready" not in st.session_state:
@@ -1064,9 +1064,12 @@ def _frontend_poster_viewer():
     pg = poster_pages[cur_idx]
 
     # Tüm sayfaları component'a gönder — navigasyon tamamen component içinde
+    # Tek sorguda tüm mapping'leri al (7 ayrı HTTP yerine 1)
+    all_mappings = list_all_mappings_for_week(selected_week)
     all_comp_pages = []
     for i, pp in enumerate(poster_pages):
-        m = list_mappings_for_week(selected_week, pp["flyer_filename"], pp["page_no"])
+        fn, pno = pp["flyer_filename"], pp["page_no"]
+        m = [mx for mx in all_mappings if mx.get("flyer_filename") == fn and mx.get("page_no") == pno]
         hs = [{
             "x0": mx["x0"], "y0": mx["y0"], "x1": mx["x1"], "y1": mx["y1"],
             "urun_kodu": mx.get("urun_kodu") or "",
@@ -1082,6 +1085,7 @@ def _frontend_poster_viewer():
         pages=all_comp_pages,
         current_index=cur_idx,
         click_mode="search",
+        max_display_width=600,
         height=900,
         key="fe_poster_viewer",
     )
