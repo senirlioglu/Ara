@@ -956,7 +956,7 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
     populer = get_populer_terimler()
 
     if populer:
-        st.markdown('<div style="font-size:0.85rem; font-weight:600; color:#555; padding:8px 0 4px 2px;">Popüler Aramalar</div>', unsafe_allow_html=True)
+        st.markdown('<div style="font-size:0.85rem; font-weight:600; color:#555; padding:8px 0 2px 2px; margin-bottom:6px;">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
         cols_pop = st.columns(len(populer))
         for i, p in enumerate(populer):
             cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_and_run, args=(p,))
