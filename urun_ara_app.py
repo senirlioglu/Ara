@@ -32,6 +32,30 @@ def _safe_str(val) -> str:
     s = str(val) if val is not None else ""
     return _CTRL_RE.sub('', s)
 
+def _safe_html(val) -> str:
+    """HTML-escape AND encode non-Latin1 chars as numeric entities.
+
+    Streamlit's st.markdown(unsafe_allow_html=True) uses btoa() internally
+    which only supports Latin1 (U+0000-U+00FF). Turkish İ/ı/Ğ/ğ/Ş/ş are
+    outside this range and cause InvalidCharacterError.
+    """
+    s = html.escape(_safe_str(val))
+    # Encode any character outside Latin1 as HTML numeric entity
+    return s.encode('ascii', 'xmlcharrefreplace').decode('ascii')
+
+def _latin1_safe(html_str: str) -> str:
+    """Encode non-Latin1 characters in an HTML string as numeric entities.
+
+    Unlike _safe_html, this does NOT html-escape — use for strings that
+    already contain valid HTML markup (tags, styles, etc.)."""
+    out = []
+    for ch in html_str:
+        if ord(ch) > 255:
+            out.append(f'&#{ord(ch)};')
+        else:
+            out.append(ch)
+    return ''.join(out)
+
 # --- Günlük Pipeline (günde 1 kez, lazy tetikleme) ---
 def _pipeline_gunluk_guncelle():
     """oneri_listesi.json bugün güncellenmemişse pipeline'ı arka planda çalıştırır."""
@@ -91,7 +115,7 @@ st.markdown("""
     .stApp { background: #f5f7fa; }
     header[data-testid="stHeader"] { background: transparent; }
 
-    /* Bloklar arası boşluğu sıkılaştır */
+    /* Block spacing */
     .block-container { padding-top: 0 !important; }
     [data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
     hr { margin: 0.4rem 0 !important; }
@@ -114,7 +138,7 @@ st.markdown("""
     .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
     .stButton > button:hover { box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
 
-    /* Pill satırları */
+    /* Pill rows */
     [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) {
         overflow-x: auto !important;
         flex-wrap: nowrap !important;
@@ -157,7 +181,7 @@ st.markdown("""
         margin: 0.2rem 0 0.1rem 0.2rem;
     }
 
-    /* Sarı badge (afiş başlığı) */
+    /* Poster badge */
     .poster-badge {
         display: inline-block;
         background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%);
@@ -723,7 +747,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                      color:white; padding:6px 16px; border-radius:20px; font-weight:700;
                      font-size:1.05rem; margin-left:8px;">📊 Toplam Bölge Stok: {toplam_stok}</div>"""
             if badges_html:
-                st.markdown(f'<div style="margin-bottom:12px;">{badges_html}</div>', unsafe_allow_html=True)
+                st.markdown(_latin1_safe(f'<div style="margin-bottom:12px;">{badges_html}</div>'), unsafe_allow_html=True)
             if urun_df_stoklu.empty:
                 st.error("Bu ürün hiçbir mağazada stokta yok!")
             else:
@@ -734,13 +758,13 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                     except:
                         seviye, renk = "Normal", "#3498db"
 
-                    magaza_ad = html.escape(_safe_str(row['magaza_ad'] or row['magaza_kod']))
+                    magaza_ad = _safe_html(row['magaza_ad'] or row['magaza_kod'])
 
                     # Güvenli Veri Çekme
-                    sm = html.escape(_safe_str(row.get('sm_kod') or "-"))
-                    bs = html.escape(_safe_str(row.get('bs_kod') or "-"))
-                    magaza_kod = html.escape(_safe_str(row.get('magaza_kod') or "-"))
-                    seviye_escaped = html.escape(_safe_str(seviye))
+                    sm = _safe_html(row.get('sm_kod') or "-")
+                    bs = _safe_html(row.get('bs_kod') or "-")
+                    magaza_kod = _safe_html(row.get('magaza_kod') or "-")
+                    seviye_escaped = _safe_html(seviye)
 
                     # Harita Linki
                     lat = row.get('latitude')
@@ -790,7 +814,7 @@ def goster_sonuclar(df: pd.DataFrame, arama_text: str):
                         </div>
                     </div>
                     """)
-                st.markdown("".join(html_cards), unsafe_allow_html=True)
+                st.markdown(_latin1_safe("".join(html_cards)), unsafe_allow_html=True)
 
 
 # ============================================================================
@@ -962,7 +986,7 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
     populer = get_populer_terimler()
 
     if populer:
-        st.markdown('<div style="font-size:0.85rem; font-weight:600; color:#555; padding:8px 0 2px 2px; margin-bottom:6px;">🔥 Popüler Aramalar</div>', unsafe_allow_html=True)
+        st.markdown(_latin1_safe('<div style="font-size:0.85rem; font-weight:600; color:#555; padding:8px 0 2px 2px; margin-bottom:6px;">🔥 Popüler Aramalar</div>'), unsafe_allow_html=True)
         cols_pop = st.columns(len(populer))
         for i, p in enumerate(populer):
             cols_pop[i].button(p, use_container_width=True, key=f"pop_{p}_{i}", on_click=set_search_and_run, args=(p,))
@@ -1074,7 +1098,7 @@ def _frontend_poster_viewer():
     week_display_name = (week_meta.get("week_name") if week_meta else None) or selected_week
 
     # Sarı badge başlık
-    st.markdown(f'<div class="poster-badge">{html.escape(_safe_str(week_display_name))}</div>', unsafe_allow_html=True)
+    st.markdown(_latin1_safe(f'<div class="poster-badge">{_safe_html(week_display_name)}</div>'), unsafe_allow_html=True)
 
     pg = poster_pages[cur_idx]
 
