@@ -393,7 +393,7 @@ function renderHotspots(hotspots) {
       btn.style.width = btnSize + "px";
       btn.style.height = btnSize + "px";
       btn.style.fontSize = fontSize + "px";
-      btn.innerHTML = "&#128269;"; /* 🔍 */
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:65%;height:65%"><circle cx="10" cy="10" r="6"/><line x1="14.5" y1="14.5" x2="20" y2="20"/></svg>';
       btn.addEventListener("click", (function(hotspot) {
         return function(e) {
           e.stopPropagation();
