@@ -43,6 +43,16 @@
     max-width: calc(100% - 80px);
     flex: 1;
     overflow: hidden;
+    border-radius: 6px;
+  }
+  #slide-track {
+    position: relative;
+    width: 100%;
+    will-change: transform;
+    touch-action: pan-y;
+  }
+  #slide-track.animating {
+    transition: transform 0.3s ease;
   }
   #page-wrap img {
     display: block;
@@ -50,10 +60,8 @@
     height: auto;
     border-radius: 6px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.10);
-    transition: opacity 0.25s ease;
-  }
-  #page-wrap img.fading {
-    opacity: 0;
+    user-select: none;
+    -webkit-user-drag: none;
   }
 
   /* Hotspot overlay */
@@ -198,7 +206,9 @@
 <div id="slider">
   <button class="arrow" id="btnPrev">&#8249;</button>
   <div id="page-wrap">
-    <img id="img" />
+    <div id="slide-track">
+      <img id="img" />
+    </div>
   </div>
   <button class="arrow" id="btnNext">&#8250;</button>
 </div>
@@ -235,9 +245,10 @@ function setFrameHeight() {
   }, "*");
 }
 
-var img       = document.getElementById("img");
-var pageWrap  = document.getElementById("page-wrap");
-var counter   = document.getElementById("page-counter");
+var img        = document.getElementById("img");
+var pageWrap   = document.getElementById("page-wrap");
+var slideTrack = document.getElementById("slide-track");
+var counter    = document.getElementById("page-counter");
 var dotsWrap  = document.getElementById("dots");
 var btnPrev   = document.getElementById("btnPrev");
 var btnNext   = document.getElementById("btnNext");
@@ -308,23 +319,16 @@ function showPage(idx, fromUser) {
   currentIdx = idx;
   var pg = pages[idx];
 
-  /* Update image with fade transition */
+  /* Update image */
   var src = "data:image/jpeg;base64," + pg.image_b64;
   if (img.src !== src) {
-    if (fromUser) img.classList.add("fading");
     img.onload = function() {
-      img.classList.remove("fading");
       renderHotspots(pg.hotspots || []);
       setFrameHeight();
       setTimeout(setFrameHeight, 200);
       setTimeout(setFrameHeight, 500);
     };
-    /* Small delay for fade-out before changing src */
-    if (fromUser) {
-      setTimeout(function() { img.src = src; }, 80);
-    } else {
-      img.src = src;
-    }
+    img.src = src;
   } else {
     renderHotspots(pg.hotspots || []);
   }
@@ -353,14 +357,11 @@ function showPage(idx, fromUser) {
 
   if (fromUser) {
     localNav = true;
-    /* Don't sendValue here — it triggers a full Streamlit rerun.
-       Page navigation is handled entirely client-side.
-       The current page index is sent along with hotspot clicks instead. */
   }
 }
 
 function renderHotspots(hotspots) {
-  pageWrap.querySelectorAll(".hotspot").forEach(function(el) { el.remove(); });
+  slideTrack.querySelectorAll(".hotspot").forEach(function(el) { el.remove(); });
 
   var iw = img.clientWidth, ih = img.clientHeight;
   if (iw === 0 || ih === 0) return;
@@ -414,7 +415,7 @@ function renderHotspots(hotspots) {
       })(h, div));
     }
 
-    pageWrap.appendChild(div);
+    slideTrack.appendChild(div);
   }
 }
 
@@ -456,29 +457,80 @@ document.addEventListener("click", function(e) {
 });
 popupClose.addEventListener("click", closePopup);
 
-/* Navigation */
-btnPrev.addEventListener("click", function() { goTo(currentIdx - 1); });
-btnNext.addEventListener("click", function() { goTo(currentIdx + 1); });
+/* ── Navigation with slide animation ── */
+var isSliding = false;
+
+btnPrev.addEventListener("click", function() { slideTo(currentIdx - 1); });
+btnNext.addEventListener("click", function() { slideTo(currentIdx + 1); });
 
 function goTo(idx) {
   if (idx >= 0 && idx < pages.length) showPage(idx, true);
 }
 
+/* Animated slide to a page (used by arrows, keyboard, swipe release) */
+function slideTo(idx) {
+  if (isSliding) return;
+  if (idx < 0 || idx >= pages.length) return;
+  if (idx === currentIdx) return;
+
+  var direction = idx > currentIdx ? -1 : 1;  /* -1 = slide left, 1 = slide right */
+  var wrapW = pageWrap.clientWidth;
+  isSliding = true;
+
+  /* Phase 1: slide current content out */
+  slideTrack.classList.add("animating");
+  slideTrack.style.transform = "translateX(" + (direction * wrapW) + "px)";
+
+  slideTrack.addEventListener("transitionend", function onEnd() {
+    slideTrack.removeEventListener("transitionend", onEnd);
+
+    /* Phase 2: instantly position off-screen on opposite side, load new page */
+    slideTrack.classList.remove("animating");
+    slideTrack.style.transform = "translateX(" + (-direction * wrapW) + "px)";
+    showPage(idx, true);
+
+    /* Phase 3: slide new content in */
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        slideTrack.classList.add("animating");
+        slideTrack.style.transform = "translateX(0)";
+
+        slideTrack.addEventListener("transitionend", function onEnd2() {
+          slideTrack.removeEventListener("transitionend", onEnd2);
+          slideTrack.classList.remove("animating");
+          slideTrack.style.transform = "";
+          isSliding = false;
+        });
+      });
+    });
+  });
+}
+
 /* Keyboard */
 document.addEventListener("keydown", function(e) {
-  if (e.key === "ArrowLeft") goTo(currentIdx - 1);
-  else if (e.key === "ArrowRight") goTo(currentIdx + 1);
+  if (e.key === "ArrowLeft") slideTo(currentIdx - 1);
+  else if (e.key === "ArrowRight") slideTo(currentIdx + 1);
   else if (e.key === "Escape") closePopup();
 });
 
-/* Touch swipe — ignore swipes that start on a hotspot */
+/* ── Touch swipe with drag follow ── */
 var touchStartX = 0;
 var touchStartY = 0;
 var touchOnHotspot = false;
+var isDragging = false;
+var dragOffset = 0;
+var dirLocked = false;   /* true once we decide horizontal vs vertical */
+var isHorizontal = false;
 
-document.addEventListener("touchstart", function(e) {
+pageWrap.addEventListener("touchstart", function(e) {
+  if (isSliding) return;
   touchStartX = e.touches[0].clientX;
   touchStartY = e.touches[0].clientY;
+  isDragging = false;
+  dragOffset = 0;
+  dirLocked = false;
+  isHorizontal = false;
+
   /* Check if touch started on a hotspot */
   var el = e.target;
   touchOnHotspot = false;
@@ -489,20 +541,96 @@ document.addEventListener("touchstart", function(e) {
     }
     el = el.parentElement;
   }
+
+  /* Remove transition during drag */
+  slideTrack.classList.remove("animating");
+  slideTrack.style.transform = "";
 }, {passive: true});
 
-document.addEventListener("touchend", function(e) {
-  /* If touch was on a hotspot, let click handler deal with it */
-  if (touchOnHotspot) return;
+pageWrap.addEventListener("touchmove", function(e) {
+  if (isSliding || touchOnHotspot || pages.length <= 1) return;
 
-  var dx = e.changedTouches[0].clientX - touchStartX;
-  var dy = e.changedTouches[0].clientY - touchStartY;
-  /* Only swipe if horizontal movement is dominant and > 50px */
-  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-    if (dx > 0) goTo(currentIdx - 1);
-    else goTo(currentIdx + 1);
+  var dx = e.touches[0].clientX - touchStartX;
+  var dy = e.touches[0].clientY - touchStartY;
+
+  /* Lock direction on first significant move */
+  if (!dirLocked && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+    dirLocked = true;
+    isHorizontal = Math.abs(dx) > Math.abs(dy);
   }
+  if (!isHorizontal) return;
+
+  isDragging = true;
+  dragOffset = dx;
+
+  /* Resistance at edges */
+  if ((currentIdx === 0 && dx > 0) || (currentIdx === pages.length - 1 && dx < 0)) {
+    dragOffset = dx * 0.25;
+  }
+
+  slideTrack.style.transform = "translateX(" + dragOffset + "px)";
+}, {passive: true});
+
+pageWrap.addEventListener("touchend", function(e) {
+  if (isSliding || touchOnHotspot || !isDragging) {
+    slideTrack.style.transform = "";
+    return;
+  }
+
+  var wrapW = pageWrap.clientWidth;
+  var threshold = wrapW * 0.2;
+
+  if (Math.abs(dragOffset) > threshold) {
+    var direction = dragOffset > 0 ? 1 : -1;   /* 1=right(prev), -1=left(next) */
+    var targetIdx = currentIdx - direction;
+
+    if (targetIdx >= 0 && targetIdx < pages.length) {
+      /* Complete the slide */
+      isSliding = true;
+      slideTrack.classList.add("animating");
+      slideTrack.style.transform = "translateX(" + (direction * wrapW) + "px)";
+
+      slideTrack.addEventListener("transitionend", function onEnd() {
+        slideTrack.removeEventListener("transitionend", onEnd);
+        slideTrack.classList.remove("animating");
+        slideTrack.style.transform = "translateX(" + (-direction * wrapW) + "px)";
+        showPage(targetIdx, true);
+
+        requestAnimationFrame(function() {
+          requestAnimationFrame(function() {
+            slideTrack.classList.add("animating");
+            slideTrack.style.transform = "translateX(0)";
+            slideTrack.addEventListener("transitionend", function onEnd2() {
+              slideTrack.removeEventListener("transitionend", onEnd2);
+              slideTrack.classList.remove("animating");
+              slideTrack.style.transform = "";
+              isSliding = false;
+            });
+          });
+        });
+      });
+    } else {
+      /* Snap back — at edge */
+      snapBack();
+    }
+  } else {
+    /* Snap back — not enough drag */
+    snapBack();
+  }
+
+  isDragging = false;
+  dragOffset = 0;
 });
+
+function snapBack() {
+  slideTrack.classList.add("animating");
+  slideTrack.style.transform = "translateX(0)";
+  slideTrack.addEventListener("transitionend", function onSnap() {
+    slideTrack.removeEventListener("transitionend", onSnap);
+    slideTrack.classList.remove("animating");
+    slideTrack.style.transform = "";
+  });
+}
 
 /* Boot */
 window.parent.postMessage({
