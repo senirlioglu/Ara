@@ -1037,12 +1037,19 @@ def _frontend_poster_viewer():
     """Ön yüzde poster sayfalarını slider ile gösteren bölüm.
 
     Performans:
-    - Poster resimleri DB'den okunur (session bağımsız, her kullanıcı görür)
-    - Sadece aktif sayfanın image'ı component'a gönderilir
+    - Poster metadata'sı DB'den okunur (session bağımsız, her kullanıcı görür)
+    - İlk yükte sadece aktif sayfa ve yakın komşuları indirilir
     - Hotspot tıklayınca mevcut _pop_arama mekanizması tetiklenir (kod değişmez)
     """
     from components.poster_viewer import poster_viewer
-    from storage import init_db, list_all_weeks, list_mappings_for_week, list_all_mappings_for_week, get_poster_pages, get_week
+    from storage import (
+        get_poster_page_image,
+        get_poster_pages,
+        get_week,
+        init_db,
+        list_all_mappings_for_week,
+        list_all_weeks,
+    )
 
     # DB hazır mı
     if "fe_db_ready" not in st.session_state:
@@ -1054,9 +1061,12 @@ def _frontend_poster_viewer():
         return  # Henüz poster yok, sessizce geç
 
     # Sadece yayında olan haftaları göster (meta yoksa göster — geriye uyum)
+    week_meta_cache = st.session_state.setdefault("_fe_week_meta_cache", {})
     visible_weeks = []
     for w in weeks:
-        meta = get_week(w)
+        if w not in week_meta_cache:
+            week_meta_cache[w] = get_week(w)
+        meta = week_meta_cache[w]
         if meta is None or meta.get("status") == "published":
             visible_weeks.append(w)
     weeks = visible_weeks
@@ -1073,10 +1083,10 @@ def _frontend_poster_viewer():
             key="fe_week_select",
         )
 
-    # Poster sayfalarını DB'den yükle (cache)
-    cache_key = f"_fe_dbpages_{selected_week}"
+    # Poster sayfa metadata'sını yükle; görselleri sadece ihtiyaç olan sayfalar için indir.
+    cache_key = f"_fe_dbpages_meta_{selected_week}"
     if cache_key not in st.session_state:
-        st.session_state[cache_key] = get_poster_pages(selected_week)
+        st.session_state[cache_key] = get_poster_pages(selected_week, include_images=False)
 
     poster_pages = st.session_state[cache_key]
     if not poster_pages:
@@ -1094,36 +1104,59 @@ def _frontend_poster_viewer():
         st.session_state["fe_pv_idx"] = 0
 
     # Hafta adını al (metadata'dan)
-    week_meta = get_week(selected_week)
+    week_meta = week_meta_cache.get(selected_week)
+    if selected_week not in week_meta_cache:
+        week_meta = get_week(selected_week)
+        week_meta_cache[selected_week] = week_meta
     week_display_name = (week_meta.get("week_name") if week_meta else None) or selected_week
 
     # Sarı badge başlık
     st.markdown(_latin1_safe(f'<div class="poster-badge">{_safe_html(week_display_name)}</div>'), unsafe_allow_html=True)
 
-    pg = poster_pages[cur_idx]
+    # Tek sorguda tüm mapping'leri al ve sayfa bazında grupla.
+    mappings_cache_key = f"_fe_week_mappings_{selected_week}"
+    if mappings_cache_key not in st.session_state:
+        grouped = {}
+        for mx in list_all_mappings_for_week(selected_week):
+            grouped.setdefault((mx.get("flyer_filename"), mx.get("page_no")), []).append({
+                "x0": mx["x0"], "y0": mx["y0"], "x1": mx["x1"], "y1": mx["y1"],
+                "urun_kodu": mx.get("urun_kodu") or "",
+            })
+        st.session_state[mappings_cache_key] = grouped
+    grouped_mappings = st.session_state[mappings_cache_key]
 
-    # Tüm sayfaları component'a gönder — navigasyon tamamen component içinde
-    # Tek sorguda tüm mapping'leri al (7 ayrı HTTP yerine 1)
-    all_mappings = list_all_mappings_for_week(selected_week)
+    # Sadece aktif sayfayı ve komşularını indir; kullanıcı gezindikçe cache büyür.
+    image_cache_key = f"_fe_page_images_{selected_week}"
+    image_cache = st.session_state.setdefault(image_cache_key, {})
+    needed_indices = {cur_idx}
+    if cur_idx > 0:
+        needed_indices.add(cur_idx - 1)
+    if cur_idx + 1 < total_pages:
+        needed_indices.add(cur_idx + 1)
+    for idx in sorted(needed_indices):
+        page = poster_pages[idx]
+        image_path = page.get("image_path")
+        if image_path and image_path not in image_cache:
+            image_cache[image_path] = get_poster_page_image(image_path)
+
     all_comp_pages = []
     for i, pp in enumerate(poster_pages):
         fn, pno = pp["flyer_filename"], pp["page_no"]
-        m = [mx for mx in all_mappings if mx.get("flyer_filename") == fn and mx.get("page_no") == pno]
-        hs = [{
-            "x0": mx["x0"], "y0": mx["y0"], "x1": mx["x1"], "y1": mx["y1"],
-            "urun_kodu": mx.get("urun_kodu") or "",
-        } for mx in m]
-        all_comp_pages.append({
-            "png_bytes": pp["png_data"],
+        page_data = {
             "label": pp["title"] or f'Sayfa {i + 1}',
-            "hotspots": hs,
-        })
+            "hotspots": grouped_mappings.get((fn, pno), []),
+        }
+        image_path = pp.get("image_path")
+        if image_path in image_cache and image_cache[image_path]:
+            page_data["png_bytes"] = image_cache[image_path]
+        all_comp_pages.append(page_data)
 
-    # Component: search mode — navigasyon component içinde, hotspot tıklayınca urun_kodu döner
+    # Component: arayüz anında açılır; eksik sayfalar gezinme ile kademeli yüklenir.
     result = poster_viewer(
         pages=all_comp_pages,
         current_index=cur_idx,
         click_mode="search",
+        report_page_changes=True,
         max_display_width=600,
         height=900,
         key="fe_poster_viewer",
@@ -1131,6 +1164,14 @@ def _frontend_poster_viewer():
 
     # Hotspot tıklandı → ürün kodunu döndür (rerun yok, çağıran fonksiyon işleyecek)
     if result and isinstance(result, dict):
+        if result.get("type") == "page_change":
+            page_idx = result.get("index")
+            page_change_ts = result.get("ts", 0)
+            if page_change_ts != st.session_state.get("_fe_last_page_change_ts"):
+                st.session_state["_fe_last_page_change_ts"] = page_change_ts
+                if isinstance(page_idx, int) and 0 <= page_idx < total_pages:
+                    st.session_state["fe_pv_idx"] = page_idx
+                st.rerun()
         if result.get("type") == "hotspot_click":
             urun_kodu = (result.get("urun_kodu") or "").strip()
             click_ts = result.get("ts", 0)
