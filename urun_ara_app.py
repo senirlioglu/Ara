@@ -919,9 +919,35 @@ function show(v){
 
   function score(it){
     var ad=it.nAd, kod=it.nKod;
+    var full=kod?(kod+' '+ad):ad;
     if(!ad && !kod) return -1;
     if(ad===q) return 1000;
     if(ad.indexOf(q)===0) return 920;
+
+    // Multi-word query: check if ALL query words exist in product name or code
+    var qWords=q.split(' ');
+    if(qWords.length>1){
+      var allFound=true;
+      var wordStartCount=0;
+      for(var w=0;w<qWords.length;w++){
+        if(!qWords[w]) continue;
+        var found=false;
+        var fWords=full.split(' ');
+        for(var f=0;f<fWords.length;f++){
+          if(fWords[f].indexOf(qWords[w])===0){found=true;wordStartCount++;break;}
+        }
+        if(!found){
+          if(full.indexOf(qWords[w])!==-1){found=true;}
+        }
+        if(!found){allFound=false;break;}
+      }
+      if(allFound){
+        // All words match at word boundaries
+        if(wordStartCount===qWords.length) return 850;
+        return 600;
+      }
+      return -1;
+    }
 
     var isShort=q.length<=2;
     var adWords=ad.split(' ');
