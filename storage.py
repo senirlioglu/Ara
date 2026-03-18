@@ -276,20 +276,10 @@ def save_poster_pages_bulk(pages: list[dict], db_path=None):
         ).execute()
 
 
-def get_poster_page_image(image_path: str, db_path=None) -> bytes:
-    """Download a single poster page image from Storage."""
-    try:
-        return _download_image(image_path)
-    except Exception as e:
-        log.error("Image download failed for %s: %s", image_path, e)
-        return b""
-
-
-def get_poster_pages(week_id: str, db_path=None, *, include_images: bool = True) -> list[dict]:
+def get_poster_pages(week_id: str, db_path=None) -> list[dict]:
     """Return all poster pages for a week, ordered by sort_order then page_no.
 
-    When ``include_images`` is False, only page metadata is returned so callers
-    can decide which images to fetch lazily.
+    Downloads images from Storage and adds 'png_data' key for backward compat.
     """
     sb = _get_client()
     res = (
@@ -303,18 +293,20 @@ def get_poster_pages(week_id: str, db_path=None, *, include_images: bool = True)
     )
     pages = []
     for r in (res.data or []):
-        page = {
+        try:
+            img_bytes = _download_image(r["image_path"])
+        except Exception as e:
+            log.error("Image download failed for %s: %s", r["image_path"], e)
+            img_bytes = b""
+        pages.append({
             "id": r["id"],
             "week_id": r["week_id"],
             "flyer_filename": r["flyer_filename"],
             "page_no": r["page_no"],
-            "image_path": r["image_path"],
+            "png_data": img_bytes,
             "title": r.get("title", ""),
             "sort_order": r.get("sort_order", 0),
-        }
-        if include_images:
-            page["png_data"] = get_poster_page_image(r["image_path"])
-        pages.append(page)
+        })
     return pages
 
 

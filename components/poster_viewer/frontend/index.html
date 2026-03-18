@@ -63,21 +63,6 @@
     user-select: none;
     -webkit-user-drag: none;
   }
-  #loading-state {
-    position: absolute;
-    inset: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    background: rgba(255, 255, 255, 0.88);
-    color: #1e3a5f;
-    font-size: 14px;
-    font-weight: 600;
-    text-align: center;
-    z-index: 9;
-  }
-  #loading-state.visible { display: flex; }
 
   /* Hotspot overlay */
   .hotspot {
@@ -224,7 +209,6 @@
     <div id="slide-track">
       <img id="img" />
     </div>
-    <div id="loading-state">Sayfa yükleniyor...</div>
   </div>
   <button class="arrow" id="btnNext">&#8250;</button>
 </div>
@@ -264,7 +248,6 @@ function setFrameHeight() {
 var img        = document.getElementById("img");
 var pageWrap   = document.getElementById("page-wrap");
 var slideTrack = document.getElementById("slide-track");
-var loadingState = document.getElementById("loading-state");
 var counter    = document.getElementById("page-counter");
 var dotsWrap  = document.getElementById("dots");
 var btnPrev   = document.getElementById("btnPrev");
@@ -279,7 +262,6 @@ var pages      = [];
 var currentIdx = 0;
 var activeHotspot = null;
 var clickMode  = "popup";
-var reportPageChanges = false;
 var localNav   = false;   /* true when user navigated locally (skip Streamlit reset) */
 
 /* ── Receive data from Streamlit ── */
@@ -290,25 +272,15 @@ window.addEventListener("message", function(event) {
 
   var newPages = args.pages || [];
   var newClickMode = args.click_mode || "popup";
-  reportPageChanges = !!args.report_page_changes;
   var serverIdx = args.current_index || 0;
 
   /* If user navigated locally, don't let Streamlit reset page index */
-  if (localNav && newPages.length === pages.length && serverIdx === currentIdx) {
-    var prevPage = pages[currentIdx] || {};
+  if (localNav && newPages.length === pages.length) {
     pages = newPages;
     clickMode = newClickMode;
+    /* Only re-render hotspots for current page (image unchanged) */
     var pg = pages[currentIdx];
-    if (!pg) return;
-    if ((prevPage.image_b64 || "") !== (pg.image_b64 || "")) {
-      showPage(currentIdx, false);
-    } else if (pg.image_b64) {
-      hideLoading();
-      renderHotspots(pg.hotspots || []);
-    } else {
-      showLoading();
-      renderHotspots([]);
-    }
+    if (pg) renderHotspots(pg.hotspots || []);
     return;
   }
 
@@ -320,7 +292,6 @@ window.addEventListener("message", function(event) {
   if (pages.length === 0) {
     counter.textContent = "";
     img.src = "";
-    hideLoading();
     return;
   }
 
@@ -348,6 +319,20 @@ function showPage(idx, fromUser) {
   currentIdx = idx;
   var pg = pages[idx];
 
+  /* Update image */
+  var src = "data:image/jpeg;base64," + pg.image_b64;
+  if (img.src !== src) {
+    img.onload = function() {
+      renderHotspots(pg.hotspots || []);
+      setFrameHeight();
+      setTimeout(setFrameHeight, 200);
+      setTimeout(setFrameHeight, 500);
+    };
+    img.src = src;
+  } else {
+    renderHotspots(pg.hotspots || []);
+  }
+
   /* Update nav */
   if (pages.length > 1) {
     counter.textContent = (idx + 1) + " / " + pages.length;
@@ -367,56 +352,12 @@ function showPage(idx, fromUser) {
     d.classList.toggle("active", i === idx);
   });
 
-  if (!pg.image_b64) {
-    img.removeAttribute("src");
-    renderHotspots([]);
-    showLoading();
-    closePopup();
-    setFrameHeight();
-    if (fromUser) {
-      localNav = true;
-      requestPage(idx);
-    }
-    return;
-  }
-
-  hideLoading();
-
-  /* Update image */
-  var src = "data:image/jpeg;base64," + pg.image_b64;
-  if (img.src !== src) {
-    img.onload = function() {
-      renderHotspots(pg.hotspots || []);
-      setFrameHeight();
-      setTimeout(setFrameHeight, 200);
-      setTimeout(setFrameHeight, 500);
-    };
-    img.src = src;
-  } else {
-    renderHotspots(pg.hotspots || []);
-    setFrameHeight();
-  }
-
   /* Close popup */
   closePopup();
 
   if (fromUser) {
     localNav = true;
-    requestPage(idx);
   }
-}
-
-function showLoading() {
-  loadingState.classList.add("visible");
-}
-
-function hideLoading() {
-  loadingState.classList.remove("visible");
-}
-
-function requestPage(idx) {
-  if (!reportPageChanges) return;
-  sendValue({type: "page_change", index: idx, ts: Date.now()});
 }
 
 function renderHotspots(hotspots) {
