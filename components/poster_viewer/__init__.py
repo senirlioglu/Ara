@@ -24,7 +24,6 @@ def poster_viewer(
     *,
     current_index: int = 0,
     click_mode: str = "popup",
-    report_page_changes: bool = False,
     max_display_width: int = 800,
     height: int = 1200,
     key: str = "poster_viewer",
@@ -34,15 +33,11 @@ def poster_viewer(
     Parameters
     ----------
     pages : list[dict]
-        Each entry: {"label": str, "hotspots": [...]} and optionally
-        ``"png_bytes"`` when the page image is already available.
+        Each entry: {"png_bytes": bytes, "label": str, "hotspots": [...]}
     current_index : int
         Which page to show initially.
     click_mode : str
         "popup" = admin preview popup, "search" = send urun_kodu to trigger search.
-    report_page_changes : bool
-        When True, page navigation emits ``page_change`` events so Streamlit can
-        lazily load nearby pages.
     max_display_width : int
         Max pixel width for the displayed image.
     height : int
@@ -58,43 +53,30 @@ def poster_viewer(
     """
     # Build lightweight page data (b64 images + hotspots)
     cache_key = f"_pv_cache_{key}"
-    cached = st.session_state.get(cache_key, {})
-    comp_pages = []
-    next_cache = {}
+    cached = st.session_state.get(cache_key)
 
-    for idx, pg in enumerate(pages):
-        png_bytes = pg.get("png_bytes") or b""
-        page_sig = (
-            pg.get("label", ""),
-            len(pg.get("hotspots", [])),
-            len(png_bytes),
-        )
-        cached_page = cached.get(idx)
-
-        if png_bytes and cached_page and cached_page.get("sig") == page_sig:
-            image_b64 = cached_page["image_b64"]
-        elif png_bytes:
-            image_b64 = _encode_page(png_bytes, max_display_width)
-        else:
-            image_b64 = ""
-
-        comp_pages.append({
-            "image_b64": image_b64,
-            "label": pg.get("label", ""),
-            "hotspots": pg.get("hotspots", []),
-        })
-        next_cache[idx] = {
-            "sig": page_sig,
-            "image_b64": image_b64,
-        }
-
-    st.session_state[cache_key] = next_cache
+    # Build signature from all pages: labels + hotspot counts + image sizes
+    pages_sig = tuple(
+        (pg.get("label", ""), len(pg.get("hotspots", [])), len(pg.get("png_bytes", b"")))
+        for pg in pages
+    )
+    if cached and cached.get("sig") == pages_sig:
+        comp_pages = cached["data"]
+    else:
+        comp_pages = []
+        for pg in pages:
+            b64 = _encode_page(pg["png_bytes"], max_display_width)
+            comp_pages.append({
+                "image_b64": b64,
+                "label": pg.get("label", ""),
+                "hotspots": pg.get("hotspots", []),
+            })
+        st.session_state[cache_key] = {"sig": pages_sig, "data": comp_pages}
 
     return _component_func(
         pages=comp_pages,
         current_index=current_index,
         click_mode=click_mode,
-        report_page_changes=report_page_changes,
         key=key,
         default=None,
         height=height,
