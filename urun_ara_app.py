@@ -144,8 +144,8 @@ st.markdown("""
     .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
     .stButton > button:hover { box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
 
-    /* Pill rows */
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) {
+    /* Popüler arama pill rows */
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) [data-testid="stHorizontalBlock"] {
         overflow-x: auto !important;
         flex-wrap: nowrap !important;
         -webkit-overflow-scrolling: touch;
@@ -154,13 +154,13 @@ st.markdown("""
         gap: 4px !important;
         padding-bottom: 2px;
     }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3))::-webkit-scrollbar { display: none; }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) > [data-testid="stColumn"] {
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) [data-testid="stHorizontalBlock"]::-webkit-scrollbar { display: none; }
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
         flex: 0 0 auto !important;
         width: auto !important;
         min-width: fit-content !important;
     }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) .stButton > button {
         background: #f0f1f6 !important;
         color: #555 !important;
         border: 1px solid #e0e2ea !important;
@@ -172,7 +172,7 @@ st.markdown("""
         min-height: unset !important;
         line-height: 1.3 !important;
     }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button:hover {
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) .stButton > button:hover {
         background: #e4e5f0 !important;
         border-color: #667eea !important;
         color: #667eea !important;
@@ -261,7 +261,7 @@ st.markdown("""
         .block-container { padding: 0.3rem !important; }
         .main-header { padding: 0.7rem 0.5rem 0.6rem; margin-bottom: 0.3rem; }
         .main-header h1 { font-size: 1.2rem !important; }
-        [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+        [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) .stButton > button {
             padding: 0.3rem 0.65rem !important;
             font-size: 0.78rem !important;
         }
@@ -1048,6 +1048,7 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
     populer = get_populer_terimler()
 
     if populer:
+        st.markdown('<div class="popular-pill-anchor"></div>', unsafe_allow_html=True)
         st.markdown(_latin1_safe('<div style="font-size:0.85rem; font-weight:600; color:#555; padding:8px 0 2px 2px; margin-bottom:6px;">🔥 Popüler Aramalar</div>'), unsafe_allow_html=True)
         cols_pop = st.columns(len(populer))
         for i, p in enumerate(populer):
