@@ -302,11 +302,12 @@ var localNav   = false;   /* true when user navigated locally (skip Streamlit re
 
 /* ── Pinch-to-zoom state ── */
 var zoomScale = 1;
-var zoomX = 0;       /* translate X */
+var zoomX = 0;       /* translate X (CSS: translate(zoomX, zoomY) scale(zoomScale)) */
 var zoomY = 0;       /* translate Y */
 var pinching = false;
 var pinchStartDist = 0;
 var pinchStartScale = 1;
+var pinchStartZoomX = 0, pinchStartZoomY = 0;
 var pinchMidX = 0, pinchMidY = 0;
 var panStartX = 0, panStartY = 0;
 var panStartZoomX = 0, panStartZoomY = 0;
@@ -335,16 +336,29 @@ function resetZoom(animate) {
   applyZoom(animate);
 }
 
+/**
+ * Zoom to newScale keeping focal point (fx, fy) in page-wrap coords fixed.
+ * With transform-origin:0 0, point (px,py) maps to (tx + px*s, ty + py*s).
+ * To keep (fx,fy) fixed: tx_new = fx - (fx - tx_old) * (s_new / s_old)
+ */
+function zoomTo(newScale, fx, fy) {
+  var oldScale = zoomScale;
+  var ratio = newScale / oldScale;
+  zoomX = fx - (fx - zoomX) * ratio;
+  zoomY = fy - (fy - zoomY) * ratio;
+  zoomScale = newScale;
+  clampPan();
+}
+
 function clampPan() {
   if (zoomScale <= 1) { zoomX = 0; zoomY = 0; return; }
   var wrapW = pageWrap.clientWidth;
   var wrapH = img.clientHeight || pageWrap.clientHeight;
-  var scaledW = wrapW * zoomScale;
-  var scaledH = wrapH * zoomScale;
-  var maxX = (scaledW - wrapW) / 2;
-  var maxY = (scaledH - wrapH) / 2;
-  zoomX = Math.max(-maxX, Math.min(maxX, zoomX));
-  zoomY = Math.max(-maxY, Math.min(maxY, zoomY));
+  /* Max offset: allow panning the full scaled content within the viewport */
+  var maxX = wrapW * (zoomScale - 1);
+  var maxY = wrapH * (zoomScale - 1);
+  zoomX = Math.max(-maxX, Math.min(0, zoomX));
+  zoomY = Math.max(-maxY, Math.min(0, zoomY));
 }
 
 zoomResetBtn.addEventListener("click", function(e) {
@@ -376,14 +390,7 @@ pageWrap.addEventListener("touchend", function(e) {
       var rect = pageWrap.getBoundingClientRect();
       var tapX = touch.clientX - rect.left;
       var tapY = touch.clientY - rect.top;
-      var newScale = 2.5;
-      /* Center the tap point */
-      var wrapW = pageWrap.clientWidth;
-      var wrapH = img.clientHeight || pageWrap.clientHeight;
-      zoomX = (wrapW / 2 - tapX) * (newScale - 1);
-      zoomY = (wrapH / 2 - tapY) * (newScale - 1);
-      zoomScale = newScale;
-      clampPan();
+      zoomTo(2.5, tapX, tapY);
       applyZoom(true);
     }
     lastTapTime = 0; /* prevent triple-tap */
@@ -683,6 +690,8 @@ pageWrap.addEventListener("touchstart", function(e) {
     isDragging = false;
     pinchStartDist = getTouchDist(e);
     pinchStartScale = zoomScale;
+    pinchStartZoomX = zoomX;
+    pinchStartZoomY = zoomY;
     var mid = getTouchMid(e);
     pinchMidX = mid.x;
     pinchMidY = mid.y;
@@ -728,22 +737,19 @@ pageWrap.addEventListener("touchstart", function(e) {
 }, {passive: false});
 
 pageWrap.addEventListener("touchmove", function(e) {
-  /* Pinch zoom */
+  /* Pinch zoom — zoom centered on midpoint between fingers */
   if (pinching && e.touches.length === 2) {
     e.preventDefault();
     var dist = getTouchDist(e);
     var newScale = Math.max(1, Math.min(5, pinchStartScale * (dist / pinchStartDist)));
-    var mid = getTouchMid(e);
     var rect = pageWrap.getBoundingClientRect();
     var focusX = pinchMidX - rect.left;
     var focusY = pinchMidY - rect.top;
 
-    /* Adjust pan so zoom centers on pinch midpoint */
-    var ds = newScale - zoomScale;
-    var wrapW = pageWrap.clientWidth;
-    var wrapH = img.clientHeight || pageWrap.clientHeight;
-    zoomX -= (focusX - wrapW / 2) * ds / zoomScale;
-    zoomY -= (focusY - wrapH / 2) * ds / zoomScale;
+    /* Recompute from pinch start state to avoid drift */
+    var ratio = newScale / pinchStartScale;
+    zoomX = focusX - (focusX - pinchStartZoomX) * ratio;
+    zoomY = focusY - (focusY - pinchStartZoomY) * ratio;
     zoomScale = newScale;
     clampPan();
     applyZoom(false);

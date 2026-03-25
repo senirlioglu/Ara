@@ -195,40 +195,56 @@ st.markdown("""
         letter-spacing: 0.3px;
     }
 
-    /* Week tab bar */
-    .week-tabs {
-        display: flex;
-        gap: 8px;
-        overflow-x: auto;
+    /* Week tab anchor (hidden marker inside the tab container) */
+    .week-tab-anchor { display: none; }
+
+    /* Week tab row: horizontal scroll, no wrap */
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
-        -ms-overflow-style: none;
-        padding: 0.3rem 0 0.6rem 0;
-        margin: 0;
+        gap: 8px !important;
+        padding: 0.2rem 0;
     }
-    .week-tabs::-webkit-scrollbar { display: none; }
-    .week-tab {
-        display: inline-block;
-        flex-shrink: 0;
-        background: #e8e9ee;
-        color: #666;
-        font-weight: 600;
-        font-size: 0.9rem;
-        padding: 0.4rem 1.1rem;
-        border-radius: 8px;
-        cursor: pointer;
-        white-space: nowrap;
-        transition: all 0.2s;
-        letter-spacing: 0.3px;
-        border: 2px solid transparent;
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"]::-webkit-scrollbar { display: none; }
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: fit-content !important;
     }
-    .week-tab:hover { background: #ddd; color: #444; }
-    .week-tab.active {
-        background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%);
-        color: #333;
-        font-weight: 700;
-        box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35);
-        border-color: transparent;
+
+    /* Week tab buttons — target the container that has .week-tab-anchor inside it */
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
+        background: #e8e9ee !important;
+        color: #555 !important;
+        font-weight: 600 !important;
+        font-size: 0.92rem !important;
+        padding: 0.45rem 1.1rem !important;
+        border-radius: 8px !important;
+        border: 2px solid transparent !important;
+        white-space: nowrap !important;
+        letter-spacing: 0.3px !important;
+        box-shadow: none !important;
+        min-height: unset !important;
+        line-height: 1.3 !important;
+        transition: all 0.2s !important;
+    }
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:hover {
+        background: #ddd !important;
+        color: #333 !important;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+    /* Active week button (disabled=true) — gold badge style */
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:disabled {
+        background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%) !important;
+        color: #333 !important;
+        font-weight: 700 !important;
+        box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35) !important;
+        border-color: transparent !important;
+        opacity: 1 !important;
+        cursor: default !important;
     }
 
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 0.5rem; }
@@ -244,7 +260,10 @@ st.markdown("""
             font-size: 0.78rem !important;
         }
         .poster-badge { font-size: 0.9rem; padding: 0.3rem 1rem; }
-        .week-tab { font-size: 0.82rem; padding: 0.35rem 0.9rem; }
+        [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
+            font-size: 0.82rem !important;
+            padding: 0.35rem 0.9rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1115,21 +1134,21 @@ def _frontend_poster_viewer():
 
     # Hafta badge tab bar — yatay kaydırılabilir
     if len(weeks) > 1:
-        tab_cols = st.columns(len(weeks))
-        for i, w in enumerate(weeks):
-            with tab_cols[i]:
-                is_active = (w == selected_week)
-                if is_active:
-                    st.markdown(
-                        _latin1_safe(f'<div class="week-tab active" style="text-align:center;pointer-events:none;">{_safe_html(week_names[w])}</div>'),
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    if st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True):
-                        st.session_state["fe_week_select"] = w
-                        st.session_state["fe_pv_idx"] = 0
-                        st.session_state.pop("_pv_cache_fe_poster_viewer", None)
-                        st.rerun()
+        wtab_container = st.container()
+        with wtab_container:
+            st.markdown('<div class="week-tab-anchor"></div>', unsafe_allow_html=True)
+            tab_cols = st.columns(len(weeks))
+            for i, w in enumerate(weeks):
+                with tab_cols[i]:
+                    is_active = (w == selected_week)
+                    if is_active:
+                        st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True, disabled=True)
+                    else:
+                        if st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True):
+                            st.session_state["fe_week_select"] = w
+                            st.session_state["fe_pv_idx"] = 0
+                            st.session_state.pop("_pv_cache_fe_poster_viewer", None)
+                            st.rerun()
     else:
         # Tek hafta — sadece badge göster
         st.markdown(_latin1_safe(f'<div class="poster-badge">{_safe_html(week_names[weeks[0]])}</div>'), unsafe_allow_html=True)
@@ -1868,9 +1887,9 @@ def _poster_viewer_tab():
     for pg in poster_pages:
         pid = pg["id"]
         with st.container(border=True):
-            tc1, tc2, tc3, tc4, tc5 = st.columns([3, 2, 1, 1, 1])
+            tc1, tc2, tc3, tc4 = st.columns([3, 2, 1, 0.7])
             with tc1:
-                cur_title = st.text_input(
+                st.text_input(
                     "Başlık", value=pg["title"] or "",
                     key=f"pv_t_{pid}", label_visibility="collapsed",
                     placeholder=f'{pg["flyer_filename"]} s{pg["page_no"]}',
@@ -1878,16 +1897,12 @@ def _poster_viewer_tab():
             with tc2:
                 st.caption(f'{pg["flyer_filename"]} — s{pg["page_no"]}')
             with tc3:
-                cur_sort = st.number_input(
+                st.number_input(
                     "Sıra", value=pg["sort_order"], step=1,
                     key=f"pv_s_{pid}", label_visibility="collapsed",
                 )
             with tc4:
-                if st.button("Kaydet", key=f"pv_save_{pid}", use_container_width=True):
-                    update_poster_page(pid, {"title": cur_title.strip(), "sort_order": int(cur_sort)})
-                    st.rerun()
-            with tc5:
-                if st.button("Sil", key=f"pv_del_{pid}", type="primary", use_container_width=True):
+                if st.button("Sil", key=f"pv_del_{pid}", use_container_width=True):
                     st.session_state[f"_confirm_del_page_{pid}"] = True
                     st.rerun()
 
@@ -1904,6 +1919,23 @@ def _poster_viewer_tab():
                 if st.button("İptal", key=f"pv_cdel_n_{pid}", use_container_width=True):
                     st.session_state.pop(f"_confirm_del_page_{pid}", None)
                     st.rerun()
+
+    # Toplu kaydet butonu (başlık + sıra)
+    if st.button("Tümünü Kaydet", key="pv_save_all", type="primary", use_container_width=True):
+        changed = 0
+        for pg in poster_pages:
+            pid = pg["id"]
+            new_title = st.session_state.get(f"pv_t_{pid}", pg["title"] or "").strip()
+            new_sort = int(st.session_state.get(f"pv_s_{pid}", pg["sort_order"]))
+            if new_title != (pg["title"] or "") or new_sort != pg["sort_order"]:
+                update_poster_page(pid, {"title": new_title, "sort_order": new_sort})
+                changed += 1
+        if changed:
+            _clear_week_session_state()
+            st.success(f"{changed} sayfa güncellendi!")
+        else:
+            st.info("Değişiklik yok.")
+        st.rerun()
 
     # --- Önizleme ---
     st.markdown("---")
@@ -2193,28 +2225,23 @@ def _admin_tab_weeks():
     init_db()
 
     st.subheader("Hafta Listesi")
-    st.caption("Sıra 1 = ön yüzde varsayılan hafta. Küçük numara önce gösterilir.")
+    st.caption("Sıra numarası küçük olan hafta ön yüzde ilk gösterilir. Sıra 0 ise en yeni hafta varsayılan olur.")
 
     weeks = list_weeks_with_meta()
     status_labels = {"draft": "Taslak", "published": "Yayında", "archived": "Arşiv"}
     status_colors = {"draft": "#f0ad4e", "published": "#5cb85c", "archived": "#999"}
 
     if weeks:
-        # Track sort order changes for batch save
-        sort_changed = False
-
         for w in weeks:
             wid = w["week_id"]
             with st.container(border=True):
                 wc0, wc1, wc2, wc3, wc4, wc5, wc6 = st.columns([0.8, 2.5, 1.2, 1.2, 1.5, 1.5, 0.8])
                 with wc0:
                     cur_sort = w.get("sort_order", 0) or 0
-                    new_sort = st.number_input(
+                    st.number_input(
                         "Sıra", value=cur_sort, min_value=0, max_value=999,
                         key=f"wl_sort_{wid}", label_visibility="collapsed",
                     )
-                    if new_sort != cur_sort:
-                        sort_changed = True
                 with wc1:
                     name = w.get("week_name") or wid
                     st.markdown(f"**{name}**")
@@ -2265,16 +2292,20 @@ def _admin_tab_weeks():
                         st.session_state.pop(f"_confirm_del_wl_{wid}", None)
                         st.rerun()
 
-        # Sıralama kaydet butonu
-        if sort_changed:
-            if st.button("Sıralamayı Kaydet", key="wl_save_sort", type="primary", use_container_width=True):
-                for w in weeks:
-                    wid = w["week_id"]
-                    new_val = st.session_state.get(f"wl_sort_{wid}", w.get("sort_order", 0))
-                    if new_val != (w.get("sort_order", 0) or 0):
-                        update_week_sort_order(wid, new_val)
-                st.success("Sıralama kaydedildi!")
-                st.rerun()
+        # Toplu sıralama kaydet butonu
+        if st.button("Sıralamayı Kaydet", key="wl_save_sort", type="primary", use_container_width=True):
+            changed = 0
+            for w in weeks:
+                wid = w["week_id"]
+                new_val = int(st.session_state.get(f"wl_sort_{wid}", w.get("sort_order", 0) or 0))
+                if new_val != (w.get("sort_order", 0) or 0):
+                    update_week_sort_order(wid, new_val)
+                    changed += 1
+            if changed:
+                st.success(f"{changed} hafta sıralaması güncellendi!")
+            else:
+                st.info("Değişiklik yok.")
+            st.rerun()
     else:
         st.info("Henüz hafta oluşturulmamış. 'Eşleştir' sekmesinden başlayın.")
 
