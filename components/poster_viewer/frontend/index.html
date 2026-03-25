@@ -411,8 +411,14 @@ window.addEventListener("message", function(event) {
   var newClickMode = args.click_mode || "popup";
   var serverIdx = args.current_index || 0;
 
-  /* If user navigated locally, don't let Streamlit reset page index */
-  if (localNav && newPages.length === pages.length) {
+  /* If user navigated locally, don't let Streamlit reset page index —
+     BUT only if pages are actually the same dataset (same first image).
+     If images changed (week switch), do a full rebuild. */
+  var sameData = newPages.length === pages.length
+    && newPages.length > 0 && pages.length > 0
+    && newPages[0].image_b64 === pages[0].image_b64;
+
+  if (localNav && sameData) {
     pages = newPages;
     clickMode = newClickMode;
     /* Only re-render hotspots for current page (image unchanged) */
