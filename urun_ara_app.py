@@ -2187,22 +2187,34 @@ def _admin_tab_weeks():
     """Hafta listesi — oluştur, düzenle, durum yönetimi."""
     from storage import (
         init_db, list_weeks_with_meta, list_all_weeks, get_week,
-        save_week, update_week_status, delete_week,
+        save_week, update_week_status, update_week_sort_order, delete_week,
         get_poster_pages, get_mapped_product_codes, get_week_products,
     )
     init_db()
 
     st.subheader("Hafta Listesi")
+    st.caption("Sıra 1 = ön yüzde varsayılan hafta. Küçük numara önce gösterilir.")
 
     weeks = list_weeks_with_meta()
     status_labels = {"draft": "Taslak", "published": "Yayında", "archived": "Arşiv"}
     status_colors = {"draft": "#f0ad4e", "published": "#5cb85c", "archived": "#999"}
 
     if weeks:
+        # Track sort order changes for batch save
+        sort_changed = False
+
         for w in weeks:
             wid = w["week_id"]
             with st.container(border=True):
-                wc1, wc2, wc3, wc4, wc5, wc6 = st.columns([3, 1.5, 1.5, 1.5, 1.5, 1])
+                wc0, wc1, wc2, wc3, wc4, wc5, wc6 = st.columns([0.8, 2.5, 1.2, 1.2, 1.5, 1.5, 0.8])
+                with wc0:
+                    cur_sort = w.get("sort_order", 0) or 0
+                    new_sort = st.number_input(
+                        "Sıra", value=cur_sort, min_value=0, max_value=999,
+                        key=f"wl_sort_{wid}", label_visibility="collapsed",
+                    )
+                    if new_sort != cur_sort:
+                        sort_changed = True
                 with wc1:
                     name = w.get("week_name") or wid
                     st.markdown(f"**{name}**")
@@ -2252,6 +2264,17 @@ def _admin_tab_weeks():
                     if st.button("İptal", key=f"wl_cdel_n_{wid}", use_container_width=True):
                         st.session_state.pop(f"_confirm_del_wl_{wid}", None)
                         st.rerun()
+
+        # Sıralama kaydet butonu
+        if sort_changed:
+            if st.button("Sıralamayı Kaydet", key="wl_save_sort", type="primary", use_container_width=True):
+                for w in weeks:
+                    wid = w["week_id"]
+                    new_val = st.session_state.get(f"wl_sort_{wid}", w.get("sort_order", 0))
+                    if new_val != (w.get("sort_order", 0) or 0):
+                        update_week_sort_order(wid, new_val)
+                st.success("Sıralama kaydedildi!")
+                st.rerun()
     else:
         st.info("Henüz hafta oluşturulmamış. 'Eşleştir' sekmesinden başlayın.")
 
