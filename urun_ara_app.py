@@ -195,40 +195,56 @@ st.markdown("""
         letter-spacing: 0.3px;
     }
 
-    /* Week tab bar */
-    .week-tabs {
-        display: flex;
-        gap: 8px;
-        overflow-x: auto;
+    /* Week tab anchor (hidden marker inside the tab container) */
+    .week-tab-anchor { display: none; }
+
+    /* Week tab row: horizontal scroll, no wrap */
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
-        -ms-overflow-style: none;
-        padding: 0.3rem 0 0.6rem 0;
-        margin: 0;
+        gap: 8px !important;
+        padding: 0.2rem 0;
     }
-    .week-tabs::-webkit-scrollbar { display: none; }
-    .week-tab {
-        display: inline-block;
-        flex-shrink: 0;
-        background: #e8e9ee;
-        color: #666;
-        font-weight: 600;
-        font-size: 0.9rem;
-        padding: 0.4rem 1.1rem;
-        border-radius: 8px;
-        cursor: pointer;
-        white-space: nowrap;
-        transition: all 0.2s;
-        letter-spacing: 0.3px;
-        border: 2px solid transparent;
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"]::-webkit-scrollbar { display: none; }
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: fit-content !important;
     }
-    .week-tab:hover { background: #ddd; color: #444; }
-    .week-tab.active {
-        background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%);
-        color: #333;
-        font-weight: 700;
-        box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35);
-        border-color: transparent;
+
+    /* Week tab buttons — target the container that has .week-tab-anchor inside it */
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
+        background: #e8e9ee !important;
+        color: #555 !important;
+        font-weight: 600 !important;
+        font-size: 0.92rem !important;
+        padding: 0.45rem 1.1rem !important;
+        border-radius: 8px !important;
+        border: 2px solid transparent !important;
+        white-space: nowrap !important;
+        letter-spacing: 0.3px !important;
+        box-shadow: none !important;
+        min-height: unset !important;
+        line-height: 1.3 !important;
+        transition: all 0.2s !important;
+    }
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:hover {
+        background: #ddd !important;
+        color: #333 !important;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+    /* Active week button (disabled=true) — gold badge style */
+    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:disabled {
+        background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%) !important;
+        color: #333 !important;
+        font-weight: 700 !important;
+        box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35) !important;
+        border-color: transparent !important;
+        opacity: 1 !important;
+        cursor: default !important;
     }
 
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 0.5rem; }
@@ -244,7 +260,10 @@ st.markdown("""
             font-size: 0.78rem !important;
         }
         .poster-badge { font-size: 0.9rem; padding: 0.3rem 1rem; }
-        .week-tab { font-size: 0.82rem; padding: 0.35rem 0.9rem; }
+        [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
+            font-size: 0.82rem !important;
+            padding: 0.35rem 0.9rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1115,21 +1134,21 @@ def _frontend_poster_viewer():
 
     # Hafta badge tab bar — yatay kaydırılabilir
     if len(weeks) > 1:
-        tab_cols = st.columns(len(weeks))
-        for i, w in enumerate(weeks):
-            with tab_cols[i]:
-                is_active = (w == selected_week)
-                if is_active:
-                    st.markdown(
-                        _latin1_safe(f'<div class="week-tab active" style="text-align:center;pointer-events:none;">{_safe_html(week_names[w])}</div>'),
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    if st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True):
-                        st.session_state["fe_week_select"] = w
-                        st.session_state["fe_pv_idx"] = 0
-                        st.session_state.pop("_pv_cache_fe_poster_viewer", None)
-                        st.rerun()
+        wtab_container = st.container()
+        with wtab_container:
+            st.markdown('<div class="week-tab-anchor"></div>', unsafe_allow_html=True)
+            tab_cols = st.columns(len(weeks))
+            for i, w in enumerate(weeks):
+                with tab_cols[i]:
+                    is_active = (w == selected_week)
+                    if is_active:
+                        st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True, disabled=True)
+                    else:
+                        if st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True):
+                            st.session_state["fe_week_select"] = w
+                            st.session_state["fe_pv_idx"] = 0
+                            st.session_state.pop("_pv_cache_fe_poster_viewer", None)
+                            st.rerun()
     else:
         # Tek hafta — sadece badge göster
         st.markdown(_latin1_safe(f'<div class="poster-badge">{_safe_html(week_names[weeks[0]])}</div>'), unsafe_allow_html=True)
