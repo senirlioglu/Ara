@@ -1187,6 +1187,7 @@ def _mapping_tool_tab():
         "mt_db_mapped_codes": None,     # cached DB mapped codes (loaded once)
         "mt_dirty": False,              # has unsaved changes
         "mt_next_temp_id": -1,          # temp IDs for pending mappings
+        "mt_bbox_consumed": False,      # True after bbox is used (ignore stale canvas value)
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -1272,6 +1273,7 @@ def _mapping_tool_tab():
                     ]
                     st.session_state["mt_week_id"] = resume_wid
                     st.session_state["mt_bbox"] = None
+                    st.session_state["mt_bbox_consumed"] = True
                     st.session_state["mt_queue_idx"] = 0
                     st.session_state["mt_mode"] = "mapping"
                     st.rerun()
@@ -1330,6 +1332,7 @@ def _mapping_tool_tab():
     if st.session_state.get("mt_current_page") != page_id:
         st.session_state["mt_current_page"] = page_id
         st.session_state["mt_bbox"] = None
+        st.session_state["mt_bbox_consumed"] = True
 
     # --- Load saved mappings (DB cache + pending) ---
     page_key = f'{week_id}_{page["flyer_filename"]}_p{page["page_no"]}'
@@ -1370,9 +1373,12 @@ def _mapping_tool_tab():
         )
 
         if result and isinstance(result, dict) and "x0" in result:
-            if result != st.session_state.get("mt_bbox"):
+            # Ignore stale cached canvas value after bbox was consumed (save/clear)
+            if st.session_state.get("mt_bbox_consumed"):
+                st.session_state["mt_bbox_consumed"] = False
+            elif result != st.session_state.get("mt_bbox"):
                 st.session_state["mt_bbox"] = result
-                st.rerun()
+                # No st.rerun() — current run will use the updated value below
 
     with col_ctrl:
         bbox = st.session_state["mt_bbox"]
@@ -1959,6 +1965,7 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
     save_week_fn(mt_week, week_name=mt_week_name or mt_week)
 
     st.session_state["mt_bbox"] = None
+    st.session_state["mt_bbox_consumed"] = True
     st.session_state["mt_queue_idx"] = 0
     st.session_state["mt_mode"] = "mapping"
     st.rerun()
@@ -1998,8 +2005,9 @@ def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
 
     # Son eşleştirme ID'sini kaydet (Undo için)
     st.session_state["mt_last_mapping_id"] = temp_id
-    # Clear bbox for next draw
+    # Clear bbox for next draw; mark consumed so stale canvas value is ignored
     st.session_state["mt_bbox"] = None
+    st.session_state["mt_bbox_consumed"] = True
     st.rerun()
 
 
