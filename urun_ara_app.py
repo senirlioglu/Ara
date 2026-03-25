@@ -195,6 +195,42 @@ st.markdown("""
         letter-spacing: 0.3px;
     }
 
+    /* Week tab bar */
+    .week-tabs {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        padding: 0.3rem 0 0.6rem 0;
+        margin: 0;
+    }
+    .week-tabs::-webkit-scrollbar { display: none; }
+    .week-tab {
+        display: inline-block;
+        flex-shrink: 0;
+        background: #e8e9ee;
+        color: #666;
+        font-weight: 600;
+        font-size: 0.9rem;
+        padding: 0.4rem 1.1rem;
+        border-radius: 8px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.2s;
+        letter-spacing: 0.3px;
+        border: 2px solid transparent;
+    }
+    .week-tab:hover { background: #ddd; color: #444; }
+    .week-tab.active {
+        background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%);
+        color: #333;
+        font-weight: 700;
+        box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35);
+        border-color: transparent;
+    }
+
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 0.5rem; }
     .streamlit-expanderHeader { background: white !important; border-radius: 12px !important; border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important; padding: 0.6rem 0.8rem !important; font-weight: 500 !important; }
     .streamlit-expanderContent { background: white !important; border-radius: 0 0 12px 12px !important; border: none !important; padding: 0.5rem !important; }
@@ -208,6 +244,7 @@ st.markdown("""
             font-size: 0.78rem !important;
         }
         .poster-badge { font-size: 0.9rem; padding: 0.3rem 1rem; }
+        .week-tab { font-size: 0.82rem; padding: 0.35rem 0.9rem; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1055,23 +1092,47 @@ def _frontend_poster_viewer():
 
     # Sadece yayında olan haftaları göster (meta yoksa göster — geriye uyum)
     visible_weeks = []
+    week_meta_cache = {}
     for w in weeks:
         meta = get_week(w)
+        week_meta_cache[w] = meta
         if meta is None or meta.get("status") == "published":
             visible_weeks.append(w)
     weeks = visible_weeks
     if not weeks:
         return
 
-    # En güncel haftayı otomatik seç (birden fazla varsa dropdown)
-    if len(weeks) == 1:
-        selected_week = weeks[0]
+    # Hafta adlarını al (cached metadata kullan)
+    week_names = {}
+    for w in weeks:
+        meta = week_meta_cache.get(w)
+        week_names[w] = (meta.get("week_name") if meta else None) or w
+
+    # İlk hafta varsayılan olarak seçili
+    if "fe_week_select" not in st.session_state or st.session_state["fe_week_select"] not in weeks:
+        st.session_state["fe_week_select"] = weeks[0]
+    selected_week = st.session_state["fe_week_select"]
+
+    # Hafta badge tab bar — yatay kaydırılabilir
+    if len(weeks) > 1:
+        tab_cols = st.columns(len(weeks))
+        for i, w in enumerate(weeks):
+            with tab_cols[i]:
+                is_active = (w == selected_week)
+                if is_active:
+                    st.markdown(
+                        _latin1_safe(f'<div class="week-tab active" style="text-align:center;pointer-events:none;">{_safe_html(week_names[w])}</div>'),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    if st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True):
+                        st.session_state["fe_week_select"] = w
+                        st.session_state["fe_pv_idx"] = 0
+                        st.session_state.pop("_pv_cache_fe_poster_viewer", None)
+                        st.rerun()
     else:
-        selected_week = st.selectbox(
-            "Hafta:", weeks,
-            format_func=lambda w: f"Hafta: {w}",
-            key="fe_week_select",
-        )
+        # Tek hafta — sadece badge göster
+        st.markdown(_latin1_safe(f'<div class="poster-badge">{_safe_html(week_names[weeks[0]])}</div>'), unsafe_allow_html=True)
 
     # Poster sayfalarını DB'den yükle (cache)
     cache_key = f"_fe_dbpages_{selected_week}"
@@ -1092,13 +1153,6 @@ def _frontend_poster_viewer():
     if cur_idx >= total_pages:
         cur_idx = 0
         st.session_state["fe_pv_idx"] = 0
-
-    # Hafta adını al (metadata'dan)
-    week_meta = get_week(selected_week)
-    week_display_name = (week_meta.get("week_name") if week_meta else None) or selected_week
-
-    # Sarı badge başlık
-    st.markdown(_latin1_safe(f'<div class="poster-badge">{_safe_html(week_display_name)}</div>'), unsafe_allow_html=True)
 
     pg = poster_pages[cur_idx]
 
@@ -1124,7 +1178,7 @@ def _frontend_poster_viewer():
         pages=all_comp_pages,
         current_index=cur_idx,
         click_mode="search",
-        max_display_width=600,
+        max_display_width=1200,
         height=900,
         key="fe_poster_viewer",
     )

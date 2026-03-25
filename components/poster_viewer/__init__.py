@@ -90,9 +90,9 @@ def _encode_page(png_bytes: bytes, max_w: int) -> str:
     dw = min(max_w, w)
     scale = dw / w
     dh = int(h * scale)
-    display = pil.resize((dw, dh), Image.BILINEAR)
+    display = pil.resize((dw, dh), Image.LANCZOS)
     if display.mode == "RGBA":
         display = display.convert("RGB")
     buf = io.BytesIO()
-    display.save(buf, format="JPEG", quality=72)
+    display.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode()
