@@ -112,8 +112,9 @@ st.set_page_config(
 # Modern CSS Tasarımı
 st.markdown("""
 <style>
-    .stApp { background: #f5f7fa; }
+    .stApp { background: #f5f7fa; overflow-x: hidden; }
     header[data-testid="stHeader"] { background: transparent; }
+    .stMainBlockContainer, [data-testid="stAppViewBlockContainer"] { overflow-x: hidden !important; }
 
     /* Block spacing */
     .block-container { padding-top: 0 !important; }
@@ -1884,10 +1885,11 @@ def _poster_viewer_tab():
 
     # --- Afiş Sayfaları: Başlık, Sıralama, Silme ---
     st.markdown("#### Afiş Sayfaları")
-    for pg in poster_pages:
-        pid = pg["id"]
-        with st.container(border=True):
-            tc1, tc2, tc3, tc4 = st.columns([3, 2, 1, 0.7])
+
+    with st.form("pv_pages_form", clear_on_submit=False):
+        for pg in poster_pages:
+            pid = pg["id"]
+            tc1, tc2, tc3 = st.columns([3, 2, 1])
             with tc1:
                 st.text_input(
                     "Başlık", value=pg["title"] or "",
@@ -1897,45 +1899,45 @@ def _poster_viewer_tab():
             with tc2:
                 st.caption(f'{pg["flyer_filename"]} — s{pg["page_no"]}')
             with tc3:
-                st.number_input(
-                    "Sıra", value=pg["sort_order"], step=1,
+                st.text_input(
+                    "Sıra", value=str(pg["sort_order"]),
                     key=f"pv_s_{pid}", label_visibility="collapsed",
                 )
-            with tc4:
-                if st.button("Sil", key=f"pv_del_{pid}", use_container_width=True):
-                    st.session_state[f"_confirm_del_page_{pid}"] = True
-                    st.rerun()
 
-        # Sayfa silme onayı
-        if st.session_state.get(f"_confirm_del_page_{pid}"):
-            st.warning(f"**{pg['flyer_filename']} s{pg['page_no']}** silinecek (eşleştirmeleri dahil)!")
-            dc1, dc2 = st.columns(2)
-            with dc1:
-                if st.button("Evet, Sil", key=f"pv_cdel_y_{pid}", type="primary", use_container_width=True):
-                    delete_poster_page(pid)
-                    _clear_week_session_state()
-                    st.rerun()
-            with dc2:
-                if st.button("İptal", key=f"pv_cdel_n_{pid}", use_container_width=True):
-                    st.session_state.pop(f"_confirm_del_page_{pid}", None)
-                    st.rerun()
+        if st.form_submit_button("Tümünü Kaydet", type="primary", use_container_width=True):
+            changed = 0
+            for pg in poster_pages:
+                pid = pg["id"]
+                new_title = st.session_state.get(f"pv_t_{pid}", pg["title"] or "").strip()
+                raw_sort = st.session_state.get(f"pv_s_{pid}", str(pg["sort_order"]))
+                new_sort = int(raw_sort) if str(raw_sort).strip().isdigit() else pg["sort_order"]
+                if new_title != (pg["title"] or "") or new_sort != pg["sort_order"]:
+                    update_poster_page(pid, {"title": new_title, "sort_order": new_sort})
+                    changed += 1
+            if changed:
+                _clear_week_session_state()
+                st.success(f"{changed} sayfa güncellendi!")
+            else:
+                st.info("Değişiklik yok.")
+            st.rerun()
 
-    # Toplu kaydet butonu (başlık + sıra)
-    if st.button("Tümünü Kaydet", key="pv_save_all", type="primary", use_container_width=True):
-        changed = 0
+    # Silme butonları (form dışında)
+    with st.expander("Sayfa Sil", expanded=False):
         for pg in poster_pages:
             pid = pg["id"]
-            new_title = st.session_state.get(f"pv_t_{pid}", pg["title"] or "").strip()
-            new_sort = int(st.session_state.get(f"pv_s_{pid}", pg["sort_order"]))
-            if new_title != (pg["title"] or "") or new_sort != pg["sort_order"]:
-                update_poster_page(pid, {"title": new_title, "sort_order": new_sort})
-                changed += 1
-        if changed:
-            _clear_week_session_state()
-            st.success(f"{changed} sayfa güncellendi!")
-        else:
-            st.info("Değişiklik yok.")
-        st.rerun()
+            dc1, dc2 = st.columns([4, 1])
+            with dc1:
+                st.caption(f'{pg["flyer_filename"]} — s{pg["page_no"]}')
+            with dc2:
+                if st.session_state.get(f"_confirm_del_page_{pid}"):
+                    if st.button("Onayla", key=f"pv_cdel_y_{pid}", type="primary", use_container_width=True):
+                        delete_poster_page(pid)
+                        _clear_week_session_state()
+                        st.rerun()
+                else:
+                    if st.button("Sil", key=f"pv_del_{pid}", use_container_width=True):
+                        st.session_state[f"_confirm_del_page_{pid}"] = True
+                        st.rerun()
 
     # --- Önizleme ---
     st.markdown("---")
@@ -2232,35 +2234,54 @@ def _admin_tab_weeks():
     status_colors = {"draft": "#f0ad4e", "published": "#5cb85c", "archived": "#999"}
 
     if weeks:
+        # Sıralama formu (render tetiklemeden numara girilebilir)
+        with st.form("wl_sort_form", clear_on_submit=False):
+            for w in weeks:
+                wid = w["week_id"]
+                sc1, sc2, sc3 = st.columns([0.8, 3, 4])
+                with sc1:
+                    cur_sort = w.get("sort_order", 0) or 0
+                    st.text_input(
+                        "Sıra", value=str(cur_sort),
+                        key=f"wl_sort_{wid}", label_visibility="collapsed",
+                    )
+                with sc2:
+                    name = w.get("week_name") or wid
+                    s = w.get("status", "draft")
+                    badge = (f'<span style="background:{status_colors.get(s,"#999")}; color:white; '
+                             f'padding:2px 8px; border-radius:10px; font-size:11px; margin-left:8px;">'
+                             f'{status_labels.get(s, s)}</span>')
+                    st.markdown(f"**{name}**{badge}", unsafe_allow_html=True)
+                with sc3:
+                    pg_cnt = w.get("page_count", 0)
+                    mp_cnt = w.get("mapping_count", 0)
+                    pr_cnt = w.get("product_count", 0)
+                    st.caption(f"{pg_cnt} sayfa · {mp_cnt}/{pr_cnt} eşleşme")
+
+            if st.form_submit_button("Sıralamayı Kaydet", type="primary", use_container_width=True):
+                changed = 0
+                for w in weeks:
+                    wid = w["week_id"]
+                    raw = st.session_state.get(f"wl_sort_{wid}", str(w.get("sort_order", 0) or 0))
+                    new_val = int(raw) if str(raw).strip().isdigit() else (w.get("sort_order", 0) or 0)
+                    if new_val != (w.get("sort_order", 0) or 0):
+                        update_week_sort_order(wid, new_val)
+                        changed += 1
+                if changed:
+                    st.success(f"{changed} hafta sıralaması güncellendi!")
+                else:
+                    st.info("Değişiklik yok.")
+                st.rerun()
+
+        # Durum ve silme işlemleri (form dışında)
         for w in weeks:
             wid = w["week_id"]
             with st.container(border=True):
-                wc0, wc1, wc2, wc3, wc4, wc5, wc6 = st.columns([0.8, 2.5, 1.2, 1.2, 1.5, 1.5, 0.8])
-                with wc0:
-                    cur_sort = w.get("sort_order", 0) or 0
-                    st.number_input(
-                        "Sıra", value=cur_sort, min_value=0, max_value=999,
-                        key=f"wl_sort_{wid}", label_visibility="collapsed",
-                    )
+                wc1, wc2, wc3 = st.columns([3, 2, 1])
                 with wc1:
                     name = w.get("week_name") or wid
-                    st.markdown(f"**{name}**")
-                    st.caption(f"ID: {wid}")
+                    st.caption(f"{name} ({wid})")
                 with wc2:
-                    s = w.get("status", "draft")
-                    st.markdown(
-                        f'<span style="background:{status_colors.get(s,"#999")}; color:white; '
-                        f'padding:2px 10px; border-radius:10px; font-size:12px;">'
-                        f'{status_labels.get(s, s)}</span>',
-                        unsafe_allow_html=True,
-                    )
-                with wc3:
-                    st.caption(f"{w.get('page_count', 0)} sayfa")
-                with wc4:
-                    mapped = w.get("mapping_count", 0)
-                    total = w.get("product_count", 0)
-                    st.caption(f"{mapped} eşleşme / {total} ürün")
-                with wc5:
                     s = w.get("status", "draft")
                     if s == "draft":
                         if st.button("Yayınla", key=f"wl_pub_{wid}", use_container_width=True):
@@ -2274,11 +2295,10 @@ def _admin_tab_weeks():
                         if st.button("Taslak Yap", key=f"wl_draft_{wid}", use_container_width=True):
                             update_week_status(wid, "draft")
                             st.rerun()
-                with wc6:
+                with wc3:
                     if st.button("Sil", key=f"wl_del_{wid}", use_container_width=True):
                         st.session_state[f"_confirm_del_wl_{wid}"] = True
 
-            # Hafta silme onayı
             if st.session_state.get(f"_confirm_del_wl_{wid}"):
                 st.warning(f"**{w.get('week_name') or wid}** — tüm afişler, eşleştirmeler ve ürünler silinecek!")
                 dc1, dc2 = st.columns(2)
@@ -2291,21 +2311,6 @@ def _admin_tab_weeks():
                     if st.button("İptal", key=f"wl_cdel_n_{wid}", use_container_width=True):
                         st.session_state.pop(f"_confirm_del_wl_{wid}", None)
                         st.rerun()
-
-        # Toplu sıralama kaydet butonu
-        if st.button("Sıralamayı Kaydet", key="wl_save_sort", type="primary", use_container_width=True):
-            changed = 0
-            for w in weeks:
-                wid = w["week_id"]
-                new_val = int(st.session_state.get(f"wl_sort_{wid}", w.get("sort_order", 0) or 0))
-                if new_val != (w.get("sort_order", 0) or 0):
-                    update_week_sort_order(wid, new_val)
-                    changed += 1
-            if changed:
-                st.success(f"{changed} hafta sıralaması güncellendi!")
-            else:
-                st.info("Değişiklik yok.")
-            st.rerun()
     else:
         st.info("Henüz hafta oluşturulmamış. 'Eşleştir' sekmesinden başlayın.")
 
