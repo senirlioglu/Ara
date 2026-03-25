@@ -502,7 +502,7 @@ def save_week(week_id: str, week_name: str = "", start_date: str = "",
               db_path=None):
     """Create or update a week record."""
     sb = _get_client()
-    sb.table("poster_weeks").upsert({
+    row = {
         "week_id": week_id,
         "week_name": week_name,
         "start_date": start_date or None,
@@ -510,7 +510,13 @@ def save_week(week_id: str, week_name: str = "", start_date: str = "",
         "status": status,
         "sort_order": sort_order,
         "created_at": datetime.now(timezone.utc).isoformat(),
-    }, on_conflict="week_id").execute()
+    }
+    try:
+        sb.table("poster_weeks").upsert(row, on_conflict="week_id").execute()
+    except Exception:
+        # sort_order column may not exist yet — retry without it
+        row.pop("sort_order", None)
+        sb.table("poster_weeks").upsert(row, on_conflict="week_id").execute()
 
 
 def get_week(week_id: str, db_path=None) -> dict | None:
@@ -534,14 +540,20 @@ def update_week_status(week_id: str, status: str, db_path=None):
 def update_week_sort_order(week_id: str, sort_order: int, db_path=None):
     """Update week display sort order."""
     sb = _get_client()
-    sb.table("poster_weeks").update({"sort_order": sort_order}).eq("week_id", week_id).execute()
+    try:
+        sb.table("poster_weeks").update({"sort_order": sort_order}).eq("week_id", week_id).execute()
+    except Exception:
+        log.warning("Could not update sort_order for %s — column may not exist yet", week_id)
 
 
 def list_weeks_with_meta(db_path=None) -> list[dict]:
     """Return all weeks with metadata and stats."""
     sb = _get_client()
-    # Get weeks
-    weeks_res = sb.table("poster_weeks").select("*").order("sort_order").order("created_at", desc=True).execute()
+    # Get weeks — try sort_order first, fall back if column doesn't exist yet
+    try:
+        weeks_res = sb.table("poster_weeks").select("*").order("sort_order").order("created_at", desc=True).execute()
+    except Exception:
+        weeks_res = sb.table("poster_weeks").select("*").order("created_at", desc=True).execute()
     weeks = weeks_res.data or []
 
     if not weeks:
@@ -609,14 +621,22 @@ def list_all_weeks(db_path=None) -> list[str]:
     if not page_week_ids:
         return []
 
-    # Get sort_order from poster_weeks for ordering
-    weeks_res = (
-        sb.table("poster_weeks")
-        .select("week_id,sort_order")
-        .order("sort_order")
-        .order("created_at", desc=True)
-        .execute()
-    )
+    # Get sort_order from poster_weeks for ordering (fall back if column missing)
+    try:
+        weeks_res = (
+            sb.table("poster_weeks")
+            .select("week_id,sort_order")
+            .order("sort_order")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception:
+        weeks_res = (
+            sb.table("poster_weeks")
+            .select("week_id")
+            .order("created_at", desc=True)
+            .execute()
+        )
     # Build ordered list from poster_weeks (respecting sort_order)
     ordered = []
     seen = set()
