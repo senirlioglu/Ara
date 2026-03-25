@@ -556,17 +556,23 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
         weeks_res = sb.table("poster_weeks").select("*").order("created_at", desc=True).execute()
     weeks = weeks_res.data or []
 
-    # Sort: sort_order>0 first (ascending), then sort_order=0 by newest created_at
-    def _week_sort_key(w):
-        so = w.get("sort_order") or 0
-        ca = w.get("created_at") or ""
-        if so > 0:
-            return (0, so, "")       # group 0 = has explicit order
-        return (1, 0, ca)            # group 1 = no order, sort by created_at
-    weeks.sort(key=_week_sort_key)
-    # Within group 1 (no order), reverse so newest is first
+    # Sort: sort_order>0 first (ASC, newest first as tiebreaker),
+    # then sort_order=0 by newest created_at
     ordered = [w for w in weeks if (w.get("sort_order") or 0) > 0]
     unordered = [w for w in weeks if (w.get("sort_order") or 0) == 0]
+
+    from functools import cmp_to_key
+    def _cmp_ordered_weeks(a, b):
+        sa, sb = a.get("sort_order") or 0, b.get("sort_order") or 0
+        if sa != sb:
+            return -1 if sa < sb else 1
+        ca, cb = a.get("created_at") or "", b.get("created_at") or ""
+        if ca > cb:
+            return -1
+        if ca < cb:
+            return 1
+        return 0
+    ordered.sort(key=cmp_to_key(_cmp_ordered_weeks))
     unordered.sort(key=lambda w: w.get("created_at") or "", reverse=True)
     weeks = ordered + unordered
 
@@ -654,15 +660,26 @@ def list_all_weeks(db_path=None) -> list[str]:
         if m is None:
             orphans.append(wid)
         elif (m.get("sort_order") or 0) > 0:
-            has_order.append((m["sort_order"], wid))
+            has_order.append((m["sort_order"], m.get("created_at") or "", wid))
         else:
             no_order.append((m.get("created_at") or "", wid))
 
-    has_order.sort(key=lambda x: x[0])
+    # sort_order ASC; for equal sort_order, newest created_at first
+    from functools import cmp_to_key
+    def _cmp_ordered(a, b):
+        if a[0] != b[0]:
+            return -1 if a[0] < b[0] else 1
+        # Same sort_order → reverse by created_at (newest first)
+        if a[1] > b[1]:
+            return -1
+        if a[1] < b[1]:
+            return 1
+        return 0
+    has_order.sort(key=cmp_to_key(_cmp_ordered))
     no_order.sort(key=lambda x: x[0], reverse=True)
     orphans.sort(reverse=True)
 
-    return [wid for _, wid in has_order] + [wid for _, wid in no_order] + orphans
+    return [x[-1] for x in has_order] + [wid for _, wid in no_order] + orphans
 
 
 def list_mappings_for_week(
