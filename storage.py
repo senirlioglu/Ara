@@ -88,8 +88,23 @@ def _ensure_bucket():
 # ---------------------------------------------------------------------------
 
 def init_db(db_path=None):
-    """No-op — tables are created via Supabase migration SQL."""
+    """Ensure storage bucket exists and run lightweight migrations."""
     _ensure_bucket()
+    _ensure_week_sort_order()
+
+
+def _ensure_week_sort_order():
+    """Add sort_order column to poster_weeks if it doesn't exist yet."""
+    sb = _get_client()
+    if sb is None:
+        return
+    try:
+        sb.table("poster_weeks").select("sort_order").limit(1).execute()
+    except Exception:
+        try:
+            sb.rpc("exec_sql", {"query": "ALTER TABLE poster_weeks ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0"}).execute()
+        except Exception:
+            log.warning("Could not add sort_order column — run migration SQL manually")
 
 
 # ============================================================================
@@ -483,7 +498,8 @@ def get_mapped_product_codes(week_id: str, db_path=None) -> set[str]:
 # ============================================================================
 
 def save_week(week_id: str, week_name: str = "", start_date: str = "",
-              end_date: str = "", status: str = "draft", db_path=None):
+              end_date: str = "", status: str = "draft", sort_order: int = 0,
+              db_path=None):
     """Create or update a week record."""
     sb = _get_client()
     sb.table("poster_weeks").upsert({
@@ -492,6 +508,7 @@ def save_week(week_id: str, week_name: str = "", start_date: str = "",
         "start_date": start_date or None,
         "end_date": end_date or None,
         "status": status,
+        "sort_order": sort_order,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }, on_conflict="week_id").execute()
 
@@ -514,11 +531,17 @@ def update_week_status(week_id: str, status: str, db_path=None):
     sb.table("poster_weeks").update({"status": status}).eq("week_id", week_id).execute()
 
 
+def update_week_sort_order(week_id: str, sort_order: int, db_path=None):
+    """Update week display sort order."""
+    sb = _get_client()
+    sb.table("poster_weeks").update({"sort_order": sort_order}).eq("week_id", week_id).execute()
+
+
 def list_weeks_with_meta(db_path=None) -> list[dict]:
     """Return all weeks with metadata and stats."""
     sb = _get_client()
     # Get weeks
-    weeks_res = sb.table("poster_weeks").select("*").order("created_at", desc=True).execute()
+    weeks_res = sb.table("poster_weeks").select("*").order("sort_order").order("created_at", desc=True).execute()
     weeks = weeks_res.data or []
 
     if not weeks:
@@ -570,23 +593,42 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
 # ============================================================================
 
 def list_all_weeks(db_path=None) -> list[str]:
-    """Return all distinct week_ids that have poster pages, most recent first."""
+    """Return all distinct week_ids that have poster pages, ordered by sort_order then newest first."""
     sb = _get_client()
-    res = (
+
+    # Get week_ids from poster_pages
+    pages_res = (
         sb.table("poster_pages")
         .select("week_id")
-        .order("week_id", desc=True)
         .execute()
     )
-    # Deduplicate while preserving order
+    page_week_ids = set()
+    for r in (pages_res.data or []):
+        page_week_ids.add(r["week_id"])
+
+    if not page_week_ids:
+        return []
+
+    # Get sort_order from poster_weeks for ordering
+    weeks_res = (
+        sb.table("poster_weeks")
+        .select("week_id,sort_order")
+        .order("sort_order")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    # Build ordered list from poster_weeks (respecting sort_order)
+    ordered = []
     seen = set()
-    result = []
-    for r in (res.data or []):
+    for r in (weeks_res.data or []):
         wid = r["week_id"]
-        if wid not in seen:
+        if wid in page_week_ids and wid not in seen:
+            ordered.append(wid)
             seen.add(wid)
-            result.append(wid)
-    return result
+    # Append any orphan week_ids not in poster_weeks
+    for wid in sorted(page_week_ids - seen, reverse=True):
+        ordered.append(wid)
+    return ordered
 
 
 def list_mappings_for_week(

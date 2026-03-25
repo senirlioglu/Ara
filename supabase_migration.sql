@@ -58,8 +58,12 @@ CREATE TABLE IF NOT EXISTS poster_weeks (
     start_date  TEXT,
     end_date    TEXT,
     status      TEXT DEFAULT 'draft',
+    sort_order  INTEGER DEFAULT 0,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Migration: add sort_order if table already exists without it
+ALTER TABLE poster_weeks ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
 
 -- Storage bucket for poster images (run via Supabase dashboard or API)
 -- INSERT INTO storage.buckets (id, name, public) VALUES ('poster-images', 'poster-images', true);
