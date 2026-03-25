@@ -112,9 +112,14 @@ st.set_page_config(
 # Modern CSS Tasarımı
 st.markdown("""
 <style>
-    .stApp { background: #f5f7fa; overflow-x: hidden; }
+    .stApp { background: #f5f7fa; }
     header[data-testid="stHeader"] { background: transparent; }
-    .stMainBlockContainer, [data-testid="stAppViewBlockContainer"] { overflow-x: hidden !important; }
+
+    /* Prevent any horizontal scroll from overflowing elements */
+    .stMainBlockContainer, [data-testid="stAppViewBlockContainer"],
+    .block-container, [data-testid="stMain"] {
+        overflow-x: clip !important;
+    }
 
     /* Block spacing */
     .block-container { padding-top: 0 !important; }
@@ -125,7 +130,7 @@ st.markdown("""
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1rem 0.75rem 0.8rem;
         border-radius: 0 0 16px 16px;
-        margin: 0 0 0.5rem 0;
+        margin: -1rem -1rem 0.5rem -1rem;
         text-align: center;
         box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
     }
