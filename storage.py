@@ -549,12 +549,26 @@ def update_week_sort_order(week_id: str, sort_order: int, db_path=None):
 def list_weeks_with_meta(db_path=None) -> list[dict]:
     """Return all weeks with metadata and stats."""
     sb = _get_client()
-    # Get weeks — try sort_order first, fall back if column doesn't exist yet
+    # Fetch all weeks (sort in Python for proper 0=unset logic)
     try:
-        weeks_res = sb.table("poster_weeks").select("*").order("sort_order").order("created_at", desc=True).execute()
+        weeks_res = sb.table("poster_weeks").select("*").execute()
     except Exception:
         weeks_res = sb.table("poster_weeks").select("*").order("created_at", desc=True).execute()
     weeks = weeks_res.data or []
+
+    # Sort: sort_order>0 first (ascending), then sort_order=0 by newest created_at
+    def _week_sort_key(w):
+        so = w.get("sort_order") or 0
+        ca = w.get("created_at") or ""
+        if so > 0:
+            return (0, so, "")       # group 0 = has explicit order
+        return (1, 0, ca)            # group 1 = no order, sort by created_at
+    weeks.sort(key=_week_sort_key)
+    # Within group 1 (no order), reverse so newest is first
+    ordered = [w for w in weeks if (w.get("sort_order") or 0) > 0]
+    unordered = [w for w in weeks if (w.get("sort_order") or 0) == 0]
+    unordered.sort(key=lambda w: w.get("created_at") or "", reverse=True)
+    weeks = ordered + unordered
 
     if not weeks:
         return []
@@ -605,15 +619,14 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
 # ============================================================================
 
 def list_all_weeks(db_path=None) -> list[str]:
-    """Return all distinct week_ids that have poster pages, ordered by sort_order then newest first."""
+    """Return all distinct week_ids that have poster pages.
+
+    Ordering: sort_order>0 first (ASC), then sort_order=0 by newest created_at.
+    """
     sb = _get_client()
 
     # Get week_ids from poster_pages
-    pages_res = (
-        sb.table("poster_pages")
-        .select("week_id")
-        .execute()
-    )
+    pages_res = sb.table("poster_pages").select("week_id").execute()
     page_week_ids = set()
     for r in (pages_res.data or []):
         page_week_ids.add(r["week_id"])
@@ -621,34 +634,35 @@ def list_all_weeks(db_path=None) -> list[str]:
     if not page_week_ids:
         return []
 
-    # Get sort_order from poster_weeks for ordering (fall back if column missing)
+    # Get metadata from poster_weeks for ordering
     try:
-        weeks_res = (
-            sb.table("poster_weeks")
-            .select("week_id,sort_order")
-            .order("sort_order")
-            .order("created_at", desc=True)
-            .execute()
-        )
+        weeks_res = sb.table("poster_weeks").select("week_id,sort_order,created_at").execute()
     except Exception:
-        weeks_res = (
-            sb.table("poster_weeks")
-            .select("week_id")
-            .order("created_at", desc=True)
-            .execute()
-        )
-    # Build ordered list from poster_weeks (respecting sort_order)
-    ordered = []
-    seen = set()
+        weeks_res = sb.table("poster_weeks").select("week_id,created_at").execute()
+
+    # Build lookup: week_id → {sort_order, created_at}
+    meta = {}
     for r in (weeks_res.data or []):
-        wid = r["week_id"]
-        if wid in page_week_ids and wid not in seen:
-            ordered.append(wid)
-            seen.add(wid)
-    # Append any orphan week_ids not in poster_weeks
-    for wid in sorted(page_week_ids - seen, reverse=True):
-        ordered.append(wid)
-    return ordered
+        meta[r["week_id"]] = r
+
+    # Sort: explicit sort_order>0 first (ASC), then unset (0) by newest created_at
+    has_order = []
+    no_order = []
+    orphans = []
+    for wid in page_week_ids:
+        m = meta.get(wid)
+        if m is None:
+            orphans.append(wid)
+        elif (m.get("sort_order") or 0) > 0:
+            has_order.append((m["sort_order"], wid))
+        else:
+            no_order.append((m.get("created_at") or "", wid))
+
+    has_order.sort(key=lambda x: x[0])
+    no_order.sort(key=lambda x: x[0], reverse=True)
+    orphans.sort(reverse=True)
+
+    return [wid for _, wid in has_order] + [wid for _, wid in no_order] + orphans
 
 
 def list_mappings_for_week(
