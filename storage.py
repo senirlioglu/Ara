@@ -524,36 +524,34 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
     if not weeks:
         return []
 
-    week_ids = [w["week_id"] for w in weeks]
-
-    # Batch-fetch all related rows in one query each (instead of N queries per table)
-    try:
-        pages_res = _sb_execute_with_retry(
-            sb.table("poster_pages").select("week_id").in_("week_id", week_ids))
-        mappings_res = _sb_execute_with_retry(
-            sb.table("mappings").select("week_id").in_("week_id", week_ids))
-        products_res = _sb_execute_with_retry(
-            sb.table("week_products").select("week_id").in_("week_id", week_ids))
-    except Exception:
-        log.exception("Failed to fetch week metadata counts")
-        # Graceful fallback — return weeks without counts
-        return [{**w, "page_count": 0, "mapping_count": 0, "product_count": 0} for w in weeks]
-
-    # Count occurrences per week_id
-    page_counts: dict[str, int] = {}
-    for row in (pages_res.data or []):
-        wid = row["week_id"]
-        page_counts[wid] = page_counts.get(wid, 0) + 1
-
-    mapping_counts: dict[str, int] = {}
-    for row in (mappings_res.data or []):
-        wid = row["week_id"]
-        mapping_counts[wid] = mapping_counts.get(wid, 0) + 1
-
-    product_counts: dict[str, int] = {}
-    for row in (products_res.data or []):
-        wid = row["week_id"]
-        product_counts[wid] = product_counts.get(wid, 0) + 1
+    # Use server-side count queries (HEAD request, no data transfer) with
+    # retry logic to handle httpx connection pool exhaustion under load.
+    page_counts = {}
+    mapping_counts = {}
+    product_counts = {}
+    for w in weeks:
+        wid = w["week_id"]
+        try:
+            pg = _sb_execute_with_retry(
+                sb.table("poster_pages").select("*", count="exact", head=True).eq("week_id", wid))
+            page_counts[wid] = pg.count or 0
+        except Exception:
+            log.warning("Failed to count poster_pages for week %s", wid)
+            page_counts[wid] = 0
+        try:
+            mp = _sb_execute_with_retry(
+                sb.table("mappings").select("*", count="exact", head=True).eq("week_id", wid))
+            mapping_counts[wid] = mp.count or 0
+        except Exception:
+            log.warning("Failed to count mappings for week %s", wid)
+            mapping_counts[wid] = 0
+        try:
+            pr = _sb_execute_with_retry(
+                sb.table("week_products").select("*", count="exact", head=True).eq("week_id", wid))
+            product_counts[wid] = pr.count or 0
+        except Exception:
+            log.warning("Failed to count week_products for week %s", wid)
+            product_counts[wid] = 0
 
     result = []
     for w in weeks:

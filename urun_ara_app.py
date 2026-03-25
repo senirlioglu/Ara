@@ -1273,7 +1273,6 @@ def _mapping_tool_tab():
                     ]
                     st.session_state["mt_week_id"] = resume_wid
                     st.session_state["mt_bbox"] = None
-                    st.session_state["mt_bbox_consumed"] = True
                     st.session_state["mt_queue_idx"] = 0
                     st.session_state["mt_mode"] = "mapping"
                     st.rerun()
@@ -1332,7 +1331,7 @@ def _mapping_tool_tab():
     if st.session_state.get("mt_current_page") != page_id:
         st.session_state["mt_current_page"] = page_id
         st.session_state["mt_bbox"] = None
-        st.session_state["mt_bbox_consumed"] = True
+        # No mt_bbox_consumed here — canvas key changes so no stale cached value
 
     # --- Load saved mappings (DB cache + pending) ---
     page_key = f'{week_id}_{page["flyer_filename"]}_p{page["page_no"]}'
@@ -1965,7 +1964,6 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
     save_week_fn(mt_week, week_name=mt_week_name or mt_week)
 
     st.session_state["mt_bbox"] = None
-    st.session_state["mt_bbox_consumed"] = True
     st.session_state["mt_queue_idx"] = 0
     st.session_state["mt_mode"] = "mapping"
     st.rerun()
