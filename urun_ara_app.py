@@ -205,8 +205,8 @@ st.markdown("""
     /* Week tab anchor (hidden marker inside the tab container) */
     .week-tab-anchor { display: none; }
 
-    /* Week tab row: horizontal scroll, no wrap */
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] {
+    /* Week tab row: horizontal scroll, no wrap — use direct child to avoid affecting search bar */
+    [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"] {
         overflow-x: auto !important;
         flex-wrap: nowrap !important;
         -webkit-overflow-scrolling: touch;
@@ -214,15 +214,15 @@ st.markdown("""
         gap: 8px !important;
         padding: 0.2rem 0;
     }
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"]::-webkit-scrollbar { display: none; }
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"]::-webkit-scrollbar { display: none; }
+    [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
         flex: 0 0 auto !important;
         width: auto !important;
         min-width: fit-content !important;
     }
 
-    /* Week tab buttons — target the container that has .week-tab-anchor inside it */
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
+    /* Week tab buttons */
+    [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"] .stButton > button {
         background: #e8e9ee !important;
         color: #555 !important;
         font-weight: 600 !important;
@@ -237,14 +237,14 @@ st.markdown("""
         line-height: 1.3 !important;
         transition: all 0.2s !important;
     }
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:hover {
+    [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"] .stButton > button:hover {
         background: #ddd !important;
         color: #333 !important;
         transform: none !important;
         box-shadow: none !important;
     }
     /* Active week button (disabled=true) — gold badge style */
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:disabled {
+    [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"] .stButton > button:disabled {
         background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%) !important;
         color: #333 !important;
         font-weight: 700 !important;
@@ -267,7 +267,7 @@ st.markdown("""
             font-size: 0.78rem !important;
         }
         .poster-badge { font-size: 0.9rem; padding: 0.3rem 1rem; }
-        [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
+        [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"] .stButton > button {
             font-size: 0.82rem !important;
             padding: 0.35rem 0.9rem !important;
         }
