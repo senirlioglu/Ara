@@ -141,9 +141,19 @@ st.markdown("""
     .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.6rem 0.8rem !important; font-size: 0.95rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
 
-    /* Ara butonu */
-    .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
-    .stButton > button:hover { box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
+    /* Ara butonu (hem normal button hem form submit button) */
+    .stButton > button,
+    .stFormSubmitButton > button,
+    [data-testid="stFormSubmitButton"] > button {
+        border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important;
+        color: white !important;
+    }
+    .stButton > button:hover,
+    .stFormSubmitButton > button:hover,
+    [data-testid="stFormSubmitButton"] > button:hover {
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
+    }
 
     /* Popüler arama pill rows */
     [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) [data-testid="stHorizontalBlock"] {
@@ -870,13 +880,17 @@ def main():
         return
 
     # Arama kutusu
-    arama_text = st.text_input(
-        "Arama",
-        placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
-        label_visibility="collapsed",
-        key="arama_input"
-    )
-    ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
+    with st.form("arama_form", clear_on_submit=False, border=False):
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            arama_text = st.text_input(
+                "Arama",
+                placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
+                label_visibility="collapsed",
+                key="arama_input"
+            )
+        with col2:
+            ara_btn = st.form_submit_button("🔍 Ara", use_container_width=True, type="primary")
 
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
