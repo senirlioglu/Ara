@@ -115,11 +115,10 @@ st.markdown("""
     .stApp { background: #f5f7fa; }
     header[data-testid="stHeader"] { background: transparent; }
 
-    /* Prevent horizontal scroll */
-    html, body, .stApp, .stMainBlockContainer, [data-testid="stAppViewBlockContainer"],
-    .block-container, [data-testid="stMain"], section[data-testid="stMain"] > div {
+    /* Prevent any horizontal scroll from overflowing elements */
+    .stMainBlockContainer, [data-testid="stAppViewBlockContainer"],
+    .block-container, [data-testid="stMain"] {
         overflow-x: clip !important;
-        max-width: 100vw !important;
     }
 
     /* Block spacing */
@@ -131,7 +130,7 @@ st.markdown("""
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1rem 0.75rem 0.8rem;
         border-radius: 0 0 16px 16px;
-        margin: 0 -1rem 0.5rem -1rem;
+        margin: -1rem -1rem 0.5rem -1rem;
         text-align: center;
         box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
     }
@@ -212,12 +211,9 @@ st.markdown("""
         letter-spacing: 0.3px;
     }
 
-    /* Week pills styling */
-    [data-testid="stPills"] [data-baseweb="button-group"] button[aria-pressed="true"],
-    [data-testid="stPills"] button[aria-checked="true"],
-    [data-testid="stPills"] button[data-selected="true"],
-    [data-testid="stPills"] .st-emotion-cache-1pp5el button:disabled,
-    [data-testid="stPills"] button.selected {
+    /* Week pills — active pill gold badge */
+    [data-testid="stPills"] button[aria-pressed="true"],
+    [data-testid="stPills"] button[aria-checked="true"] {
         background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%) !important;
         color: #333 !important;
         font-weight: 700 !important;
@@ -227,7 +223,6 @@ st.markdown("""
     [data-testid="stPills"] button {
         font-weight: 600 !important;
         border-radius: 8px !important;
-        letter-spacing: 0.3px !important;
     }
 
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 0.5rem; }
@@ -243,10 +238,6 @@ st.markdown("""
             font-size: 0.78rem !important;
         }
         .poster-badge { font-size: 0.9rem; padding: 0.3rem 1rem; }
-        [data-testid="stMarkdown"]:has(.week-tab-anchor) + [data-testid="stHorizontalBlock"] .stButton > button {
-            font-size: 0.82rem !important;
-            padding: 0.35rem 0.9rem !important;
-        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1116,12 +1107,11 @@ def _frontend_poster_viewer():
         st.session_state["fe_week_select"] = weeks[0]
     selected_week = st.session_state["fe_week_select"]
 
-    # Hafta seçimi — st.pills (native Streamlit widget, CSS hack gerektirmez)
+    # Hafta seçimi — st.pills (native widget, CSS hack gerektirmez)
     pill_options = [week_names[w] for w in weeks]
     pill_default = week_names[selected_week]
     picked = st.pills("Hafta", pill_options, default=pill_default, key="fe_week_pills", label_visibility="collapsed")
     if picked and picked != pill_default:
-        # Seçilen pill'in week_id'sini bul
         for w in weeks:
             if week_names[w] == picked:
                 st.session_state["fe_week_select"] = w
