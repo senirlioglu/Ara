@@ -203,7 +203,11 @@ st.markdown("""
     }
 
     /* Week pills styling */
-    [data-testid="stPills"] button[aria-checked="true"] {
+    [data-testid="stPills"] [data-baseweb="button-group"] button[aria-pressed="true"],
+    [data-testid="stPills"] button[aria-checked="true"],
+    [data-testid="stPills"] button[data-selected="true"],
+    [data-testid="stPills"] .st-emotion-cache-1pp5el button:disabled,
+    [data-testid="stPills"] button.selected {
         background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%) !important;
         color: #333 !important;
         font-weight: 700 !important;
@@ -866,17 +870,13 @@ def main():
         return
 
     # Arama kutusu
-    with st.form("arama_form", clear_on_submit=False, border=False):
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            arama_text = st.text_input(
-                "Arama",
-                placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
-                label_visibility="collapsed",
-                key="arama_input"
-            )
-        with col2:
-            ara_btn = st.form_submit_button("🔍 Ara", use_container_width=True, type="primary")
+    arama_text = st.text_input(
+        "Arama",
+        placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
+        label_visibility="collapsed",
+        key="arama_input"
+    )
+    ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
