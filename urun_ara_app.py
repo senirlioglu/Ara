@@ -141,11 +141,6 @@ st.markdown("""
     .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.6rem 0.8rem !important; font-size: 0.95rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
 
-    /* Hide ALL form borders and padding */
-    [data-testid="stForm"],
-    [data-testid="stForm"] > div:first-child,
-    .stForm, form { border: none !important; padding: 0 !important; box-shadow: none !important; background: transparent !important; }
-
     /* Ara butonu */
     .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
     .stButton > button:hover { box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
@@ -909,7 +904,7 @@ def main():
         return
 
     # Arama kutusu
-    with st.form("arama_form", clear_on_submit=False):
+    with st.form("arama_form", clear_on_submit=False, border=False):
         col1, col2 = st.columns([5, 1])
         with col1:
             arama_text = st.text_input(
@@ -967,7 +962,7 @@ function norm(s){
   var out='';
   for(var i=0;i<s.length;i++){out+=map[s[i]]||s[i];}
   if(out.normalize){out=out.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-  return out.toLowerCase().replace(/\s+/g,' ').trim();
+  return out.toLowerCase().replace(/\\s+/g,' ').trim();
 }
 
 var IDX=S.map(function(raw){
