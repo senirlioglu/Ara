@@ -872,16 +872,13 @@ def main():
 
     # Arama kutusu
     with st.form("arama_form", clear_on_submit=False, border=False):
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            arama_text = st.text_input(
-                "Arama",
-                placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
-                label_visibility="collapsed",
-                key="arama_input"
-            )
-        with col2:
-            ara_btn = st.form_submit_button("🔍 Ara", use_container_width=True, type="primary")
+        arama_text = st.text_input(
+            "Arama",
+            placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
+            label_visibility="collapsed",
+            key="arama_input"
+        )
+        ara_btn = st.form_submit_button("🔍 Ara", use_container_width=True, type="primary")
 
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
