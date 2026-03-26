@@ -140,12 +140,22 @@ st.markdown("""
     .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.6rem 0.8rem !important; font-size: 0.95rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
 
-    /* Ara butonu */
-    .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
-    .stButton > button:hover { box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
+    /* Ara butonu (hem normal button hem form submit button) */
+    .stButton > button,
+    .stFormSubmitButton > button,
+    [data-testid="stFormSubmitButton"] > button {
+        border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important;
+        color: white !important;
+    }
+    .stButton > button:hover,
+    .stFormSubmitButton > button:hover,
+    [data-testid="stFormSubmitButton"] > button:hover {
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
+    }
 
-    /* Pill rows */
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) {
+    /* Popüler arama pill rows */
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) [data-testid="stHorizontalBlock"] {
         overflow-x: auto !important;
         flex-wrap: nowrap !important;
         -webkit-overflow-scrolling: touch;
@@ -154,13 +164,13 @@ st.markdown("""
         gap: 4px !important;
         padding-bottom: 2px;
     }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3))::-webkit-scrollbar { display: none; }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) > [data-testid="stColumn"] {
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) [data-testid="stHorizontalBlock"]::-webkit-scrollbar { display: none; }
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
         flex: 0 0 auto !important;
         width: auto !important;
         min-width: fit-content !important;
     }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) .stButton > button {
         background: #f0f1f6 !important;
         color: #555 !important;
         border: 1px solid #e0e2ea !important;
@@ -172,7 +182,7 @@ st.markdown("""
         min-height: unset !important;
         line-height: 1.3 !important;
     }
-    [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button:hover {
+    [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) .stButton > button:hover {
         background: #e4e5f0 !important;
         border-color: #667eea !important;
         color: #667eea !important;
@@ -201,56 +211,18 @@ st.markdown("""
         letter-spacing: 0.3px;
     }
 
-    /* Week tab anchor (hidden marker inside the tab container) */
-    .week-tab-anchor { display: none; }
-
-    /* Week tab row: horizontal scroll, no wrap */
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] {
-        overflow-x: auto !important;
-        flex-wrap: nowrap !important;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        gap: 8px !important;
-        padding: 0.2rem 0;
-    }
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"]::-webkit-scrollbar { display: none; }
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-        flex: 0 0 auto !important;
-        width: auto !important;
-        min-width: fit-content !important;
-    }
-
-    /* Week tab buttons — target the container that has .week-tab-anchor inside it */
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
-        background: #e8e9ee !important;
-        color: #555 !important;
-        font-weight: 600 !important;
-        font-size: 0.92rem !important;
-        padding: 0.45rem 1.1rem !important;
-        border-radius: 8px !important;
-        border: 2px solid transparent !important;
-        white-space: nowrap !important;
-        letter-spacing: 0.3px !important;
-        box-shadow: none !important;
-        min-height: unset !important;
-        line-height: 1.3 !important;
-        transition: all 0.2s !important;
-    }
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:hover {
-        background: #ddd !important;
-        color: #333 !important;
-        transform: none !important;
-        box-shadow: none !important;
-    }
-    /* Active week button (disabled=true) — gold badge style */
-    [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button:disabled {
+    /* Week pills — active pill gold badge */
+    [data-testid="stPills"] button[aria-pressed="true"],
+    [data-testid="stPills"] button[aria-checked="true"] {
         background: linear-gradient(135deg, #FFD600 0%, #FFC107 100%) !important;
         color: #333 !important;
         font-weight: 700 !important;
         box-shadow: 0 2px 8px rgba(255, 193, 7, 0.35) !important;
-        border-color: transparent !important;
-        opacity: 1 !important;
-        cursor: default !important;
+        border: none !important;
+    }
+    [data-testid="stPills"] button {
+        font-weight: 600 !important;
+        border-radius: 8px !important;
     }
 
     .info-card { background: white; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; color: #666; text-align: center; margin-bottom: 0.5rem; }
@@ -261,15 +233,11 @@ st.markdown("""
         .block-container { padding: 0.3rem !important; }
         .main-header { padding: 0.7rem 0.5rem 0.6rem; margin-bottom: 0.3rem; }
         .main-header h1 { font-size: 1.2rem !important; }
-        [data-testid="stHorizontalBlock"]:has(> :nth-child(3)) .stButton > button {
+        [data-testid="stVerticalBlock"]:has(.popular-pill-anchor) .stButton > button {
             padding: 0.3rem 0.65rem !important;
             font-size: 0.78rem !important;
         }
         .poster-badge { font-size: 0.9rem; padding: 0.3rem 1rem; }
-        [data-testid="stVerticalBlock"]:has(.week-tab-anchor) .stButton > button {
-            font-size: 0.82rem !important;
-            padding: 0.35rem 0.9rem !important;
-        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -903,7 +871,7 @@ def main():
         return
 
     # Arama kutusu
-    with st.form("arama_form", clear_on_submit=False):
+    with st.form("arama_form", clear_on_submit=False, border=False):
         col1, col2 = st.columns([5, 1])
         with col1:
             arama_text = st.text_input(
@@ -961,7 +929,7 @@ function norm(s){
   var out='';
   for(var i=0;i<s.length;i++){out+=map[s[i]]||s[i];}
   if(out.normalize){out=out.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-  return out.toLowerCase().replace(/\s+/g,' ').trim();
+  return out.toLowerCase().replace(/\\s+/g,' ').trim();
 }
 
 var IDX=S.map(function(raw){
@@ -1048,6 +1016,7 @@ pd.addEventListener('click',function(e){if(!dd.contains(e.target)&&e.target!==in
     populer = get_populer_terimler()
 
     if populer:
+        st.markdown('<div class="popular-pill-anchor"></div>', unsafe_allow_html=True)
         st.markdown(_latin1_safe('<div style="font-size:0.85rem; font-weight:600; color:#555; padding:8px 0 2px 2px; margin-bottom:6px;">🔥 Popüler Aramalar</div>'), unsafe_allow_html=True)
         cols_pop = st.columns(len(populer))
         for i, p in enumerate(populer):
@@ -1138,26 +1107,17 @@ def _frontend_poster_viewer():
         st.session_state["fe_week_select"] = weeks[0]
     selected_week = st.session_state["fe_week_select"]
 
-    # Hafta badge tab bar — yatay kaydırılabilir
-    if len(weeks) > 1:
-        wtab_container = st.container()
-        with wtab_container:
-            st.markdown('<div class="week-tab-anchor"></div>', unsafe_allow_html=True)
-            tab_cols = st.columns(len(weeks))
-            for i, w in enumerate(weeks):
-                with tab_cols[i]:
-                    is_active = (w == selected_week)
-                    if is_active:
-                        st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True, disabled=True)
-                    else:
-                        if st.button(week_names[w], key=f"fe_wtab_{w}", use_container_width=True):
-                            st.session_state["fe_week_select"] = w
-                            st.session_state["fe_pv_idx"] = 0
-                            st.session_state.pop("_pv_cache_fe_poster_viewer", None)
-                            st.rerun()
-    else:
-        # Tek hafta — sadece badge göster
-        st.markdown(_latin1_safe(f'<div class="poster-badge">{_safe_html(week_names[weeks[0]])}</div>'), unsafe_allow_html=True)
+    # Hafta seçimi — st.pills (native widget, CSS hack gerektirmez)
+    pill_options = [week_names[w] for w in weeks]
+    pill_default = week_names[selected_week]
+    picked = st.pills("Hafta", pill_options, default=pill_default, key="fe_week_pills", label_visibility="collapsed")
+    if picked and picked != pill_default:
+        for w in weeks:
+            if week_names[w] == picked:
+                st.session_state["fe_week_select"] = w
+                st.session_state["fe_pv_idx"] = 0
+                st.session_state.pop("_pv_cache_fe_poster_viewer", None)
+                st.rerun()
 
     # Poster sayfalarını DB'den yükle (cache)
     cache_key = f"_fe_dbpages_{selected_week}"
