@@ -141,11 +141,6 @@ st.markdown("""
     .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.6rem 0.8rem !important; font-size: 0.95rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
 
-    /* Hide ALL form borders and padding */
-    [data-testid="stForm"],
-    [data-testid="stForm"] > div:first-child,
-    .stForm, form { border: none !important; padding: 0 !important; box-shadow: none !important; background: transparent !important; }
-
     /* Ara butonu */
     .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
     .stButton > button:hover { box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important; }
@@ -908,18 +903,17 @@ def main():
         st.info("Lütfen ayarları kontrol edin.")
         return
 
-    # Arama kutusu
-    with st.form("arama_form", clear_on_submit=False):
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            arama_text = st.text_input(
-                "Arama",
-                placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
-                label_visibility="collapsed",
-                key="arama_input"
-            )
-        with col2:
-            ara_btn = st.form_submit_button("🔍 Ara", use_container_width=True, type="primary")
+    # Arama kutusu (form yok — border sorunu çözümü)
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        arama_text = st.text_input(
+            "Arama",
+            placeholder="Ürün kodu veya adı yazın (örn: kedi mama, tv 55)...",
+            label_visibility="collapsed",
+            key="arama_input"
+        )
+    with col2:
+        ara_btn = st.button("🔍 Ara", use_container_width=True, type="primary")
 
     # Autocomplete önerileri (client-side, performans dostu)
     oneriler = get_oneri_listesi()
