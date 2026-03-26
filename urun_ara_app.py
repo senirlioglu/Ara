@@ -967,7 +967,7 @@ function norm(s){
   var out='';
   for(var i=0;i<s.length;i++){out+=map[s[i]]||s[i];}
   if(out.normalize){out=out.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-  return out.toLowerCase().replace(/\s+/g,' ').trim();
+  return out.toLowerCase().replace(/\\s+/g,' ').trim();
 }
 
 var IDX=S.map(function(raw){
