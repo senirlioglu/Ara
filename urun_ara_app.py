@@ -115,10 +115,11 @@ st.markdown("""
     .stApp { background: #f5f7fa; }
     header[data-testid="stHeader"] { background: transparent; }
 
-    /* Prevent any horizontal scroll from overflowing elements */
-    .stMainBlockContainer, [data-testid="stAppViewBlockContainer"],
-    .block-container, [data-testid="stMain"] {
+    /* Prevent horizontal scroll */
+    html, body, .stApp, .stMainBlockContainer, [data-testid="stAppViewBlockContainer"],
+    .block-container, [data-testid="stMain"], section[data-testid="stMain"] > div {
         overflow-x: clip !important;
+        max-width: 100vw !important;
     }
 
     /* Block spacing */
@@ -130,7 +131,7 @@ st.markdown("""
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1rem 0.75rem 0.8rem;
         border-radius: 0 0 16px 16px;
-        margin: -1rem -1rem 0.5rem -1rem;
+        margin: 0 -1rem 0.5rem -1rem;
         text-align: center;
         box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
     }
@@ -140,8 +141,10 @@ st.markdown("""
     .stTextInput > div > div > input { border-radius: 12px !important; border: 2px solid #e0e0e0 !important; padding: 0.6rem 0.8rem !important; font-size: 0.95rem !important; }
     .stTextInput > div > div > input:focus { border-color: #667eea !important; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important; }
 
-    /* Hide form border on search form */
-    [data-testid="stForm"] { border: none !important; padding: 0 !important; }
+    /* Hide ALL form borders and padding */
+    [data-testid="stForm"],
+    [data-testid="stForm"] > div:first-child,
+    .stForm, form { border: none !important; padding: 0 !important; box-shadow: none !important; background: transparent !important; }
 
     /* Ara butonu */
     .stButton > button { border-radius: 12px !important; padding: 0.6rem 1rem !important; font-weight: 600 !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
