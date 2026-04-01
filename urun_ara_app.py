@@ -1648,9 +1648,10 @@ def _mapping_tool_tab():
             sel_mid = sel_m["mapping_id"]
             is_pending = sel_mid < 0
 
-            # Edit form for selected mapping (2 text_input + 2 buttons instead of N*5)
-            new_kod = st.text_input("Kod", value=sel_m["urun_kodu"] or "", key="mt_ek_sel")
-            new_desc = st.text_input("Açıklama", value=sel_m["urun_aciklamasi"] or "", key="mt_ed_sel")
+            # Edit form for selected mapping — keys tied to mapping ID so
+            # Streamlit resets widget values when selection changes
+            new_kod = st.text_input("Kod", value=sel_m["urun_kodu"] or "", key=f"mt_ek_{sel_mid}")
+            new_desc = st.text_input("Açıklama", value=sel_m["urun_aciklamasi"] or "", key=f"mt_ed_{sel_mid}")
             ec1, ec2 = st.columns(2)
             with ec1:
                 if st.button("Güncelle", key="mt_eu_sel", use_container_width=True):
