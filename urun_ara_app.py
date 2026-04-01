@@ -1212,7 +1212,7 @@ def _mapping_tool_tab():
         "mt_product_labels": [],
         "mt_week_id": datetime.now().strftime("%Y-%m-%d"),
         "mt_bbox": None,
-        "mt_queue_idx": 0,       # active product index in queue
+        "mt_queue_kod": None,    # active product code in queue (stable identity)
         "mt_mode": "upload",     # upload | mapping
         "mt_pending_mappings": [],      # new mappings not yet saved to Supabase
         "mt_pending_deletes": [],       # DB mapping_ids to delete on flush
@@ -1310,7 +1310,7 @@ def _mapping_tool_tab():
                     ]
                     st.session_state["mt_week_id"] = resume_wid
                     st.session_state["mt_bbox"] = None
-                    st.session_state["mt_queue_idx"] = 0
+                    st.session_state["mt_queue_kod"] = None
                     st.session_state["mt_mode"] = "mapping"
                     st.rerun()
                 else:
@@ -1443,62 +1443,68 @@ def _mapping_tool_tab():
             if remaining_prods:
                 st.caption(f"{len(remaining_prods)} ürün kaldı")
 
-                q_idx = st.session_state.get("mt_queue_idx", 0)
-                if q_idx >= len(remaining_prods):
-                    q_idx = 0
-                    st.session_state["mt_queue_idx"] = 0
+                # --- Selection by stable product code, not positional index ---
+                # Resolve current selection from session_state (stored as urun_kod)
+                sel_kod = st.session_state.get("mt_queue_kod")
+                # Build code→index lookup for the current remaining list
+                _rem_kod_to_idx = {rp["urun_kod"]: i for i, (_, rp) in enumerate(remaining_prods)}
+                if sel_kod not in _rem_kod_to_idx:
+                    # Selected product was mapped or doesn't exist — fall back to first
+                    sel_kod = remaining_prods[0][1]["urun_kod"]
+                    st.session_state["mt_queue_kod"] = sel_kod
+                q_idx = _rem_kod_to_idx[sel_kod]
 
-                # Visible scannable list using st.radio (1 widget, all items visible)
-                # Paginate to keep widget rendering fast: show 15 items around active index
+                # Paginate: show 15 items centered on active index
                 _Q_PAGE = 15
                 page_start = max(0, q_idx - _Q_PAGE // 2)
                 page_end = min(len(remaining_prods), page_start + _Q_PAGE)
-                page_start = max(0, page_end - _Q_PAGE)  # re-adjust if near end
+                page_start = max(0, page_end - _Q_PAGE)
                 visible_slice = remaining_prods[page_start:page_end]
 
-                radio_labels = []
-                for ri, (_, rp) in enumerate(visible_slice):
-                    radio_labels.append(f"`{rp['urun_kod']}` — {rp.get('urun_ad', '')}")
+                # Radio options keyed by product code for stable identity
+                radio_codes = [rp["urun_kod"] for _, rp in visible_slice]
+                radio_labels_map = {
+                    rp["urun_kod"]: f"`{rp['urun_kod']}` — {rp.get('urun_ad', '')}"
+                    for _, rp in visible_slice
+                }
+                radio_default_idx = radio_codes.index(sel_kod) if sel_kod in radio_codes else 0
 
-                # Map current q_idx to position within visible page
-                radio_default = q_idx - page_start
-                if radio_default < 0 or radio_default >= len(radio_labels):
-                    radio_default = 0
-
-                sel_radio = st.radio(
-                    "Ürün seç:", range(len(visible_slice)),
-                    index=radio_default,
-                    format_func=lambda i: radio_labels[i],
+                sel_radio_code = st.radio(
+                    "Ürün seç:", radio_codes,
+                    index=radio_default_idx,
+                    format_func=lambda c: radio_labels_map[c],
                     key="mt_q_radio",
                     label_visibility="collapsed",
                 )
-                # Sync radio selection back to queue index
-                new_q_idx = page_start + sel_radio
-                if new_q_idx != q_idx:
-                    st.session_state["mt_queue_idx"] = new_q_idx
-                    q_idx = new_q_idx
+                # Sync radio selection back to stable code
+                if sel_radio_code != sel_kod:
+                    st.session_state["mt_queue_kod"] = sel_radio_code
+                    sel_kod = sel_radio_code
+                    q_idx = _rem_kod_to_idx[sel_kod]
 
-                _, active_prod = remaining_prods[q_idx]
+                active_prod = remaining_prods[q_idx][1]
 
-                # Page indicator when list is longer than visible window
+                # Page indicator
                 if len(remaining_prods) > _Q_PAGE:
                     st.caption(f"Gösterilen: {page_start+1}–{page_end} / {len(remaining_prods)}")
 
-                # Eşleştir butonu
+                # Eşleştir butonu — saves by product code, not by index
                 if st.button("Eşleştir (kutu + bu ürün)", key="mt_q_save",
                              type="primary", disabled=(bbox is None), use_container_width=True):
                     _mt_save_local(page, bbox, active_prod["urun_kod"],
                                    active_prod.get("urun_ad"), "excel")
 
-                # Atla / Geri — advances queue and re-centers the visible window
+                # Atla / Geri — advance by code identity
                 ac1, ac2 = st.columns(2)
                 with ac1:
                     if st.button("Atla →", key="mt_q_skip", use_container_width=True):
-                        st.session_state["mt_queue_idx"] = (q_idx + 1) % len(remaining_prods)
+                        next_idx = (q_idx + 1) % len(remaining_prods)
+                        st.session_state["mt_queue_kod"] = remaining_prods[next_idx][1]["urun_kod"]
                         st.rerun()
                 with ac2:
                     if st.button("← Geri", key="mt_q_prev", use_container_width=True):
-                        st.session_state["mt_queue_idx"] = (q_idx - 1) % len(remaining_prods)
+                        prev_idx = (q_idx - 1) % len(remaining_prods)
+                        st.session_state["mt_queue_kod"] = remaining_prods[prev_idx][1]["urun_kod"]
                         st.rerun()
             else:
                 st.success("Tüm ürünler eşleştirildi!")
@@ -1510,19 +1516,22 @@ def _mapping_tool_tab():
             if query and products:
                 results = search_products(query, products, limit=10)
                 if results:
-                    # Visible radio list + single action button (1 widget + 1 button)
-                    sr_labels = []
+                    # Radio keyed by product code for stable identity across reruns
+                    sr_codes = [r["urun_kod"] for r in results]
+                    sr_code_to_result = {r["urun_kod"]: r for r in results}
+                    sr_labels_map = {}
                     for r in results:
                         is_mapped = r["urun_kod"] in mapped_codes
                         status = " ✓" if is_mapped else ""
-                        sr_labels.append(f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{status}")
-                    sr_sel = st.radio(
-                        "Sonuç seç:", range(len(results)),
-                        format_func=lambda i: sr_labels[i],
+                        sr_labels_map[r["urun_kod"]] = f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{status}"
+
+                    sel_sr_code = st.radio(
+                        "Sonuç seç:", sr_codes,
+                        format_func=lambda c: sr_labels_map[c],
                         key="mt_sr_radio",
                         label_visibility="collapsed",
                     )
-                    sel_r = results[sr_sel]
+                    sel_r = sr_code_to_result[sel_sr_code]
                     if st.button("Eşleştir (kutu + seçili)", key="mt_sr_save",
                                  type="primary", disabled=(bbox is None), use_container_width=True):
                         _mt_save_local(page, bbox, sel_r["urun_kod"],
@@ -1629,28 +1638,29 @@ def _mapping_tool_tab():
                 st.session_state.pop("_confirm_clear_page", None)
                 st.rerun()
 
-    # --- Saved mappings: selectbox + edit form (replaces N*5 inline widgets) ---
+    # --- Saved mappings: selectbox by mapping_id + edit form ---
     if saved:
         with st.expander(f"Bu Sayfadaki Eşleştirmeler ({len(saved)})", expanded=False):
-            # Read-only summary list (no widgets per row)
-            map_options = []
+            # Selectbox keyed by mapping_id (stable identity, not positional index)
+            mid_list = [m["mapping_id"] for m in saved]
+            mid_to_mapping = {m["mapping_id"]: m for m in saved}
+            mid_labels = {}
             for m in saved:
                 mid = m["mapping_id"]
                 tag = f"*{abs(mid)}" if mid < 0 else f"#{mid}"
-                map_options.append(f"{tag}  {m.get('urun_kodu') or '?'} — {m.get('urun_aciklamasi') or ''}")
+                mid_labels[mid] = f"{tag}  {m.get('urun_kodu') or '?'} — {m.get('urun_aciklamasi') or ''}"
 
-            sel_map_idx = st.selectbox(
-                "Eşleştirme seç:", range(len(saved)),
-                format_func=lambda i: map_options[i],
+            sel_mid = st.selectbox(
+                "Eşleştirme seç:", mid_list,
+                format_func=lambda mid: mid_labels[mid],
                 key="mt_map_select",
             )
-            sel_m = saved[sel_map_idx]
-            sel_mid = sel_m["mapping_id"]
+            sel_m = mid_to_mapping[sel_mid]
             is_pending = sel_mid < 0
 
-            # Edit form for selected mapping (2 text_input + 2 buttons instead of N*5)
-            new_kod = st.text_input("Kod", value=sel_m["urun_kodu"] or "", key="mt_ek_sel")
-            new_desc = st.text_input("Açıklama", value=sel_m["urun_aciklamasi"] or "", key="mt_ed_sel")
+            # Edit form — keys include mapping_id so inputs refresh on selection change
+            new_kod = st.text_input("Kod", value=sel_m["urun_kodu"] or "", key=f"mt_ek_{sel_mid}")
+            new_desc = st.text_input("Açıklama", value=sel_m["urun_aciklamasi"] or "", key=f"mt_ed_{sel_mid}")
             ec1, ec2 = st.columns(2)
             with ec1:
                 if st.button("Güncelle", key="mt_eu_sel", use_container_width=True):
@@ -1697,7 +1707,7 @@ def _clear_week_session_state(week_id: str | None = None):
     # Mapping mode: silinen hafta aktif haftaysa upload'a dön
     if week_id and st.session_state.get("mt_week_id") == week_id:
         for k in ("mt_pages", "mt_products", "mt_product_labels",
-                  "mt_bbox", "mt_queue_idx"):
+                  "mt_bbox", "mt_queue_kod"):
             st.session_state.pop(k, None)
         st.session_state["mt_mode"] = "upload"
 
@@ -2051,7 +2061,7 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
     save_week_fn(mt_week, week_name=mt_week_name or mt_week)
 
     st.session_state["mt_bbox"] = None
-    st.session_state["mt_queue_idx"] = 0
+    st.session_state["mt_queue_kod"] = None
     st.session_state["mt_mode"] = "mapping"
     st.rerun()
 
