@@ -348,6 +348,32 @@ def get_poster_pages(week_id: str, db_path=None) -> list[dict]:
     return pages
 
 
+def get_poster_pages_meta(week_id: str, db_path=None) -> list[dict]:
+    """Return poster page metadata WITHOUT downloading images.
+
+    Use this for admin views that only need page info (titles, sort order, counts).
+    """
+    sb = _get_client()
+    res = (
+        sb.table("poster_pages")
+        .select("id, week_id, flyer_filename, page_no, image_path, title, sort_order")
+        .eq("week_id", week_id)
+        .order("sort_order")
+        .order("flyer_filename")
+        .order("page_no")
+        .execute()
+    )
+    return [{
+        "id": r["id"],
+        "week_id": r["week_id"],
+        "flyer_filename": r["flyer_filename"],
+        "page_no": r["page_no"],
+        "image_path": r.get("image_path", ""),
+        "title": r.get("title", ""),
+        "sort_order": r.get("sort_order", 0),
+    } for r in (res.data or [])]
+
+
 def update_poster_page(page_id: int, fields: dict, db_path=None):
     """Update title or sort_order of a poster page."""
     allowed = {"title", "sort_order"}
@@ -493,6 +519,80 @@ def get_mapped_product_codes(week_id: str, db_path=None) -> set[str]:
     return {r["urun_kodu"] for r in (res.data or [])}
 
 
+# ---------------------------------------------------------------------------
+# Batch operations for flush (reduces N round-trips to ~3)
+# ---------------------------------------------------------------------------
+
+def save_mappings_bulk(mappings: list[dict], db_path=None) -> list[int]:
+    """Insert multiple mappings in a single request. Returns new IDs."""
+    if not mappings:
+        return []
+    sb = _get_client()
+    rows = []
+    for m in mappings:
+        rows.append({
+            "week_id": m["week_id"],
+            "flyer_filename": m["flyer_filename"],
+            "page_no": m["page_no"],
+            "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+            "urun_kodu": m.get("urun_kodu"),
+            "urun_aciklamasi": m.get("urun_aciklamasi"),
+            "afis_fiyat": m.get("afis_fiyat"),
+            "ocr_text": m.get("ocr_text"),
+            "source": m.get("source", "suggested"),
+            "status": m.get("status", "matched"),
+            "created_at": m.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        })
+    res = sb.table("mappings").insert(rows).execute()
+    return [r["mapping_id"] for r in (res.data or [])]
+
+
+def delete_mappings_bulk(mapping_ids: list[int], week_id: str = None, db_path=None):
+    """Delete multiple mappings by ID in a single request."""
+    if not mapping_ids:
+        return
+    sb = _get_client()
+    q = sb.table("mappings").delete().in_("mapping_id", mapping_ids)
+    if week_id:
+        q = q.eq("week_id", week_id)
+    q.execute()
+
+
+def update_mappings_bulk(updates: dict[int, dict], db_path=None):
+    """Apply multiple mapping updates. Groups by identical field sets for efficiency."""
+    if not updates:
+        return
+    sb = _get_client()
+    # For each mapping_id, apply update individually (Supabase doesn't support
+    # batch update with different values per row without RPC)
+    # But we can group updates with identical payloads
+    from collections import defaultdict
+    groups: dict[tuple, list[int]] = defaultdict(list)
+    for mid, fields in updates.items():
+        allowed = {"urun_kodu", "urun_aciklamasi", "afis_fiyat", "source",
+                   "status", "x0", "y0", "x1", "y1"}
+        to_set = {k: v for k, v in fields.items() if k in allowed}
+        key = tuple(sorted(to_set.items()))
+        groups[key].append(mid)
+
+    for field_tuple, mids in groups.items():
+        to_set = dict(field_tuple)
+        if not to_set:
+            continue
+        sb.table("mappings").update(to_set).in_("mapping_id", mids).execute()
+
+
+def mark_products_mapped_bulk(week_id: str, codes: set[str], mapped: bool = True, db_path=None):
+    """Mark/unmark multiple product codes in a single request."""
+    if not codes:
+        return
+    sb = _get_client()
+    code_list = list(codes)
+    sb.table("week_products").update(
+        {"is_mapped": mapped}
+    ).eq("week_id", week_id).in_("urun_kodu", code_list).execute()
+
+
 # ============================================================================
 # POSTER WEEKS — week metadata & status
 # ============================================================================
@@ -547,14 +647,21 @@ def update_week_sort_order(week_id: str, sort_order: int, db_path=None):
 
 
 def list_weeks_with_meta(db_path=None) -> list[dict]:
-    """Return all weeks with metadata and stats."""
+    """Return all weeks with metadata and stats.
+
+    Uses 3 bulk GROUP BY queries (one per table) instead of 3*N individual
+    count queries. Reduces Supabase round-trips from 3N+1 to 4 total.
+    """
     sb = _get_client()
-    # Fetch all weeks (sort in Python for proper 0=unset logic)
+    # Fetch all weeks
     try:
         weeks_res = sb.table("poster_weeks").select("*").execute()
     except Exception:
         weeks_res = sb.table("poster_weeks").select("*").order("created_at", desc=True).execute()
     weeks = weeks_res.data or []
+
+    if not weeks:
+        return []
 
     # Sort: sort_order>0 first (ASC, newest first as tiebreaker),
     # then sort_order=0 by newest created_at
@@ -563,9 +670,9 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
 
     from functools import cmp_to_key
     def _cmp_ordered_weeks(a, b):
-        sa, sb = a.get("sort_order") or 0, b.get("sort_order") or 0
-        if sa != sb:
-            return -1 if sa < sb else 1
+        sa, sb_ = a.get("sort_order") or 0, b.get("sort_order") or 0
+        if sa != sb_:
+            return -1 if sa < sb_ else 1
         ca, cb = a.get("created_at") or "", b.get("created_at") or ""
         if ca > cb:
             return -1
@@ -576,37 +683,43 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
     unordered.sort(key=lambda w: w.get("created_at") or "", reverse=True)
     weeks = ordered + unordered
 
-    if not weeks:
-        return []
+    # Bulk counts: 3 queries total instead of 3*N
+    page_counts: dict[str, int] = {}
+    mapping_counts: dict[str, int] = {}
+    product_counts: dict[str, int] = {}
 
-    # Use server-side count queries (HEAD request, no data transfer) with
-    # retry logic to handle httpx connection pool exhaustion under load.
-    page_counts = {}
-    mapping_counts = {}
-    product_counts = {}
-    for w in weeks:
-        wid = w["week_id"]
+    # Try RPC first (single round-trip), fall back to 3 group-by selects
+    try:
+        rpc_res = sb.rpc("get_week_counts", {}).execute()
+        if rpc_res.data:
+            for r in rpc_res.data:
+                wid = r["week_id"]
+                page_counts[wid] = r.get("page_count", 0)
+                mapping_counts[wid] = r.get("mapping_count", 0)
+                product_counts[wid] = r.get("product_count", 0)
+    except Exception:
+        # RPC not installed yet — use 3 lightweight group-by queries
         try:
-            pg = _sb_execute_with_retry(
-                sb.table("poster_pages").select("*", count="exact", head=True).eq("week_id", wid))
-            page_counts[wid] = pg.count or 0
+            pg_res = sb.table("poster_pages").select("week_id").execute()
+            for r in (pg_res.data or []):
+                wid = r["week_id"]
+                page_counts[wid] = page_counts.get(wid, 0) + 1
         except Exception:
-            log.warning("Failed to count poster_pages for week %s", wid)
-            page_counts[wid] = 0
+            pass
         try:
-            mp = _sb_execute_with_retry(
-                sb.table("mappings").select("*", count="exact", head=True).eq("week_id", wid))
-            mapping_counts[wid] = mp.count or 0
+            mp_res = sb.table("mappings").select("week_id").execute()
+            for r in (mp_res.data or []):
+                wid = r["week_id"]
+                mapping_counts[wid] = mapping_counts.get(wid, 0) + 1
         except Exception:
-            log.warning("Failed to count mappings for week %s", wid)
-            mapping_counts[wid] = 0
+            pass
         try:
-            pr = _sb_execute_with_retry(
-                sb.table("week_products").select("*", count="exact", head=True).eq("week_id", wid))
-            product_counts[wid] = pr.count or 0
+            pr_res = sb.table("week_products").select("week_id").execute()
+            for r in (pr_res.data or []):
+                wid = r["week_id"]
+                product_counts[wid] = product_counts.get(wid, 0) + 1
         except Exception:
-            log.warning("Failed to count week_products for week %s", wid)
-            product_counts[wid] = 0
+            pass
 
     result = []
     for w in weeks:

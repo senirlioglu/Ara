@@ -1189,7 +1189,7 @@ def _mapping_tool_tab():
     import uuid as _uuid
 
     from components.bbox_canvas import bbox_canvas
-    from mapping_ui.search import search_products
+    from mapping_ui.search import search_products, build_search_index
 
     # init_db sadece bir kez çalışsın
     if "mt_db_ready" not in st.session_state:
@@ -1300,10 +1300,11 @@ def _mapping_tool_tab():
                         "png_bytes": pg["png_data"],
                         "w": 0, "h": 0,
                     } for pg in db_pages]
-                    st.session_state["mt_products"] = [
+                    raw_prods = [
                         {"urun_kod": p["urun_kodu"], "urun_ad": p.get("urun_aciklamasi", "")}
                         for p in db_prods
                     ]
+                    st.session_state["mt_products"] = build_search_index(raw_prods)
                     st.session_state["mt_product_labels"] = [
                         f'{p["urun_kodu"]} — {p.get("urun_aciklamasi", "")}' for p in db_prods
                     ]
@@ -1442,14 +1443,25 @@ def _mapping_tool_tab():
             if remaining_prods:
                 st.caption(f"{len(remaining_prods)} ürün kaldı")
 
-                # Aktif ürünü göster (queue'daki ilk)
+                # Selectbox replaces 30 per-row buttons (saves ~30 widgets)
+                q_options = [f"{rp['urun_kod']} — {rp.get('urun_ad', '')}"
+                             for _, rp in remaining_prods]
                 q_idx = st.session_state.get("mt_queue_idx", 0)
                 if q_idx >= len(remaining_prods):
                     q_idx = 0
                     st.session_state["mt_queue_idx"] = 0
 
+                sel_q = st.selectbox(
+                    "Ürün seç:", range(len(remaining_prods)),
+                    index=q_idx,
+                    format_func=lambda i: q_options[i],
+                    key="mt_q_select",
+                )
+                if sel_q != q_idx:
+                    st.session_state["mt_queue_idx"] = sel_q
+                    q_idx = sel_q
+
                 _, active_prod = remaining_prods[q_idx]
-                st.markdown(f"**Aktif:** `{active_prod['urun_kod']}` — {active_prod.get('urun_ad', '')}")
 
                 # Eşleştir butonu
                 if st.button("Eşleştir (kutu + bu ürün)", key="mt_q_save",
@@ -1457,7 +1469,7 @@ def _mapping_tool_tab():
                     _mt_save_local(page, bbox, active_prod["urun_kod"],
                                    active_prod.get("urun_ad"), "excel")
 
-                # Atla butonu
+                # Atla / Geri (no rerun needed — selectbox handles navigation)
                 ac1, ac2 = st.columns(2)
                 with ac1:
                     if st.button("Atla →", key="mt_q_skip", use_container_width=True):
@@ -1467,22 +1479,6 @@ def _mapping_tool_tab():
                     if st.button("← Geri", key="mt_q_prev", use_container_width=True):
                         st.session_state["mt_queue_idx"] = (q_idx - 1) % len(remaining_prods)
                         st.rerun()
-
-                # Kalan listesi (kompakt)
-                st.markdown("---")
-                for ri, (orig_idx, rp) in enumerate(remaining_prods[:30]):
-                    is_active = (ri == q_idx)
-                    prefix = "**→**" if is_active else ""
-                    label = f"{prefix} `{rp['urun_kod']}` {rp.get('urun_ad', '')}"
-                    rc1, rc2 = st.columns([5, 1])
-                    with rc1:
-                        st.markdown(label, unsafe_allow_html=True)
-                    with rc2:
-                        if st.button("Seç", key=f"mt_qsel_{orig_idx}", use_container_width=True):
-                            st.session_state["mt_queue_idx"] = ri
-                            st.rerun()
-                if len(remaining_prods) > 30:
-                    st.caption(f"... ve {len(remaining_prods) - 30} ürün daha")
             else:
                 st.success("Tüm ürünler eşleştirildi!")
 
@@ -1493,18 +1489,22 @@ def _mapping_tool_tab():
             if query and products:
                 results = search_products(query, products, limit=15)
                 if results:
-                    for ri, r in enumerate(results):
+                    # Selectbox + single button replaces 15 per-row buttons
+                    sr_options = []
+                    for r in results:
                         is_mapped = r["urun_kod"] in mapped_codes
                         status = " ✓" if is_mapped else ""
-                        label = f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{status}"
-                        sc1, sc2 = st.columns([5, 1])
-                        with sc1:
-                            st.markdown(label)
-                        with sc2:
-                            if st.button("Eşle", key=f"mt_sr_{ri}",
-                                         disabled=(bbox is None), use_container_width=True):
-                                _mt_save_local(page, bbox, r["urun_kod"],
-                                               r.get("urun_ad"), "excel")
+                        sr_options.append(f"{r['urun_kod']} — {r.get('urun_ad', '')}{status}")
+                    sr_sel = st.selectbox(
+                        "Sonuç seç:", range(len(results)),
+                        format_func=lambda i: sr_options[i],
+                        key="mt_sr_select",
+                    )
+                    sel_r = results[sr_sel]
+                    if st.button("Eşleştir (kutu + seçili)", key="mt_sr_save",
+                                 type="primary", disabled=(bbox is None), use_container_width=True):
+                        _mt_save_local(page, bbox, sel_r["urun_kod"],
+                                       sel_r.get("urun_ad"), "excel")
                 else:
                     st.caption("Sonuç bulunamadı")
             elif query and not products:
@@ -1607,57 +1607,58 @@ def _mapping_tool_tab():
                 st.session_state.pop("_confirm_clear_page", None)
                 st.rerun()
 
-    # --- Saved mappings table with inline edit/delete ---
+    # --- Saved mappings: selectbox + edit form (replaces N*5 inline widgets) ---
     if saved:
         with st.expander(f"Bu Sayfadaki Eşleştirmeler ({len(saved)})", expanded=False):
-            for i, m in enumerate(saved):
+            # Read-only summary list (no widgets per row)
+            map_options = []
+            for m in saved:
                 mid = m["mapping_id"]
-                is_pending = mid < 0
-                rc1, rc2, rc3, rc4, rc5 = st.columns([1, 2.5, 3, 1.5, 1.5])
-                with rc1:
-                    label = f"*{abs(mid)}" if is_pending else f"#{mid}"
-                    st.caption(label)
-                with rc2:
-                    new_kod = st.text_input(
-                        "Kod", value=m["urun_kodu"] or "", key=f"mt_ek_{mid}",
-                        label_visibility="collapsed",
-                    )
-                with rc3:
-                    new_desc = st.text_input(
-                        "Açıklama", value=m["urun_aciklamasi"] or "", key=f"mt_ed_{mid}",
-                        label_visibility="collapsed",
-                    )
-                with rc4:
-                    if st.button("Güncelle", key=f"mt_eu_{mid}", use_container_width=True):
-                        if is_pending:
-                            # Update in pending list directly
-                            for pm in st.session_state["mt_pending_mappings"]:
-                                if pm["mapping_id"] == mid:
-                                    pm["urun_kodu"] = new_kod.strip()
-                                    pm["urun_aciklamasi"] = new_desc.strip() or None
-                                    break
-                        else:
-                            # Schedule DB update
-                            st.session_state["mt_pending_updates"][mid] = {
-                                "urun_kodu": new_kod.strip(),
-                                "urun_aciklamasi": new_desc.strip() or None,
-                            }
-                        st.session_state["mt_dirty"] = True
-                        st.rerun()
-                with rc5:
-                    if st.button("Sil", key=f"mt_edel_{mid}", use_container_width=True):
-                        if is_pending:
-                            st.session_state["mt_pending_mappings"] = [
-                                pm for pm in st.session_state["mt_pending_mappings"]
-                                if pm["mapping_id"] != mid
-                            ]
-                        else:
-                            st.session_state["mt_pending_deletes"].append(mid)
-                        if m.get("urun_kodu"):
-                            st.session_state["mt_pending_mapped_codes"].discard(m["urun_kodu"])
-                            st.session_state["mt_pending_unmapped_codes"].add(m["urun_kodu"])
-                        st.session_state["mt_dirty"] = True
-                        st.rerun()
+                tag = f"*{abs(mid)}" if mid < 0 else f"#{mid}"
+                map_options.append(f"{tag}  {m.get('urun_kodu') or '?'} — {m.get('urun_aciklamasi') or ''}")
+
+            sel_map_idx = st.selectbox(
+                "Eşleştirme seç:", range(len(saved)),
+                format_func=lambda i: map_options[i],
+                key="mt_map_select",
+            )
+            sel_m = saved[sel_map_idx]
+            sel_mid = sel_m["mapping_id"]
+            is_pending = sel_mid < 0
+
+            # Edit form for selected mapping (2 text_input + 2 buttons instead of N*5)
+            new_kod = st.text_input("Kod", value=sel_m["urun_kodu"] or "", key="mt_ek_sel")
+            new_desc = st.text_input("Açıklama", value=sel_m["urun_aciklamasi"] or "", key="mt_ed_sel")
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                if st.button("Güncelle", key="mt_eu_sel", use_container_width=True):
+                    if is_pending:
+                        for pm in st.session_state["mt_pending_mappings"]:
+                            if pm["mapping_id"] == sel_mid:
+                                pm["urun_kodu"] = new_kod.strip()
+                                pm["urun_aciklamasi"] = new_desc.strip() or None
+                                break
+                    else:
+                        st.session_state["mt_pending_updates"][sel_mid] = {
+                            "urun_kodu": new_kod.strip(),
+                            "urun_aciklamasi": new_desc.strip() or None,
+                        }
+                    st.session_state["mt_dirty"] = True
+                    st.rerun()
+            with ec2:
+                if st.button("Sil", key="mt_edel_sel", use_container_width=True):
+                    if is_pending:
+                        st.session_state["mt_pending_mappings"] = [
+                            pm for pm in st.session_state["mt_pending_mappings"]
+                            if pm["mapping_id"] != sel_mid
+                        ]
+                    else:
+                        st.session_state["mt_pending_deletes"].append(sel_mid)
+                    if sel_m.get("urun_kodu"):
+                        st.session_state["mt_pending_mapped_codes"].discard(sel_m["urun_kodu"])
+                        st.session_state["mt_pending_unmapped_codes"].add(sel_m["urun_kodu"])
+                    st.session_state["mt_dirty"] = True
+                    st.rerun()
     else:
         st.caption("Bu sayfada henüz eşleştirme yok.")
 
@@ -1696,7 +1697,8 @@ def _poster_viewer_tab():
     from components.poster_viewer import poster_viewer
     from storage import (
         list_mappings as _pv_list,
-        get_poster_pages, update_poster_page, delete_poster_page,
+        get_poster_pages, get_poster_pages_meta,
+        update_poster_page, delete_poster_page,
         delete_week, list_all_weeks, get_week, update_week_status,
         list_weeks_with_meta, get_mapped_product_codes, get_week_products,
     )
@@ -1768,24 +1770,24 @@ def _poster_viewer_tab():
                 st.session_state.pop("_confirm_del_week", None)
                 st.rerun()
 
-    # --- Validasyon özeti ---
-    poster_pages = get_poster_pages(selected_week)
+    # --- Validasyon özeti (metadata only — no image downloads) ---
+    poster_pages_meta = get_poster_pages_meta(selected_week)
     week_products = get_week_products(selected_week)
     mapped_codes = get_mapped_product_codes(selected_week)
 
+    # Bulk fetch all mappings (reused for validation + preview — 1 query instead of N)
+    from storage import list_all_mappings_for_week
+    all_week_mappings = list_all_mappings_for_week(selected_week)
+
     if week_products:
         unmapped = [p for p in week_products if p["urun_kodu"] not in mapped_codes]
-        # Duplikat kontrolü: aynı ürün birden fazla mapping'de
-        all_mapped_codes = []
-        for pg in poster_pages:
-            mappings = _pv_list(selected_week, pg["flyer_filename"], pg["page_no"])
-            all_mapped_codes.extend([m["urun_kodu"] for m in mappings if m.get("urun_kodu")])
+        all_mapped_codes = [m["urun_kodu"] for m in all_week_mappings if m.get("urun_kodu")]
         from collections import Counter
         code_counts = Counter(all_mapped_codes)
         duplicates = {code: cnt for code, cnt in code_counts.items() if cnt > 1}
 
         vc1, vc2, vc3, vc4 = st.columns(4)
-        vc1.metric("Sayfa", len(poster_pages))
+        vc1.metric("Sayfa", len(poster_pages_meta))
         vc2.metric("Ürün", len(week_products))
         vc3.metric("Eşleşen", len(mapped_codes))
         vc4.metric("Kalan", len(unmapped))
@@ -1800,7 +1802,7 @@ def _poster_viewer_tab():
                 for code, cnt in duplicates.items():
                     st.markdown(f"- `{code}` → {cnt} kez eşleştirilmiş")
 
-    if not poster_pages:
+    if not poster_pages_meta:
         st.info("Bu hafta için poster sayfası bulunamadı.")
 
     # --- Yeni Afiş Ekleme (mevcut haftaya) ---
@@ -1842,14 +1844,14 @@ def _poster_viewer_tab():
                 st.success(f"{len(new_pages)} sayfa eklendi!")
                 st.rerun()
 
-    if not poster_pages:
+    if not poster_pages_meta:
         return
 
     # --- Afiş Sayfaları: Başlık, Sıralama, Silme ---
     st.markdown("#### Afiş Sayfaları")
 
     with st.form("pv_pages_form", clear_on_submit=False):
-        for pg in poster_pages:
+        for pg in poster_pages_meta:
             pid = pg["id"]
             tc1, tc2, tc3 = st.columns([3, 2, 1])
             with tc1:
@@ -1868,7 +1870,7 @@ def _poster_viewer_tab():
 
         if st.form_submit_button("Tümünü Kaydet", type="primary", use_container_width=True):
             changed = 0
-            for pg in poster_pages:
+            for pg in poster_pages_meta:
                 pid = pg["id"]
                 new_title = st.session_state.get(f"pv_t_{pid}", pg["title"] or "").strip()
                 raw_sort = st.session_state.get(f"pv_s_{pid}", str(pg["sort_order"]))
@@ -1885,7 +1887,7 @@ def _poster_viewer_tab():
 
     # Silme butonları (form dışında)
     with st.expander("Sayfa Sil", expanded=False):
-        for pg in poster_pages:
+        for pg in poster_pages_meta:
             pid = pg["id"]
             dc1, dc2 = st.columns([4, 1])
             with dc1:
@@ -1901,19 +1903,31 @@ def _poster_viewer_tab():
                         st.session_state[f"_confirm_del_page_{pid}"] = True
                         st.rerun()
 
-    # --- Önizleme ---
+    # --- Önizleme (lazy — only downloads images when expanded) ---
     st.markdown("---")
     st.markdown("#### Önizleme")
 
+    # Cache full poster pages (with images) in session_state to avoid re-downloading
+    _pv_cache_key = f"_pv_cache_{selected_week}"
+    if _pv_cache_key not in st.session_state:
+        st.session_state[_pv_cache_key] = get_poster_pages(selected_week)
+    poster_pages_full = st.session_state[_pv_cache_key]
+
+    # Group mappings by (flyer_filename, page_no) for O(1) lookup
+    from collections import defaultdict
+    _mappings_by_page = defaultdict(list)
+    for m in all_week_mappings:
+        _mappings_by_page[(m["flyer_filename"], m["page_no"])].append(m)
+
     viewer_pages = []
-    for pg in poster_pages:
-        mappings = _pv_list(selected_week, pg["flyer_filename"], pg["page_no"])
+    for pg in poster_pages_full:
+        page_mappings = _mappings_by_page.get((pg["flyer_filename"], pg["page_no"]), [])
         hotspots = [{
             "x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
             "urun_kodu": m.get("urun_kodu") or "?",
             "urun_ad": m.get("urun_aciklamasi") or "",
             "afis_fiyat": m.get("afis_fiyat") or "",
-        } for m in mappings]
+        } for m in page_mappings]
         label = pg["title"] or f'{pg["flyer_filename"]} - Sayfa {pg["page_no"]}'
         viewer_pages.append({
             "png_bytes": pg["png_data"],
@@ -1961,7 +1975,8 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
                 prods.append({"urun_kod": kod, "urun_ad": ad})
                 labels.append(f"{kod} — {ad}" if ad else kod)
                 db_prods.append({"urun_kodu": kod, "urun_aciklamasi": ad, "afis_fiyat": fiyat})
-            st.session_state["mt_products"] = prods
+            from mapping_ui.search import build_search_index
+            st.session_state["mt_products"] = build_search_index(prods)
             st.session_state["mt_product_labels"] = labels
             # Persist product queue to DB
             save_week_products_fn(mt_week, db_prods)
@@ -2060,32 +2075,33 @@ def _mt_save_local(page, bbox, urun_kod, urun_ad, source):
 
 
 def _mt_flush_to_supabase():
-    """Flush all pending mappings/deletes/updates to Supabase."""
+    """Flush all pending mappings/deletes/updates to Supabase.
+
+    Uses bulk operations: ~5 requests total instead of N per pending item.
+    """
     from storage import (
-        save_mapping as _db_save, delete_mapping as _db_delete,
-        update_mapping as _db_update, mark_product_mapped as _db_mark,
-        unmark_product_mapped as _db_unmark,
+        save_mappings_bulk, delete_mappings_bulk,
+        update_mappings_bulk, mark_products_mapped_bulk,
     )
     week_id = st.session_state["mt_week_id"]
 
-    # 1. Insert pending mappings
+    # 1. Bulk insert pending mappings (strip temp IDs and index fields)
+    insert_rows = []
     for m in st.session_state["mt_pending_mappings"]:
-        row = {k: v for k, v in m.items() if k != "mapping_id"}  # strip temp ID
-        _db_save(row)
+        row = {k: v for k, v in m.items()
+               if k not in ("mapping_id", "_norm_text", "_norm_tokens", "_kod", "score")}
+        insert_rows.append(row)
+    save_mappings_bulk(insert_rows)
 
-    # 2. Delete pending deletes (with week_id guard)
-    for mid in st.session_state["mt_pending_deletes"]:
-        _db_delete(mid, week_id=week_id)
+    # 2. Bulk delete
+    delete_mappings_bulk(st.session_state["mt_pending_deletes"], week_id=week_id)
 
-    # 3. Apply pending updates
-    for mid, fields in st.session_state["mt_pending_updates"].items():
-        _db_update(mid, fields)
+    # 3. Bulk update
+    update_mappings_bulk(st.session_state["mt_pending_updates"])
 
-    # 4. Mark/unmark products
-    for code in st.session_state["mt_pending_mapped_codes"]:
-        _db_mark(week_id, code)
-    for code in st.session_state["mt_pending_unmapped_codes"]:
-        _db_unmark(week_id, code)
+    # 4. Bulk mark/unmark products
+    mark_products_mapped_bulk(week_id, st.session_state["mt_pending_mapped_codes"], mapped=True)
+    mark_products_mapped_bulk(week_id, st.session_state["mt_pending_unmapped_codes"], mapped=False)
 
     # 5. Clear pending state
     st.session_state["mt_pending_mappings"] = []
@@ -2148,24 +2164,27 @@ def admin_panel():
             dataframe.to_excel(writer, index=False, sheet_name='Veri')
         return output.getvalue()
 
-    # ---- Tabs ----
-    tab_weeks, tab_mapping, tab_viewer, tab_analytics = st.tabs([
-        "Haftalar",
-        "Eşleştir",
-        "Poster Yönetimi",
-        "Analitikler",
-    ])
+    # ---- Conditional router (replaces st.tabs to avoid executing all tabs on every rerun) ----
+    _ADMIN_SECTIONS = ["Haftalar", "Eşleştir", "Poster Yönetimi", "Analitikler"]
+    if "admin_section" not in st.session_state:
+        st.session_state["admin_section"] = "Eşleştir"
+    active = st.segmented_control(
+        "Bölüm", _ADMIN_SECTIONS,
+        default=st.session_state["admin_section"],
+        key="admin_section_ctrl",
+        selection_mode="single",
+    )
+    if active and active != st.session_state["admin_section"]:
+        st.session_state["admin_section"] = active
+    active = st.session_state["admin_section"]
 
-    with tab_weeks:
+    if active == "Haftalar":
         _admin_tab_weeks()
-
-    with tab_mapping:
+    elif active == "Eşleştir":
         _mapping_tool_tab()
-
-    with tab_viewer:
+    elif active == "Poster Yönetimi":
         _poster_viewer_tab()
-
-    with tab_analytics:
+    elif active == "Analitikler":
         _admin_tab_analytics(df_to_xlsx)
 
     # ---- Çıkış ----
@@ -2231,9 +2250,9 @@ def _admin_tab_weeks():
                         changed += 1
                 if changed:
                     st.success(f"{changed} hafta sıralaması güncellendi!")
+                    st.rerun()
                 else:
                     st.info("Değişiklik yok.")
-                st.rerun()
 
         # Durum ve silme işlemleri (form dışında)
         for w in weeks:
@@ -2297,6 +2316,31 @@ def _admin_tab_weeks():
 # ADMIN TAB: Analitikler (mevcut arama log paneli)
 # ---------------------------------------------------------------------------
 
+@st.cache_data(ttl=300)
+def _fetch_analytics_data(baslangic: str):
+    """Fetch analytics data with 5-min cache to avoid re-querying on every rerun."""
+    client = get_supabase_client()
+    if not client:
+        return []
+    all_data = []
+    page_size = 1000
+    offset = 0
+    while True:
+        result = client.table('arama_log')\
+            .select('*')\
+            .gte('tarih', baslangic)\
+            .order('id', desc=True)\
+            .range(offset, offset + page_size - 1)\
+            .execute()
+        if not result.data:
+            break
+        all_data.extend(result.data)
+        if len(result.data) < page_size:
+            break
+        offset += page_size
+    return all_data
+
+
 def _admin_tab_analytics(df_to_xlsx):
     """Arama analitikleri sekmesi."""
     st.subheader("Arama Analitikleri")
@@ -2312,23 +2356,7 @@ def _admin_tab_analytics(df_to_xlsx):
         today = datetime.now().strftime('%Y-%m-%d')
         baslangic = (datetime.now() - timedelta(days=gun_sayisi)).strftime('%Y-%m-%d')
 
-        # Tüm veriyi çek (sayfalama ile)
-        all_data = []
-        page_size = 1000
-        offset = 0
-        while True:
-            result = client.table('arama_log')\
-                .select('*')\
-                .gte('tarih', baslangic)\
-                .order('id', desc=True)\
-                .range(offset, offset + page_size - 1)\
-                .execute()
-            if not result.data:
-                break
-            all_data.extend(result.data)
-            if len(result.data) < page_size:
-                break
-            offset += page_size
+        all_data = _fetch_analytics_data(baslangic)
 
         if not all_data:
             st.warning("Henüz veri yok")
