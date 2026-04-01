@@ -1443,25 +1443,46 @@ def _mapping_tool_tab():
             if remaining_prods:
                 st.caption(f"{len(remaining_prods)} ürün kaldı")
 
-                # Selectbox replaces 30 per-row buttons (saves ~30 widgets)
-                q_options = [f"{rp['urun_kod']} — {rp.get('urun_ad', '')}"
-                             for _, rp in remaining_prods]
                 q_idx = st.session_state.get("mt_queue_idx", 0)
                 if q_idx >= len(remaining_prods):
                     q_idx = 0
                     st.session_state["mt_queue_idx"] = 0
 
-                sel_q = st.selectbox(
-                    "Ürün seç:", range(len(remaining_prods)),
-                    index=q_idx,
-                    format_func=lambda i: q_options[i],
-                    key="mt_q_select",
+                # Visible scannable list using st.radio (1 widget, all items visible)
+                # Paginate to keep widget rendering fast: show 15 items around active index
+                _Q_PAGE = 15
+                page_start = max(0, q_idx - _Q_PAGE // 2)
+                page_end = min(len(remaining_prods), page_start + _Q_PAGE)
+                page_start = max(0, page_end - _Q_PAGE)  # re-adjust if near end
+                visible_slice = remaining_prods[page_start:page_end]
+
+                radio_labels = []
+                for ri, (_, rp) in enumerate(visible_slice):
+                    radio_labels.append(f"`{rp['urun_kod']}` — {rp.get('urun_ad', '')}")
+
+                # Map current q_idx to position within visible page
+                radio_default = q_idx - page_start
+                if radio_default < 0 or radio_default >= len(radio_labels):
+                    radio_default = 0
+
+                sel_radio = st.radio(
+                    "Ürün seç:", range(len(visible_slice)),
+                    index=radio_default,
+                    format_func=lambda i: radio_labels[i],
+                    key="mt_q_radio",
+                    label_visibility="collapsed",
                 )
-                if sel_q != q_idx:
-                    st.session_state["mt_queue_idx"] = sel_q
-                    q_idx = sel_q
+                # Sync radio selection back to queue index
+                new_q_idx = page_start + sel_radio
+                if new_q_idx != q_idx:
+                    st.session_state["mt_queue_idx"] = new_q_idx
+                    q_idx = new_q_idx
 
                 _, active_prod = remaining_prods[q_idx]
+
+                # Page indicator when list is longer than visible window
+                if len(remaining_prods) > _Q_PAGE:
+                    st.caption(f"Gösterilen: {page_start+1}–{page_end} / {len(remaining_prods)}")
 
                 # Eşleştir butonu
                 if st.button("Eşleştir (kutu + bu ürün)", key="mt_q_save",
@@ -1469,7 +1490,7 @@ def _mapping_tool_tab():
                     _mt_save_local(page, bbox, active_prod["urun_kod"],
                                    active_prod.get("urun_ad"), "excel")
 
-                # Atla / Geri (no rerun needed — selectbox handles navigation)
+                # Atla / Geri — advances queue and re-centers the visible window
                 ac1, ac2 = st.columns(2)
                 with ac1:
                     if st.button("Atla →", key="mt_q_skip", use_container_width=True):
@@ -1487,18 +1508,19 @@ def _mapping_tool_tab():
             query = st.text_input("Ürün kodu veya adı:", key="mt_search_q",
                                   placeholder="Kod veya isim yazın...")
             if query and products:
-                results = search_products(query, products, limit=15)
+                results = search_products(query, products, limit=10)
                 if results:
-                    # Selectbox + single button replaces 15 per-row buttons
-                    sr_options = []
+                    # Visible radio list + single action button (1 widget + 1 button)
+                    sr_labels = []
                     for r in results:
                         is_mapped = r["urun_kod"] in mapped_codes
                         status = " ✓" if is_mapped else ""
-                        sr_options.append(f"{r['urun_kod']} — {r.get('urun_ad', '')}{status}")
-                    sr_sel = st.selectbox(
+                        sr_labels.append(f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{status}")
+                    sr_sel = st.radio(
                         "Sonuç seç:", range(len(results)),
-                        format_func=lambda i: sr_options[i],
-                        key="mt_sr_select",
+                        format_func=lambda i: sr_labels[i],
+                        key="mt_sr_radio",
+                        label_visibility="collapsed",
                     )
                     sel_r = results[sr_sel]
                     if st.button("Eşleştir (kutu + seçili)", key="mt_sr_save",
