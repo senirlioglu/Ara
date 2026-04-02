@@ -698,28 +698,26 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
                 mapping_counts[wid] = r.get("mapping_count", 0)
                 product_counts[wid] = r.get("product_count", 0)
     except Exception:
-        # RPC not installed yet — use 3 lightweight group-by queries
-        try:
-            pg_res = sb.table("poster_pages").select("week_id").execute()
-            for r in (pg_res.data or []):
-                wid = r["week_id"]
-                page_counts[wid] = page_counts.get(wid, 0) + 1
-        except Exception:
-            pass
-        try:
-            mp_res = sb.table("mappings").select("week_id").execute()
-            for r in (mp_res.data or []):
-                wid = r["week_id"]
-                mapping_counts[wid] = mapping_counts.get(wid, 0) + 1
-        except Exception:
-            pass
-        try:
-            pr_res = sb.table("week_products").select("week_id").execute()
-            for r in (pr_res.data or []):
-                wid = r["week_id"]
-                product_counts[wid] = product_counts.get(wid, 0) + 1
-        except Exception:
-            pass
+        # RPC not installed yet — use server-side HEAD count per week_id.
+        # Cannot use select("week_id") fallback because PostgREST caps rows
+        # (default 1000) which silently truncates counts on large tables.
+        week_ids = [w["week_id"] for w in weeks]
+        for wid in week_ids:
+            try:
+                pg = sb.table("poster_pages").select("*", count="exact", head=True).eq("week_id", wid).execute()
+                page_counts[wid] = pg.count or 0
+            except Exception:
+                page_counts[wid] = 0
+            try:
+                mp = sb.table("mappings").select("*", count="exact", head=True).eq("week_id", wid).execute()
+                mapping_counts[wid] = mp.count or 0
+            except Exception:
+                mapping_counts[wid] = 0
+            try:
+                pr = sb.table("week_products").select("*", count="exact", head=True).eq("week_id", wid).execute()
+                product_counts[wid] = pr.count or 0
+            except Exception:
+                product_counts[wid] = 0
 
     result = []
     for w in weeks:
