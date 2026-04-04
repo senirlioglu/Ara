@@ -1837,6 +1837,24 @@ def _poster_viewer_tab():
     if not poster_pages_meta:
         st.info("Bu hafta için poster sayfası bulunamadı.")
 
+    # --- Ürün Görsellerini Oluştur (backfill) ---
+    if all_week_mappings:
+        with st.expander("Ürün Görsellerini Oluştur", expanded=False):
+            st.caption("Bu haftadaki tüm eşleştirmelerden ürün görselleri kırpılıp Supabase'e yüklenir.")
+            mapped_with_code = [m for m in all_week_mappings if m.get("urun_kodu")]
+            st.info(f"{len(mapped_with_code)} eşleştirme bulundu.")
+            if st.button("Görselleri Oluştur", key="pv_backfill", type="primary", use_container_width=True):
+                from storage import backfill_product_images
+                progress = st.progress(0, text="Başlıyor...")
+                def _update_progress(current, total):
+                    progress.progress(current / total, text=f"{current}/{total} işlendi...")
+                stats = backfill_product_images(selected_week, progress_callback=_update_progress)
+                progress.empty()
+                st.success(
+                    f"Tamamlandı: {stats['uploaded']} yüklendi, "
+                    f"{stats['skipped']} atlandı, {stats['errors']} hata"
+                )
+
     # --- Yeni Afiş Ekleme (mevcut haftaya) ---
     with st.expander("Bu Haftaya Yeni Afiş Ekle", expanded=False):
         new_pdfs = st.file_uploader("Afiş Dosyası (PDF / JPEG / PNG)", type=["pdf", "jpeg", "jpg", "png"],
@@ -2110,10 +2128,12 @@ def _mt_flush_to_supabase():
     """Flush all pending mappings/deletes/updates to Supabase.
 
     Uses bulk operations: ~5 requests total instead of N per pending item.
+    Also crops and uploads product images for new mappings.
     """
     from storage import (
         save_mappings_bulk, delete_mappings_bulk,
         update_mappings_bulk, mark_products_mapped_bulk,
+        crop_and_upload_product_image,
     )
     week_id = st.session_state["mt_week_id"]
 
@@ -2124,6 +2144,25 @@ def _mt_flush_to_supabase():
                if k not in ("mapping_id", "_norm_text", "_norm_tokens", "_kod", "score")}
         insert_rows.append(row)
     save_mappings_bulk(insert_rows)
+
+    # 1b. Crop and upload product images for new mappings
+    # Build page lookup from session pages: (flyer_filename, page_no) → png_bytes
+    _page_lookup = {}
+    for pg in st.session_state.get("mt_pages", []):
+        _page_lookup[(pg["flyer_filename"], pg["page_no"])] = pg["png_bytes"]
+
+    for m in st.session_state["mt_pending_mappings"]:
+        urun_kodu = m.get("urun_kodu")
+        if not urun_kodu:
+            continue
+        png = _page_lookup.get((m["flyer_filename"], m["page_no"]))
+        if not png:
+            continue
+        try:
+            crop_and_upload_product_image(
+                png, urun_kodu, m["x0"], m["y0"], m["x1"], m["y1"])
+        except Exception:
+            pass  # non-critical — mapping is saved regardless
 
     # 2. Bulk delete
     delete_mappings_bulk(st.session_state["mt_pending_deletes"], week_id=week_id)
