@@ -9,6 +9,21 @@ supabase>=2.0.0
 
 # Data islemleri
 pandas>=2.0.0
+openpyxl>=3.1.0
 
 # HTTP istekleri (supabase icin gerekli)
 httpx>=0.25.0
+
+# Goruntu isleme (icon uretimi icin)
+Pillow>=10.0.0
+
+# Parquet yazimi
+pyarrow>=16.0.0
+
+# PDF isleme (poster hotspot ozeligi icin - legacy)
+PyMuPDF>=1.24.0
+
+# Flyer pipeline v2: Vision OCR + DBSCAN + fuzzy matching
+google-cloud-vision>=3.5.0
+scikit-learn>=1.3.0
+rapidfuzz>=3.5.0

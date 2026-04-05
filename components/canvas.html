@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background: transparent; overflow: hidden; }
+  #wrap {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    user-select: none;
+  }
+  #wrap img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+  #sel {
+    position: absolute;
+    border: 2px solid #ff4444;
+    background: rgba(255, 68, 68, 0.15);
+    pointer-events: none;
+    display: none;
+  }
+  .saved-box {
+    position: absolute;
+    border: 2px solid #00cc66;
+    background: rgba(0, 204, 102, 0.10);
+    pointer-events: none;
+  }
+  .saved-label {
+    position: absolute;
+    background: #00cc66;
+    color: #fff;
+    font-size: 11px;
+    padding: 1px 4px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  #bar {
+    margin-top: 6px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 6px 16px;
+    font-size: 14px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  #btnUse {
+    background: #1e3a5f;
+    color: #fff;
+  }
+  #btnUse:disabled {
+    background: #999;
+    cursor: default;
+  }
+  #btnClear {
+    background: #e0e0e0;
+    color: #333;
+  }
+  #info {
+    font-size: 12px;
+    color: #666;
+    font-family: monospace;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <img id="img" />
+  <div id="sel"></div>
+</div>
+<div id="bar">
+  <button id="btnUse" disabled>Seçimi Kullan</button>
+  <button id="btnClear">Temizle</button>
+  <span id="info">Kutu çizmek için sürükleyin</span>
+</div>
+
+<script>
+// Streamlit component communication
+function sendToStreamlit(data) {
+  // Streamlit custom component messaging
+  if (window.parent && window.parent.postMessage) {
+    window.parent.postMessage({
+      type: "streamlit:setComponentValue",
+      value: data
+    }, "*");
+  }
+}
+
+function setFrameHeight() {
+  var h = document.body.scrollHeight + 10;
+  if (window.parent && window.parent.postMessage) {
+    window.parent.postMessage({
+      type: "streamlit:setFrameHeight",
+      height: h
+    }, "*");
+  }
+}
+
+// Read data passed from Streamlit via URL params or injected globals
+var imgSrc = "__IMG_SRC__";
+var savedBoxes = __SAVED_BOXES__;
+
+var img = document.getElementById("img");
+var wrap = document.getElementById("wrap");
+var sel = document.getElementById("sel");
+var btnUse = document.getElementById("btnUse");
+var btnClear = document.getElementById("btnClear");
+var info = document.getElementById("info");
+
+img.onload = function() {
+  // Draw saved mapping boxes
+  for (var i = 0; i < savedBoxes.length; i++) {
+    var b = savedBoxes[i];
+    var bw = img.clientWidth;
+    var bh = img.clientHeight;
+    var div = document.createElement("div");
+    div.className = "saved-box";
+    div.style.left = (b.x0 * bw) + "px";
+    div.style.top = (b.y0 * bh) + "px";
+    div.style.width = ((b.x1 - b.x0) * bw) + "px";
+    div.style.height = ((b.y1 - b.y0) * bh) + "px";
+    wrap.appendChild(div);
+
+    if (b.label) {
+      var lbl = document.createElement("div");
+      lbl.className = "saved-label";
+      lbl.style.left = (b.x0 * bw) + "px";
+      lbl.style.top = (b.y0 * bh - 18) + "px";
+      lbl.textContent = b.label;
+      wrap.appendChild(lbl);
+    }
+  }
+  setFrameHeight();
+};
+img.src = imgSrc;
+
+// Drawing state
+var drawing = false;
+var startX = 0, startY = 0;
+var curBox = null;
+
+wrap.addEventListener("mousedown", function(e) {
+  if (e.target !== img && e.target !== wrap) return;
+  var r = img.getBoundingClientRect();
+  startX = e.clientX - r.left;
+  startY = e.clientY - r.top;
+  drawing = true;
+  sel.style.display = "block";
+  sel.style.left = startX + "px";
+  sel.style.top = startY + "px";
+  sel.style.width = "0px";
+  sel.style.height = "0px";
+  curBox = null;
+  btnUse.disabled = true;
+});
+
+wrap.addEventListener("mousemove", function(e) {
+  if (!drawing) return;
+  var r = img.getBoundingClientRect();
+  var mx = e.clientX - r.left;
+  var my = e.clientY - r.top;
+  var x = Math.min(startX, mx);
+  var y = Math.min(startY, my);
+  var w = Math.abs(mx - startX);
+  var h = Math.abs(my - startY);
+  sel.style.left = x + "px";
+  sel.style.top = y + "px";
+  sel.style.width = w + "px";
+  sel.style.height = h + "px";
+});
+
+wrap.addEventListener("mouseup", function(e) {
+  if (!drawing) return;
+  drawing = false;
+  var r = img.getBoundingClientRect();
+  var mx = e.clientX - r.left;
+  var my = e.clientY - r.top;
+  var iw = img.clientWidth;
+  var ih = img.clientHeight;
+  var x0 = Math.max(0, Math.min(startX, mx)) / iw;
+  var y0 = Math.max(0, Math.min(startY, my)) / ih;
+  var x1 = Math.min(iw, Math.max(startX, mx)) / iw;
+  var y1 = Math.min(ih, Math.max(startY, my)) / ih;
+
+  // Require minimum box size
+  if ((x1 - x0) < 0.01 || (y1 - y0) < 0.01) {
+    sel.style.display = "none";
+    return;
+  }
+
+  curBox = {x0: +x0.toFixed(5), y0: +y0.toFixed(5),
+            x1: +x1.toFixed(5), y1: +y1.toFixed(5)};
+  btnUse.disabled = false;
+  info.textContent = "x0=" + x0.toFixed(3) + " y0=" + y0.toFixed(3) +
+                     " x1=" + x1.toFixed(3) + " y1=" + y1.toFixed(3);
+});
+
+btnUse.addEventListener("click", function() {
+  if (!curBox) return;
+  sendToStreamlit(curBox);
+  info.textContent = "Seçim gonderildi!";
+  btnUse.disabled = true;
+});
+
+btnClear.addEventListener("click", function() {
+  sel.style.display = "none";
+  curBox = null;
+  btnUse.disabled = true;
+  info.textContent = "Kutu cizmek icin surukleyin";
+  sendToStreamlit(null);
+});
+
+// Initial frame height
+setTimeout(setFrameHeight, 200);
+</script>
+</body>
+</html>
