@@ -44,6 +44,7 @@ def _get_client():
 
 
 BUCKET = "poster-images"
+PRODUCT_IMG_BUCKET = "product-images"
 
 
 def _sb_execute_with_retry(query, retries=3, base_delay=0.5):
@@ -69,18 +70,18 @@ def _sb_execute_with_retry(query, retries=3, base_delay=0.5):
 
 
 def _ensure_bucket():
-    """Create the storage bucket if it doesn't exist (idempotent)."""
+    """Create the storage buckets if they don't exist (idempotent)."""
     sb = _get_client()
     if not sb:
         return
-    try:
-        sb.storage.get_bucket(BUCKET)
-    except Exception:
+    for bucket_name in (BUCKET, PRODUCT_IMG_BUCKET):
         try:
-            sb.storage.create_bucket(BUCKET, options={"public": True})
-        except Exception as e:
-            # Bucket might already exist with different casing, etc.
-            log.warning("Bucket create: %s", e)
+            sb.storage.get_bucket(bucket_name)
+        except Exception:
+            try:
+                sb.storage.create_bucket(bucket_name, options={"public": True})
+            except Exception as e:
+                log.warning("Bucket create %s: %s", bucket_name, e)
 
 
 # ---------------------------------------------------------------------------
@@ -698,28 +699,26 @@ def list_weeks_with_meta(db_path=None) -> list[dict]:
                 mapping_counts[wid] = r.get("mapping_count", 0)
                 product_counts[wid] = r.get("product_count", 0)
     except Exception:
-        # RPC not installed yet — use 3 lightweight group-by queries
-        try:
-            pg_res = sb.table("poster_pages").select("week_id").execute()
-            for r in (pg_res.data or []):
-                wid = r["week_id"]
-                page_counts[wid] = page_counts.get(wid, 0) + 1
-        except Exception:
-            pass
-        try:
-            mp_res = sb.table("mappings").select("week_id").execute()
-            for r in (mp_res.data or []):
-                wid = r["week_id"]
-                mapping_counts[wid] = mapping_counts.get(wid, 0) + 1
-        except Exception:
-            pass
-        try:
-            pr_res = sb.table("week_products").select("week_id").execute()
-            for r in (pr_res.data or []):
-                wid = r["week_id"]
-                product_counts[wid] = product_counts.get(wid, 0) + 1
-        except Exception:
-            pass
+        # RPC not installed yet — use server-side HEAD count per week_id.
+        # Cannot use select("week_id") fallback because PostgREST caps rows
+        # (default 1000) which silently truncates counts on large tables.
+        week_ids = [w["week_id"] for w in weeks]
+        for wid in week_ids:
+            try:
+                pg = sb.table("poster_pages").select("*", count="exact", head=True).eq("week_id", wid).execute()
+                page_counts[wid] = pg.count or 0
+            except Exception:
+                page_counts[wid] = 0
+            try:
+                mp = sb.table("mappings").select("*", count="exact", head=True).eq("week_id", wid).execute()
+                mapping_counts[wid] = mp.count or 0
+            except Exception:
+                mapping_counts[wid] = 0
+            try:
+                pr = sb.table("week_products").select("*", count="exact", head=True).eq("week_id", wid).execute()
+                product_counts[wid] = pr.count or 0
+            except Exception:
+                product_counts[wid] = 0
 
     result = []
     for w in weeks:
@@ -800,3 +799,118 @@ def list_mappings_for_week(
 ) -> list[dict]:
     """Alias — same as list_mappings, used by frontend viewer."""
     return list_mappings(week_id, flyer_filename, page_no, db_path)
+
+
+# ============================================================================
+# PRODUCT IMAGES — crop bbox regions from poster pages, save as {urun_kodu}.jpg
+# ============================================================================
+
+def _crop_and_encode(page_png_bytes: bytes, x0: float, y0: float,
+                     x1: float, y1: float, quality: int = 85) -> bytes:
+    """Crop a normalised bbox (0-1) from a page image and return JPEG bytes."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(page_png_bytes))
+    w, h = img.size
+    left = int(x0 * w)
+    top = int(y0 * h)
+    right = int(x1 * w)
+    bottom = int(y1 * h)
+    cropped = img.crop((left, top, right, bottom))
+    if cropped.mode == "RGBA":
+        cropped = cropped.convert("RGB")
+    buf = io.BytesIO()
+    cropped.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def upload_product_image(urun_kodu: str, jpeg_bytes: bytes) -> str:
+    """Upload a product image to Supabase Storage. Returns the storage path.
+
+    Path: product-images/{urun_kodu}.jpg  (upsert — overwrites if exists)
+    """
+    sb = _get_client()
+    if not sb:
+        return ""
+    safe_code = urun_kodu.replace("/", "_").replace(" ", "_")
+    path = f"{safe_code}.jpg"
+    try:
+        sb.storage.from_(PRODUCT_IMG_BUCKET).upload(
+            path, jpeg_bytes,
+            file_options={"content-type": "image/jpeg", "upsert": "true"},
+        )
+    except Exception:
+        try:
+            sb.storage.from_(PRODUCT_IMG_BUCKET).update(
+                path, jpeg_bytes,
+                file_options={"content-type": "image/jpeg"},
+            )
+        except Exception as e:
+            log.error("Product image upload failed for %s: %s", urun_kodu, e)
+    return path
+
+
+def get_product_image_url(urun_kodu: str) -> str:
+    """Return the public URL for a product image."""
+    sb = _get_client()
+    if not sb:
+        return ""
+    safe_code = urun_kodu.replace("/", "_").replace(" ", "_")
+    return sb.storage.from_(PRODUCT_IMG_BUCKET).get_public_url(f"{safe_code}.jpg")
+
+
+def crop_and_upload_product_image(
+    page_png_bytes: bytes, urun_kodu: str,
+    x0: float, y0: float, x1: float, y1: float,
+) -> str:
+    """Crop bbox from page image and upload as product image. Returns path."""
+    if not urun_kodu:
+        return ""
+    jpeg_bytes = _crop_and_encode(page_png_bytes, x0, y0, x1, y1)
+    return upload_product_image(urun_kodu, jpeg_bytes)
+
+
+def backfill_product_images(week_id: str, progress_callback=None) -> dict:
+    """Bulk-generate product images for all mappings in a week.
+
+    Downloads poster pages, crops each mapping's bbox, uploads as
+    {urun_kodu}.jpg. Skips mappings without urun_kodu.
+
+    Returns {"total": N, "uploaded": M, "skipped": S, "errors": E}
+    """
+    pages = get_poster_pages(week_id)
+    mappings = list_all_mappings_for_week(week_id)
+
+    # Build page lookup: (flyer_filename, page_no) → png_data
+    page_lookup = {}
+    for pg in pages:
+        key = (pg["flyer_filename"], pg["page_no"])
+        page_lookup[key] = pg["png_data"]
+
+    stats = {"total": len(mappings), "uploaded": 0, "skipped": 0, "errors": 0}
+
+    for i, m in enumerate(mappings):
+        urun_kodu = m.get("urun_kodu")
+        if not urun_kodu:
+            stats["skipped"] += 1
+            continue
+
+        page_key = (m["flyer_filename"], m["page_no"])
+        png_data = page_lookup.get(page_key)
+        if not png_data:
+            stats["skipped"] += 1
+            continue
+
+        try:
+            crop_and_upload_product_image(
+                png_data, urun_kodu,
+                m["x0"], m["y0"], m["x1"], m["y1"],
+            )
+            stats["uploaded"] += 1
+        except Exception as e:
+            log.error("Backfill crop failed for %s: %s", urun_kodu, e)
+            stats["errors"] += 1
+
+        if progress_callback:
+            progress_callback(i + 1, stats["total"])
+
+    return stats
