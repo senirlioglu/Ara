@@ -131,10 +131,13 @@ export default function Home() {
       )}
 
       {/* Header */}
-      <header className="bg-gradient-to-r from-primary to-primary-dark px-4 py-4 shadow-md">
+      <header className="bg-gradient-to-r from-primary to-primary-dark px-4 py-5 shadow-md">
         <h1 className="text-xl font-bold text-white text-center">
           Ürün Ara
         </h1>
+        <p className="text-sm text-white/80 text-center mt-1">
+          Hangi mağazada hangi ürün var? Hızlıca öğren!
+        </p>
       </header>
 
       <main className="flex-1 px-4 py-4 max-w-2xl mx-auto w-full space-y-5">
