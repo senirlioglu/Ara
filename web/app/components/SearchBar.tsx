@@ -169,18 +169,36 @@ export default function SearchBar({
 
           {/* Right side buttons inside the input */}
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-            {/* Barcode icon — mobile only (inside input) */}
-            <button
-              type="button"
-              onClick={onBarcodeClick}
-              className="md:hidden p-2 rounded-xl hover:bg-gray-100 active:scale-90 transition-all"
-              aria-label="Barkod tara"
-            >
-              <svg className="w-6 h-6 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M3 17v2a2 2 0 002 2h2M17 21h2a2 2 0 002-2v-2" />
-                <path strokeLinecap="round" d="M7 8v8M10 8v8M13 8v8M16 8v8" strokeWidth={1.5} />
-              </svg>
-            </button>
+            {/* Mobile: barcode icon when empty, clear (X) button when typing */}
+            {query.trim() ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  setSuggestions([]);
+                  setShowSuggestions(false);
+                  inputRef.current?.focus();
+                }}
+                className="md:hidden p-2 rounded-xl hover:bg-gray-100 active:scale-90 transition-all"
+                aria-label="Temizle"
+              >
+                <svg className="w-5 h-5 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onBarcodeClick}
+                className="md:hidden p-2 rounded-xl hover:bg-gray-100 active:scale-90 transition-all"
+                aria-label="Barkod tara"
+              >
+                <svg className="w-6 h-6 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M3 17v2a2 2 0 002 2h2M17 21h2a2 2 0 002-2v-2" />
+                  <path strokeLinecap="round" d="M7 8v8M10 8v8M13 8v8M16 8v8" strokeWidth={1.5} />
+                </svg>
+              </button>
+            )}
 
             {/* Search button */}
             <button
