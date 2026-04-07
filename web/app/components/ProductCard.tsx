@@ -50,15 +50,16 @@ export default function ProductCard({
   onRequestLocation,
 }: ProductCardProps) {
   const [expanded, setExpanded] = useState(false);
-  const [sortMode, setSortMode] = useState<SortMode>(
-    userLat && userLon ? "distance" : "stock"
-  );
+  const [sortModeOverride, setSortModeOverride] = useState<SortMode | null>(null);
   const { urun_kod, urun_ad, fiyat, stoklu_magaza, toplam_stok, magazalar } =
     product;
 
   const hasStock = stoklu_magaza > 0;
   const priceStr = formatPrice(fiyat);
   const hasLocation = !!(userLat && userLon);
+
+  // Auto-select distance when location becomes available, unless user manually chose
+  const sortMode: SortMode = sortModeOverride ?? (hasLocation ? "distance" : "stock");
 
   // Sort stores based on selected mode
   const sortedMagazalar = useMemo(() => {
@@ -84,7 +85,7 @@ export default function ProductCard({
       }
       return;
     }
-    setSortMode(mode);
+    setSortModeOverride(mode);
   };
 
   return (
@@ -100,7 +101,7 @@ export default function ProductCard({
           </p>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
             {priceStr && (
-              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-extrabold text-white bg-red-600">
+              <span className="inline-flex items-center px-4 py-1.5 rounded-full text-lg font-extrabold text-white bg-red-600">
                 {priceStr}
               </span>
             )}
