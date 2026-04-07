@@ -164,6 +164,34 @@ export function groupProducts(rows: StokRow[]): ProductCard[] {
   return cards;
 }
 
+// ─── Suggestion reverse lookup (ad → kod) ──────────────────────
+
+let _suggestionLookup: Map<string, string> | null = null;
+
+async function getSuggestionLookup(): Promise<Map<string, string>> {
+  if (_suggestionLookup) return _suggestionLookup;
+  try {
+    const res = await fetch("/oneri_listesi.json");
+    const data: string[] = await res.json();
+    const lookup = new Map<string, string>();
+    for (const entry of data) {
+      if (typeof entry === "string" && entry.includes(" - ")) {
+        const parts = entry.split(" - ");
+        const kod = parts[0].trim();
+        const ad = parts[1]?.trim() ?? "";
+        if (/^\d+$/.test(kod) && ad) {
+          lookup.set(entry.toLowerCase(), kod); // full entry → kod
+          lookup.set(ad.toLowerCase(), kod);     // just ad → kod
+        }
+      }
+    }
+    _suggestionLookup = lookup;
+    return lookup;
+  } catch {
+    return new Map();
+  }
+}
+
 /** Main search function — calls hizli_urun_ara RPC */
 export async function searchProducts(rawQuery: string): Promise<ProductCard[]> {
   const trimmed = rawQuery.trim();
@@ -177,7 +205,14 @@ export async function searchProducts(rawQuery: string): Promise<ProductCard[]> {
   } else if (/^\d+$/.test(trimmed)) {
     query = trimmed;
   } else {
-    query = normalizeTurkish(trimmed);
+    // Reverse lookup: if the text matches a suggestion, use the product code
+    const lookup = await getSuggestionLookup();
+    const resolvedKod = lookup.get(trimmed.toLowerCase());
+    if (resolvedKod) {
+      query = resolvedKod;
+    } else {
+      query = normalizeTurkish(trimmed);
+    }
   }
 
   const isCode = isProductCode(query);
