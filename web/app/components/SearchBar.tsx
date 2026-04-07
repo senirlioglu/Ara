@@ -272,7 +272,7 @@ export default function SearchBar({
           <p className="text-sm font-semibold text-gray-500 mb-2">
             Popüler Aramalar
           </p>
-          <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-hide">
+          <div className="flex gap-2.5 overflow-x-auto md:overflow-visible md:flex-wrap pb-2 scrollbar-hide">
             {popularTerms.map((term) => (
               <button
                 key={term}
