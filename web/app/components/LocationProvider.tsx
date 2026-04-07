@@ -9,7 +9,6 @@ interface LocationState {
   requestLocation: () => void;
   acceptAndRequest: () => void;
   dismissPrompt: () => void;
-  denyLocation: () => void;
 }
 
 const LocationContext = createContext<LocationState>({
@@ -19,7 +18,6 @@ const LocationContext = createContext<LocationState>({
   requestLocation: () => {},
   acceptAndRequest: () => {},
   dismissPrompt: () => {},
-  denyLocation: () => {},
 });
 
 export function useLocation() {
@@ -103,14 +101,10 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
     setStatus("prompt");
   }, [status, requestBrowserLocation]);
 
+  // "Şimdi değil" — dismiss for this session only, ask again next visit
   const dismissPrompt = useCallback(() => {
     setStatus("dismissed");
-    localStorage.setItem(PREF_KEY, "dismissed");
-  }, []);
-
-  const denyLocation = useCallback(() => {
-    setStatus("denied");
-    localStorage.setItem(PREF_KEY, "denied");
+    // No localStorage write — next visit will ask again
   }, []);
 
   // Called when user clicks "Evet" on our custom banner → triggers browser permission
@@ -121,7 +115,7 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <LocationContext.Provider
-      value={{ lat, lon, status, requestLocation, acceptAndRequest, dismissPrompt, denyLocation }}
+      value={{ lat, lon, status, requestLocation, acceptAndRequest, dismissPrompt }}
     >
       {children}
     </LocationContext.Provider>

@@ -7,7 +7,7 @@ interface LocationBannerProps {
 }
 
 export default function LocationBanner({ onAccept }: LocationBannerProps) {
-  const { status, dismissPrompt, denyLocation } = useLocation();
+  const { status, dismissPrompt } = useLocation();
 
   if (status !== "prompt") return null;
 
@@ -31,18 +31,11 @@ export default function LocationBanner({ onAccept }: LocationBannerProps) {
               Evet, göster
             </button>
             <button
-              onClick={denyLocation}
+              onClick={dismissPrompt}
               className="px-4 py-2 bg-white border border-gray-200 text-sm text-gray-600 font-medium rounded-xl
                          active:scale-95 transition-transform"
             >
-              Hayır
-            </button>
-            <button
-              onClick={dismissPrompt}
-              className="px-3 py-2 text-xs text-gray-400 font-medium
-                         active:scale-95 transition-transform"
-            >
-              Daha sonra
+              Şimdi değil
             </button>
           </div>
         </div>
