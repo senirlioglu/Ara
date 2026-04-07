@@ -32,33 +32,59 @@ function mapsUrl(lat: number, lon: number): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`;
 }
 
+type SortMode = "distance" | "stock";
+
 interface ProductCardProps {
   product: ProductCardType;
   userLat?: number | null;
   userLon?: number | null;
+  locationStatus?: string;
+  onRequestLocation?: () => void;
 }
 
-export default function ProductCard({ product, userLat, userLon }: ProductCardProps) {
+export default function ProductCard({
+  product,
+  userLat,
+  userLon,
+  locationStatus,
+  onRequestLocation,
+}: ProductCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>(
+    userLat && userLon ? "distance" : "stock"
+  );
   const { urun_kod, urun_ad, fiyat, stoklu_magaza, toplam_stok, magazalar } =
     product;
 
   const hasStock = stoklu_magaza > 0;
   const priceStr = formatPrice(fiyat);
+  const hasLocation = !!(userLat && userLon);
 
-  // Sort stores by distance if user location available
+  // Sort stores based on selected mode
   const sortedMagazalar = useMemo(() => {
-    if (userLat && userLon) {
-      return sortStoresByDistance(magazalar, userLat, userLon);
+    if (sortMode === "distance" && hasLocation) {
+      return sortStoresByDistance(magazalar, userLat!, userLon!);
     }
-    return magazalar;
-  }, [magazalar, userLat, userLon]);
+    // Stock sort: highest first
+    return [...magazalar].sort((a, b) => b.stok_adet - a.stok_adet);
+  }, [magazalar, sortMode, hasLocation, userLat, userLon]);
 
-  // Calculate distance for each store
   const getStoreDist = (m: StoreStock): string | null => {
-    if (!userLat || !userLon || !m.latitude || !m.longitude) return null;
-    const km = haversineKm(userLat, userLon, m.latitude, m.longitude);
+    if (!hasLocation || !m.latitude || !m.longitude) return null;
+    const km = haversineKm(userLat!, userLon!, m.latitude, m.longitude);
     return formatDistance(km);
+  };
+
+  const handleSortClick = (mode: SortMode) => {
+    if (mode === "distance" && !hasLocation) {
+      if (locationStatus === "denied") {
+        alert("Konum izni gerekli. Tarayıcı ayarlarından konum iznini açın.");
+      } else if (onRequestLocation) {
+        onRequestLocation();
+      }
+      return;
+    }
+    setSortMode(mode);
   };
 
   return (
@@ -72,17 +98,27 @@ export default function ProductCard({ product, userLat, userLon }: ProductCardPr
           <p className="text-base font-bold text-gray-900 leading-snug">
             {urun_ad}
           </p>
-          {priceStr && (
-            <p className="text-xl font-extrabold text-red-600 mt-1">
-              {priceStr}
-            </p>
-          )}
-          <div className="flex items-center gap-2 mt-1.5">
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {priceStr && (
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-extrabold text-white bg-red-600">
+                {priceStr}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
             <span className="text-sm text-gray-400">{urun_kod}</span>
             <span className="text-sm text-gray-300">&middot;</span>
             <span className="text-sm text-gray-600 font-medium">
               {hasStock ? `${stoklu_magaza} mağaza` : "Stokta yok"}
             </span>
+            {toplam_stok > 0 && (
+              <>
+                <span className="text-sm text-gray-300">&middot;</span>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold text-white bg-gradient-to-r from-violet-500 to-purple-500">
+                  Bölge Stok: {toplam_stok}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <svg
@@ -99,18 +135,29 @@ export default function ProductCard({ product, userLat, userLon }: ProductCardPr
       {/* Detail — expandable */}
       {expanded && (
         <div className="px-4 pb-4 border-t border-gray-100">
-          {/* Badges row */}
-          <div className="flex gap-2.5 mt-3 flex-wrap">
-            {priceStr && (
-              <span className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-bold text-white bg-gradient-to-r from-emerald-500 to-teal-500">
-                {priceStr}
-              </span>
-            )}
-            {toplam_stok > 0 && (
-              <span className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-bold text-white bg-gradient-to-r from-violet-500 to-purple-500">
-                Toplam Bölge Stok: {toplam_stok}
-              </span>
-            )}
+          {/* Sort controls */}
+          <div className="flex items-center gap-2 mt-3">
+            <span className="text-xs text-gray-400 font-medium">Sırala:</span>
+            <button
+              onClick={() => handleSortClick("distance")}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                sortMode === "distance" && hasLocation
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+              }`}
+            >
+              📍 Yakınlık
+            </button>
+            <button
+              onClick={() => handleSortClick("stock")}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                sortMode === "stock"
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+              }`}
+            >
+              📦 Stok
+            </button>
           </div>
 
           {/* Store list */}
@@ -119,7 +166,7 @@ export default function ProductCard({ product, userLat, userLon }: ProductCardPr
               Bu ürün hiçbir mağazada stokta yok!
             </p>
           ) : (
-            <div className="mt-4 space-y-2.5">
+            <div className="mt-3 space-y-2.5">
               {sortedMagazalar.map((m) => {
                 const level = getStockLevel(m.stok_adet);
                 const dist = getStoreDist(m);

@@ -189,6 +189,8 @@ export default function Home() {
                       product={p}
                       userLat={lat}
                       userLon={lon}
+                      locationStatus={status}
+                      onRequestLocation={requestLocation}
                     />
                   ))}
                 </div>
