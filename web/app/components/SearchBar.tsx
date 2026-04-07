@@ -270,7 +270,7 @@ export default function SearchBar({
       {popularTerms.length > 0 && (
         <div className="mt-4">
           <p className="text-sm font-semibold text-gray-500 mb-2">
-            Popüler Aramalar
+            ⭐ Popüler Aramalar
           </p>
           <div className="flex gap-2.5 overflow-x-auto md:overflow-visible md:flex-wrap pb-2 scrollbar-hide">
             {popularTerms.map((term) => (
