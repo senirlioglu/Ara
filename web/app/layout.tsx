@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import ServiceWorkerRegistrar from "./components/ServiceWorkerRegistrar";
+import ClientProviders from "./components/ClientProviders";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -34,7 +35,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <ServiceWorkerRegistrar />
-        {children}
+        <ClientProviders>{children}</ClientProviders>
       </body>
     </html>
   );

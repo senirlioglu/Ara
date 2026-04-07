@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import type { ProductCard as ProductCardType } from "@/lib/types";
+import { useState, useMemo } from "react";
+import type { ProductCard as ProductCardType, StoreStock } from "@/lib/types";
+import { sortStoresByDistance, haversineKm, formatDistance } from "@/lib/distance";
 
 function formatPrice(price: number): string {
   if (!price) return "";
@@ -23,7 +24,7 @@ function getStockLevel(adet: number): {
   if (adet <= 2)
     return { label: "Düşük", badgeClass: "bg-red-500 text-white", rowClass: "bg-red-50 border-red-200" };
   if (adet <= 5)
-    return { label: "Orta", badgeClass: "bg-amber-500 text-white", rowClass: "bg-amber-50 border-amber-200" };
+    return { label: "Orta", badgeClass: "bg-amber-500 text-white", rowClass: "bg-amber-200/60 border-amber-300" };
   return { label: "Yüksek", badgeClass: "bg-green-600 text-white", rowClass: "bg-green-50 border-green-200" };
 }
 
@@ -31,13 +32,34 @@ function mapsUrl(lat: number, lon: number): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`;
 }
 
-export default function ProductCard({ product }: { product: ProductCardType }) {
+interface ProductCardProps {
+  product: ProductCardType;
+  userLat?: number | null;
+  userLon?: number | null;
+}
+
+export default function ProductCard({ product, userLat, userLon }: ProductCardProps) {
   const [expanded, setExpanded] = useState(false);
   const { urun_kod, urun_ad, fiyat, stoklu_magaza, toplam_stok, magazalar } =
     product;
 
   const hasStock = stoklu_magaza > 0;
   const priceStr = formatPrice(fiyat);
+
+  // Sort stores by distance if user location available
+  const sortedMagazalar = useMemo(() => {
+    if (userLat && userLon) {
+      return sortStoresByDistance(magazalar, userLat, userLon);
+    }
+    return magazalar;
+  }, [magazalar, userLat, userLon]);
+
+  // Calculate distance for each store
+  const getStoreDist = (m: StoreStock): string | null => {
+    if (!userLat || !userLon || !m.latitude || !m.longitude) return null;
+    const km = haversineKm(userLat, userLon, m.latitude, m.longitude);
+    return formatDistance(km);
+  };
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -92,23 +114,31 @@ export default function ProductCard({ product }: { product: ProductCardType }) {
           </div>
 
           {/* Store list */}
-          {magazalar.length === 0 ? (
+          {sortedMagazalar.length === 0 ? (
             <p className="mt-4 text-base text-red-500 font-semibold">
               Bu ürün hiçbir mağazada stokta yok!
             </p>
           ) : (
             <div className="mt-4 space-y-2.5">
-              {magazalar.map((m) => {
+              {sortedMagazalar.map((m) => {
                 const level = getStockLevel(m.stok_adet);
+                const dist = getStoreDist(m);
                 return (
                   <div
                     key={m.magaza_kod}
                     className={`flex items-center gap-3 p-3.5 rounded-xl border ${level.rowClass}`}
                   >
                     <div className="flex-1 min-w-0">
-                      <p className="text-base font-bold text-gray-900 leading-snug">
-                        {m.magaza_ad || m.magaza_kod}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-base font-bold text-gray-900 leading-snug truncate">
+                          {m.magaza_ad || m.magaza_kod}
+                        </p>
+                        {dist && (
+                          <span className="shrink-0 text-xs text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded-full">
+                            {dist}
+                          </span>
+                        )}
+                      </div>
                       {m.latitude && m.longitude && (
                         <a
                           href={mapsUrl(m.latitude, m.longitude)}

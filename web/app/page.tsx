@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import SearchBar from "./components/SearchBar";
 import ProductCard from "./components/ProductCard";
 import PosterViewer from "./components/PosterViewer";
 import BarcodeScanner from "./components/BarcodeScanner";
+import LocationBanner from "./components/LocationBanner";
+import { useLocation } from "./components/LocationProvider";
 import {
   searchProducts,
   searchByBarcode,
@@ -18,6 +20,8 @@ import type { ProductCard as ProductCardType } from "@/lib/types";
 import type { PosterWeek, PosterPage, Hotspot } from "@/lib/types";
 
 export default function Home() {
+  const { lat, lon, status, requestLocation, acceptAndRequest } = useLocation();
+
   // Search state
   const [results, setResults] = useState<ProductCardType[]>([]);
   const [loading, setLoading] = useState(false);
@@ -32,6 +36,9 @@ export default function Home() {
   const [selectedWeek, setSelectedWeek] = useState<string>("");
   const [posterPages, setPosterPages] = useState<PosterPage[]>([]);
   const [mappings, setMappings] = useState<Hotspot[]>([]);
+
+  // Track if we've already asked for location this session
+  const locationRequested = useRef(false);
 
   // Load popular terms + weeks on mount
   useEffect(() => {
@@ -54,21 +61,28 @@ export default function Home() {
     });
   }, [selectedWeek]);
 
+  // Request location on first search (if not already decided)
+  const maybeRequestLocation = useCallback(() => {
+    if (locationRequested.current) return;
+    if (status === "idle") {
+      locationRequested.current = true;
+      requestLocation();
+    }
+  }, [status, requestLocation]);
+
   const handleSearch = useCallback(async (query: string) => {
     setLoading(true);
     setSearchError("");
     setSearched(true);
     setLastBarcode("");
+    maybeRequestLocation();
     try {
-      // Check if input looks like a barcode (8-14 digit EAN/GTIN)
       const isBarcode = /^\d{8,14}$/.test(query.trim()) && query.trim().length >= 8;
       let products: ProductCardType[];
 
       if (isBarcode) {
-        // Try barcode lookup first
         products = await searchByBarcode(query.trim());
         if (products.length === 0) {
-          // Fallback to regular search (maybe it's a product code)
           products = await searchProducts(query);
         }
       } else {
@@ -83,7 +97,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [maybeRequestLocation]);
 
   const handleBarcodeScan = useCallback(
     (barcode: string) => {
@@ -100,6 +114,11 @@ export default function Home() {
     },
     [handleSearch]
   );
+
+  // When user clicks "Evet" on our banner → trigger browser geolocation
+  const handleLocationAccept = useCallback(() => {
+    acceptAndRequest();
+  }, [acceptAndRequest]);
 
   return (
     <div className="flex flex-col min-h-full">
@@ -122,10 +141,16 @@ export default function Home() {
         {/* Search */}
         <SearchBar
           onSearch={handleSearch}
-          onBarcodeClick={() => setScannerOpen(true)}
+          onBarcodeClick={() => {
+            maybeRequestLocation();
+            setScannerOpen(true);
+          }}
           loading={loading}
           popularTerms={popularTerms}
         />
+
+        {/* Location permission banner */}
+        <LocationBanner onAccept={handleLocationAccept} />
 
         {/* Barcode info */}
         {lastBarcode && (
@@ -151,10 +176,20 @@ export default function Home() {
               <div>
                 <p className="text-sm text-gray-500 mb-3">
                   <strong>{results.length}</strong> ürün bulundu
+                  {lat && lon && (
+                    <span className="text-blue-500 ml-1">
+                      · 📍 Yakınına göre sıralı
+                    </span>
+                  )}
                 </p>
                 <div className="space-y-3">
                   {results.slice(0, 40).map((p) => (
-                    <ProductCard key={p.urun_kod} product={p} />
+                    <ProductCard
+                      key={p.urun_kod}
+                      product={p}
+                      userLat={lat}
+                      userLon={lon}
+                    />
                   ))}
                 </div>
               </div>
@@ -169,7 +204,6 @@ export default function Home() {
               Haftalık Broşür
             </h2>
 
-            {/* Week selector pills */}
             <div className="flex gap-2 overflow-x-auto pb-2 mb-3 scrollbar-hide">
               {weeks.map((w) => (
                 <button
@@ -187,7 +221,6 @@ export default function Home() {
               ))}
             </div>
 
-            {/* Poster viewer */}
             {posterPages.length > 0 && (
               <PosterViewer
                 pages={posterPages}
