@@ -16,34 +16,26 @@ export async function lookupBarcode(barcode: string): Promise<string | null> {
   const trimmed = barcode.trim();
   if (!trimmed) return null;
 
-  console.log("[barcode] Looking up:", trimmed);
-
+  // Try string match first
   const { data, error } = await supabase
     .from("urun_barkod")
-    .select("urun_kod, urun_ad, barkod")
+    .select("urun_kod")
     .eq("barkod", trimmed)
     .limit(1);
 
-  console.log("[barcode] Result:", { data, error });
+  if (error) return null;
 
-  if (error) {
-    console.error("[barcode] Error:", error.message, error.details, error.hint);
-    return null;
-  }
-  if (!data || data.length === 0) {
-    // Try as numeric (some DBs store barkod as bigint)
-    const { data: data2, error: error2 } = await supabase
-      .from("urun_barkod")
-      .select("urun_kod, urun_ad, barkod")
-      .eq("barkod", Number(trimmed))
-      .limit(1);
+  if (data && data.length > 0) return String(data[0].urun_kod);
 
-    console.log("[barcode] Numeric retry:", { data: data2, error: error2 });
+  // Fallback: numeric match (barkod stored as bigint)
+  const { data: data2, error: error2 } = await supabase
+    .from("urun_barkod")
+    .select("urun_kod")
+    .eq("barkod", Number(trimmed))
+    .limit(1);
 
-    if (error2 || !data2 || data2.length === 0) return null;
-    return String(data2[0].urun_kod);
-  }
-  return String(data[0].urun_kod);
+  if (error2 || !data2 || data2.length === 0) return null;
+  return String(data2[0].urun_kod);
 }
 
 /** Search by barcode: lookup barkod → get urun_kod → search stok */
