@@ -4,8 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 import SearchBar from "./components/SearchBar";
 import ProductCard from "./components/ProductCard";
 import PosterViewer from "./components/PosterViewer";
+import BarcodeScanner from "./components/BarcodeScanner";
 import {
   searchProducts,
+  searchByBarcode,
   getPopularTerms,
   getPublishedWeeks,
   getPosterPages,
@@ -22,6 +24,8 @@ export default function Home() {
   const [searched, setSearched] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [popularTerms, setPopularTerms] = useState<string[]>([]);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [lastBarcode, setLastBarcode] = useState("");
 
   // Poster state
   const [weeks, setWeeks] = useState<PosterWeek[]>([]);
@@ -54,12 +58,25 @@ export default function Home() {
     setLoading(true);
     setSearchError("");
     setSearched(true);
+    setLastBarcode("");
     try {
-      const products = await searchProducts(query);
+      // Check if input looks like a barcode (8-14 digit EAN/GTIN)
+      const isBarcode = /^\d{8,14}$/.test(query.trim()) && query.trim().length >= 8;
+      let products: ProductCardType[];
+
+      if (isBarcode) {
+        // Try barcode lookup first
+        products = await searchByBarcode(query.trim());
+        if (products.length === 0) {
+          // Fallback to regular search (maybe it's a product code)
+          products = await searchProducts(query);
+        }
+      } else {
+        products = await searchProducts(query);
+      }
+
       setResults(products);
-      // Log in background
-      const count = products.length;
-      logSearch(query, count);
+      logSearch(query, products.length);
     } catch {
       setSearchError("Arama sırasında bir hata oluştu. Lütfen tekrar deneyin.");
       setResults([]);
@@ -67,6 +84,15 @@ export default function Home() {
       setLoading(false);
     }
   }, []);
+
+  const handleBarcodeScan = useCallback(
+    (barcode: string) => {
+      setScannerOpen(false);
+      setLastBarcode(barcode);
+      handleSearch(barcode);
+    },
+    [handleSearch]
+  );
 
   const handleHotspotClick = useCallback(
     (urunKodu: string) => {
@@ -77,6 +103,14 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-full">
+      {/* Barcode scanner modal */}
+      {scannerOpen && (
+        <BarcodeScanner
+          onScan={handleBarcodeScan}
+          onClose={() => setScannerOpen(false)}
+        />
+      )}
+
       {/* Header */}
       <header className="bg-gradient-to-r from-primary to-primary-dark px-4 py-4 shadow-md">
         <h1 className="text-xl font-bold text-white text-center">
@@ -88,9 +122,17 @@ export default function Home() {
         {/* Search */}
         <SearchBar
           onSearch={handleSearch}
+          onBarcodeClick={() => setScannerOpen(true)}
           loading={loading}
           popularTerms={popularTerms}
         />
+
+        {/* Barcode info */}
+        {lastBarcode && (
+          <p className="text-xs text-gray-400">
+            Barkod: {lastBarcode}
+          </p>
+        )}
 
         {/* Results */}
         {searched && !loading && (
@@ -100,7 +142,9 @@ export default function Home() {
             )}
             {!searchError && results.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-4">
-                Sonuç bulunamadı.
+                {lastBarcode
+                  ? "Bu barkod ile eşleşen ürün bulunamadı."
+                  : "Sonuç bulunamadı."}
               </p>
             )}
             {results.length > 0 && (

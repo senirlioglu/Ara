@@ -4,12 +4,14 @@ import { useState, useRef, useEffect } from "react";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
+  onBarcodeClick?: () => void;
   loading?: boolean;
   popularTerms?: string[];
 }
 
 export default function SearchBar({
   onSearch,
+  onBarcodeClick,
   loading,
   popularTerms = [],
 }: SearchBarProps) {
@@ -40,13 +42,28 @@ export default function SearchBar({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Ürün adı veya kodu..."
+          placeholder="Ürün adı, kodu veya barkod..."
           className="flex-1 px-4 py-3 rounded-xl border border-gray-200 bg-white text-base
                      focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary
                      placeholder:text-gray-400"
           autoComplete="off"
           enterKeyHint="search"
         />
+        {/* Barcode camera button */}
+        <button
+          type="button"
+          onClick={onBarcodeClick}
+          className="px-3 py-3 bg-white border border-gray-200 rounded-xl
+                     hover:bg-gray-50 active:scale-95 transition-all"
+          aria-label="Barkod tara"
+          title="Kamera ile barkod tara"
+        >
+          <svg className="w-6 h-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round"
+              d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-2.25A1.125 1.125 0 013.75 7.125v-2.25zM3.75 16.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125v-2.25zM15.75 4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125v-2.25zM12 3.75v1.5M12 9.75v1.5M12 15.75v1.5M12 21v-1.5M9 12h1.5M14.25 12h1.5M3.75 12h1.5M19.5 12h1.5" />
+          </svg>
+        </button>
+        {/* Search button */}
         <button
           type="submit"
           disabled={loading || !query.trim()}

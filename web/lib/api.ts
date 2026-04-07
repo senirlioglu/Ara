@@ -9,6 +9,30 @@ import type {
   Hotspot,
 } from "./types";
 
+// ─── Barcode Lookup ─────────────────────────────────────────────
+
+/** Look up a barcode in urun_barkod table → return urun_kod */
+export async function lookupBarcode(barcode: string): Promise<string | null> {
+  const trimmed = barcode.trim();
+  if (!trimmed) return null;
+
+  const { data, error } = await supabase
+    .from("urun_barkod")
+    .select("urun_kod")
+    .eq("barkod", trimmed)
+    .limit(1);
+
+  if (error || !data || data.length === 0) return null;
+  return data[0].urun_kod as string;
+}
+
+/** Search by barcode: lookup barkod → get urun_kod → search stok */
+export async function searchByBarcode(barcode: string): Promise<ProductCard[]> {
+  const urunKod = await lookupBarcode(barcode);
+  if (!urunKod) return [];
+  return searchProducts(urunKod);
+}
+
 // ─── Product Search ─────────────────────────────────────────────
 
 const RE_TV_NEGATIF =
