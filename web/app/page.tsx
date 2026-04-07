@@ -131,16 +131,16 @@ export default function Home() {
       )}
 
       {/* Header */}
-      <header className="bg-gradient-to-r from-primary to-primary-dark px-4 py-5 shadow-md">
-        <h1 className="text-xl font-bold text-white text-center">
+      <header className="gradient-hero pt-8 pb-12 px-4 text-center">
+        <h1 className="text-2xl font-extrabold text-white tracking-tight">
           Ürün Ara
         </h1>
-        <p className="text-sm text-white/80 text-center mt-1">
+        <p className="text-sm text-white/70 mt-1">
           Hangi mağazada hangi ürün var? Hızlıca öğren!
         </p>
       </header>
 
-      <main className="flex-1 px-4 py-4 max-w-2xl mx-auto w-full space-y-5">
+      <main className="flex-1 px-4 -mt-6 space-y-5 pb-12 max-w-2xl mx-auto w-full">
         {/* Search */}
         <SearchBar
           onSearch={handleSearch}
@@ -176,15 +176,16 @@ export default function Home() {
               </p>
             )}
             {results.length > 0 && (
-              <div>
-                <p className="text-sm text-gray-500 mb-3">
-                  <strong>{results.length}</strong> ürün bulundu
+              <div className="w-full max-w-2xl mx-auto">
+                <div className="flex items-center gap-2 mb-3 text-sm">
+                  <span className="text-primary font-bold">{results.length}</span>
+                  <span className="text-muted-foreground">ürün bulundu</span>
                   {lat && lon && (
-                    <span className="text-blue-500 ml-1">
+                    <span className="text-red-500 font-medium flex items-center gap-1">
                       · 📍 Yakınına göre sıralı
                     </span>
                   )}
-                </p>
+                </div>
                 <div className="space-y-3">
                   {results.slice(0, 40).map((p) => (
                     <ProductCard
@@ -205,20 +206,20 @@ export default function Home() {
         {/* Poster section */}
         {weeks.length > 0 && (
           <section>
-            <h2 className="text-lg font-bold text-gray-800 mb-3">
+            <h2 className="text-lg font-bold text-foreground mb-3">
               Haftalık Broşür
             </h2>
 
-            <div className="flex gap-2 overflow-x-auto pb-2 mb-3 scrollbar-hide">
+            <div className="flex gap-2 overflow-x-auto pb-2 mb-4 scrollbar-hide">
               {weeks.map((w) => (
                 <button
                   key={w.week_id}
                   onClick={() => setSelectedWeek(w.week_id)}
-                  className={`shrink-0 px-4 py-2 rounded-full text-sm font-semibold transition-all
+                  className={`shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all
                     ${
                       selectedWeek === w.week_id
-                        ? "bg-gradient-to-r from-amber-400 to-orange-400 text-white shadow-sm"
-                        : "bg-white border border-gray-200 text-gray-600 hover:border-amber-300"
+                        ? "bg-red-500 text-white"
+                        : "bg-card border border-border text-foreground hover:border-primary/40"
                     }`}
                 >
                   {w.week_name}
