@@ -15,13 +15,12 @@ function formatPrice(price: number): string {
 
 function getStockLevel(adet: number): {
   label: string;
-  color: string;
   className: string;
 } {
-  if (adet <= 0) return { label: "Yok", color: "#95a5a6", className: "stock-none" };
-  if (adet <= 2) return { label: "Az", color: "#e74c3c", className: "stock-low" };
-  if (adet <= 5) return { label: "Orta", color: "#f39c12", className: "stock-medium" };
-  return { label: "Yeterli", color: "#27ae60", className: "stock-high" };
+  if (adet <= 0) return { label: "Yok", className: "stock-none" };
+  if (adet <= 2) return { label: "Az", className: "stock-low" };
+  if (adet <= 5) return { label: "Orta", className: "stock-medium" };
+  return { label: "Yeterli", className: "stock-high" };
 }
 
 function mapsUrl(lat: number, lon: number): string {
@@ -41,22 +40,37 @@ export default function ProductCard({ product }: { product: ProductCardType }) {
       {/* Header — always visible */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-3 flex items-center gap-3 text-left active:bg-gray-50 transition-colors"
+        className="w-full px-4 py-3.5 flex items-center gap-3 text-left active:bg-gray-50 transition-colors"
       >
-        <span className="text-xl">{hasStock ? "\uD83D\uDCE6" : "\u274C"}</span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-gray-900 truncate">
-            {urun_kod} &middot; {urun_ad}
+            {urun_ad}
           </p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {hasStock
-              ? `${stoklu_magaza} mağaza`
-              : "Stokta yok"}
-            {priceStr && ` \u00B7 ${priceStr}`}
-          </p>
+          <div className="flex items-center gap-2 mt-1.5">
+            {priceStr && (
+              <span className="text-lg font-extrabold text-red-600">
+                {priceStr}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-xs text-gray-400">{urun_kod}</span>
+            <span className="text-xs text-gray-300">&middot;</span>
+            <span className="text-xs text-gray-500">
+              {hasStock ? `${stoklu_magaza} mağaza` : "Stokta yok"}
+            </span>
+            {toplam_stok > 0 && (
+              <>
+                <span className="text-xs text-gray-300">&middot;</span>
+                <span className="text-xs text-gray-500">
+                  Toplam: {toplam_stok}
+                </span>
+              </>
+            )}
+          </div>
         </div>
         <svg
-          className={`w-5 h-5 text-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`}
+          className={`w-5 h-5 text-gray-400 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -68,21 +82,7 @@ export default function ProductCard({ product }: { product: ProductCardType }) {
 
       {/* Detail — expandable */}
       {expanded && (
-        <div className="px-4 pb-4 border-t border-gray-50">
-          {/* Badges */}
-          <div className="flex gap-2 mt-3 flex-wrap">
-            {priceStr && (
-              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-teal-500">
-                {priceStr}
-              </span>
-            )}
-            {toplam_stok > 0 && (
-              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold text-white bg-gradient-to-r from-violet-500 to-purple-500">
-                Toplam Stok: {toplam_stok}
-              </span>
-            )}
-          </div>
-
+        <div className="px-4 pb-4 border-t border-gray-100">
           {/* Store list */}
           {magazalar.length === 0 ? (
             <p className="mt-3 text-sm text-red-500 font-medium">
@@ -95,7 +95,7 @@ export default function ProductCard({ product }: { product: ProductCardType }) {
                 return (
                   <div
                     key={m.magaza_kod}
-                    className="flex items-center gap-3 p-2.5 rounded-xl bg-gray-50"
+                    className="flex items-center gap-3 p-3 rounded-xl bg-gray-50"
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">
