@@ -222,11 +222,11 @@ export default function PosterViewer({
   const imageUrl = getPosterImageUrl(page.image_path);
 
   return (
-    <div className="relative w-full" ref={wrapRef}>
+    <div className="relative w-full overflow-hidden rounded-xl" ref={wrapRef}>
       {/* Slide track — swipeable */}
       <div
         ref={trackRef}
-        className="relative w-full overflow-hidden rounded-xl"
+        className="relative w-full"
         style={{ touchAction: "pan-y", willChange: "transform" }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
