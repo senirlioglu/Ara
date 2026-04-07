@@ -21,7 +21,7 @@ function getStockLevel(adet: number): {
   if (adet <= 0)
     return { label: "Yok", badgeClass: "bg-gray-400 text-white", rowClass: "bg-gray-50 border-gray-200" };
   if (adet <= 2)
-    return { label: "Az", badgeClass: "bg-red-500 text-white", rowClass: "bg-red-50 border-red-200" };
+    return { label: "Düşük", badgeClass: "bg-red-500 text-white", rowClass: "bg-red-50 border-red-200" };
   if (adet <= 5)
     return { label: "Orta", badgeClass: "bg-amber-500 text-white", rowClass: "bg-amber-50 border-amber-200" };
   return { label: "Yüksek", badgeClass: "bg-green-600 text-white", rowClass: "bg-green-50 border-green-200" };
