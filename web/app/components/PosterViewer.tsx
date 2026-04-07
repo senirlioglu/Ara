@@ -45,17 +45,54 @@ export default function PosterViewer({
     return () => window.removeEventListener("keydown", handleKey);
   }, [goNext, goPrev]);
 
-  // Swipe support
-  const touchStartX = useRef(0);
+  // Smooth swipe support with tracking
+  const touchRef = useRef({ startX: 0, startY: 0, startTime: 0, tracking: false });
+  const [swipeOffset, setSwipeOffset] = useState(0);
+
   const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
+    touchRef.current = {
+      startX: e.touches[0].clientX,
+      startY: e.touches[0].clientY,
+      startTime: Date.now(),
+      tracking: true,
+    };
+    setSwipeOffset(0);
   };
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    const dx = e.changedTouches[0].clientX - touchStartX.current;
-    if (Math.abs(dx) > 50) {
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchRef.current.tracking) return;
+    const dx = e.touches[0].clientX - touchRef.current.startX;
+    const dy = e.touches[0].clientY - touchRef.current.startY;
+
+    // If vertical scroll is dominant, stop tracking horizontal swipe
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dx) < 10) {
+      touchRef.current.tracking = false;
+      setSwipeOffset(0);
+      return;
+    }
+
+    // Prevent vertical scroll when swiping horizontally
+    if (Math.abs(dx) > 10) {
+      e.preventDefault();
+    }
+
+    setSwipeOffset(dx);
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchRef.current.tracking) return;
+    const dx = swipeOffset;
+    const elapsed = Date.now() - touchRef.current.startTime;
+    const velocity = Math.abs(dx) / elapsed;
+
+    // Swipe threshold: either enough distance or fast enough
+    if (Math.abs(dx) > 40 || (velocity > 0.3 && Math.abs(dx) > 15)) {
       if (dx < 0) goNext();
       else goPrev();
     }
+
+    touchRef.current.tracking = false;
+    setSwipeOffset(0);
   };
 
   if (!page) return null;
@@ -63,30 +100,34 @@ export default function PosterViewer({
   const imageUrl = getPosterImageUrl(page.image_path);
 
   return (
-    <div className="relative w-full" ref={containerRef}>
-      {/* Image + hotspots */}
+    <div className="relative w-full overflow-hidden" ref={containerRef}>
+      {/* Image + hotspots — swipeable */}
       <div
-        className="relative w-full"
+        className="relative w-full transition-transform duration-200 ease-out"
+        style={{
+          transform: swipeOffset ? `translateX(${swipeOffset}px)` : undefined,
+          transition: swipeOffset ? "none" : "transform 0.2s ease-out",
+        }}
         onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={imageUrl}
           alt={page.title || `Sayfa ${currentIdx + 1}`}
-          className="w-full h-auto rounded-xl"
+          className="w-full h-auto rounded-xl select-none"
           draggable={false}
         />
 
-        {/* Hotspot overlays */}
+        {/* Hotspot overlays — invisible, only magnifier icon on press */}
         {pageHotspots.map((hs) => (
           <button
             key={hs.mapping_id}
             onClick={() => onHotspotClick?.(hs.urun_kodu)}
-            className="absolute border-2 border-primary/40 bg-primary/10
-                       hover:bg-primary/20 hover:border-primary/60
-                       rounded-md transition-colors cursor-pointer
-                       flex items-center justify-center"
+            className="absolute bg-transparent cursor-pointer
+                       active:bg-white/20 transition-colors
+                       flex items-center justify-center group"
             style={{
               left: `${hs.x0 * 100}%`,
               top: `${hs.y0 * 100}%`,
@@ -95,8 +136,12 @@ export default function PosterViewer({
             }}
             aria-label={`Ürün: ${hs.urun_kodu}`}
           >
-            <span className="text-xs bg-white/90 text-gray-700 px-1.5 py-0.5 rounded font-medium opacity-0 hover:opacity-100 transition-opacity">
-              {hs.urun_kodu}
+            {/* Magnifier icon — semi-transparent, like Streamlit */}
+            <span className="w-8 h-8 bg-black/40 rounded-full flex items-center justify-center
+                            opacity-60 group-hover:opacity-90 group-active:opacity-100 transition-opacity">
+              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+              </svg>
             </span>
           </button>
         ))}
