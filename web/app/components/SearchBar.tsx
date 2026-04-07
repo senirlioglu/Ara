@@ -1,12 +1,26 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { normalizeTurkish } from "@/lib/turkish";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
   onBarcodeClick?: () => void;
   loading?: boolean;
   popularTerms?: string[];
+}
+
+/** Load and cache the suggestion list */
+let cachedList: string[] | null = null;
+async function loadSuggestions(): Promise<string[]> {
+  if (cachedList) return cachedList;
+  try {
+    const res = await fetch("/oneri_listesi.json");
+    cachedList = await res.json();
+    return cachedList!;
+  } catch {
+    return [];
+  }
 }
 
 export default function SearchBar({
@@ -16,32 +30,118 @@ export default function SearchBar({
   popularTerms = [],
 }: SearchBarProps) {
   const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [allItems, setAllItems] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Load suggestion list on mount
+  useEffect(() => {
+    loadSuggestions().then(setAllItems);
+  }, []);
 
   // Auto-focus on mount (important for kiosk barcode scanners)
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
+  // Close suggestions on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  // Pre-normalize all items for fast search
+  const normalizedItems = useMemo(() => {
+    return allItems.map((item) => ({
+      original: item,
+      normalized: normalizeTurkish(item),
+    }));
+  }, [allItems]);
+
+  // Filter suggestions when query changes
+  const filterSuggestions = useCallback(
+    (q: string) => {
+      if (!q || q.length < 2 || normalizedItems.length === 0) {
+        setSuggestions([]);
+        setShowSuggestions(false);
+        return;
+      }
+
+      const normalized = normalizeTurkish(q);
+      const words = normalized.split(/\s+/).filter(Boolean);
+
+      const matches = normalizedItems
+        .filter((item) => words.every((w) => item.normalized.includes(w)))
+        .slice(0, 8)
+        .map((item) => item.original);
+
+      setSuggestions(matches);
+      setShowSuggestions(matches.length > 0);
+      setSelectedIdx(-1);
+    },
+    [normalizedItems]
+  );
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setQuery(val);
+    filterSuggestions(val);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) onSearch(query.trim());
+    if (query.trim()) {
+      setShowSuggestions(false);
+      onSearch(query.trim());
+    }
+  };
+
+  const handleSuggestionClick = (suggestion: string) => {
+    setQuery(suggestion);
+    setShowSuggestions(false);
+    onSearch(suggestion);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showSuggestions || suggestions.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIdx((prev) => (prev + 1) % suggestions.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIdx((prev) => (prev - 1 + suggestions.length) % suggestions.length);
+    } else if (e.key === "Enter" && selectedIdx >= 0) {
+      e.preventDefault();
+      handleSuggestionClick(suggestions[selectedIdx]);
+    } else if (e.key === "Escape") {
+      setShowSuggestions(false);
+    }
   };
 
   const handlePopularClick = (term: string) => {
     setQuery(term);
+    setShowSuggestions(false);
     onSearch(term);
   };
 
   return (
-    <div className="w-full">
-      {/* Search bar — mobile: barcode icon inside, desktop: separate button below */}
+    <div className="w-full" ref={wrapperRef}>
+      {/* Search bar */}
       <form onSubmit={handleSubmit}>
         {/* Search input with inline icons */}
-        <div className="relative flex items-center">
+        <div className="relative">
           {/* Search icon (left) */}
           <svg
-            className="absolute left-4 w-5 h-5 text-gray-400 pointer-events-none"
+            className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none"
             fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -51,17 +151,24 @@ export default function SearchBar({
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (suggestions.length > 0) setShowSuggestions(true);
+            }}
             placeholder="Ürün adı, kodu veya barkod..."
             className="w-full pl-12 pr-24 py-3.5 rounded-2xl border border-gray-200 bg-white text-base
                        focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary
                        placeholder:text-gray-400 shadow-sm"
             autoComplete="off"
             enterKeyHint="search"
+            role="combobox"
+            aria-expanded={showSuggestions}
+            aria-autocomplete="list"
           />
 
           {/* Right side buttons inside the input */}
-          <div className="absolute right-2 flex items-center gap-1">
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
             {/* Barcode icon — mobile only (inside input) */}
             <button
               type="button"
@@ -75,7 +182,7 @@ export default function SearchBar({
               </svg>
             </button>
 
-            {/* Search button (inside input) */}
+            {/* Search button */}
             <button
               type="submit"
               disabled={loading || !query.trim()}
@@ -90,6 +197,35 @@ export default function SearchBar({
               )}
             </button>
           </div>
+
+          {/* Autocomplete dropdown */}
+          {showSuggestions && suggestions.length > 0 && (
+            <ul
+              className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200
+                         rounded-2xl shadow-lg overflow-hidden max-h-80 overflow-y-auto"
+              role="listbox"
+            >
+              {suggestions.map((s, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    onClick={() => handleSuggestionClick(s)}
+                    onMouseEnter={() => setSelectedIdx(i)}
+                    className={`w-full text-left px-4 py-3 text-sm border-b border-gray-50 last:border-0
+                               transition-colors ${
+                                 i === selectedIdx
+                                   ? "bg-primary/5 text-primary"
+                                   : "text-gray-700 hover:bg-gray-50"
+                               }`}
+                    role="option"
+                    aria-selected={i === selectedIdx}
+                  >
+                    {s}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* Desktop: large barcode button below search (for kiosk) */}
