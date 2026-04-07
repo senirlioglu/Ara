@@ -16,20 +16,25 @@ export default function PosterViewer({
   onHotspotClick,
 }: PosterViewerProps) {
   const [currentIdx, setCurrentIdx] = useState(0);
-  const [sliding, setSliding] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
+  const hotspotsRef = useRef<HTMLDivElement>(null);
 
   const total = pages.length;
   const page = pages[currentIdx];
 
-  // Hide hotspots during slide animation to prevent ghost icons
-  const pageHotspots = sliding
-    ? []
-    : mappings.filter(
-        (m) =>
-          m.flyer_filename === page?.flyer_filename && m.page_no === page?.page_no
-      );
+  const pageHotspots = mappings.filter(
+    (m) =>
+      m.flyer_filename === page?.flyer_filename && m.page_no === page?.page_no
+  );
+
+  // Hide/show hotspots directly via DOM (no React timing issues)
+  function hideHotspots() {
+    if (hotspotsRef.current) hotspotsRef.current.style.visibility = "hidden";
+  }
+  function showHotspots() {
+    if (hotspotsRef.current) hotspotsRef.current.style.visibility = "";
+  }
 
   // Refs for swipe state (no re-renders during gesture)
   const touchState = useRef({
@@ -59,7 +64,7 @@ export default function PosterViewer({
     const direction = idx > currentIdx ? -1 : 1;
     const wrapW = wrap.clientWidth;
     ts.isSliding = true;
-    setSliding(true);
+    hideHotspots();
 
     // Phase 1: slide out
     track.style.transition = "transform 0.3s ease";
@@ -82,7 +87,7 @@ export default function PosterViewer({
             track.style.transition = "";
             track.style.transform = "";
             ts.isSliding = false;
-            setSliding(false);
+            showHotspots();
           };
           track.addEventListener("transitionend", onEnd2);
         });
@@ -175,7 +180,7 @@ export default function PosterViewer({
 
       if (targetIdx >= 0 && targetIdx < total) {
         ts.isSliding = true;
-        setSliding(true);
+        hideHotspots();
 
         track.style.transition = "transform 0.3s ease";
         track.style.transform = `translateX(${direction * wrapW}px)`;
@@ -195,7 +200,7 @@ export default function PosterViewer({
                 track.style.transition = "";
                 track.style.transform = "";
                 ts.isSliding = false;
-                setSliding(false);
+                showHotspots();
               };
               track.addEventListener("transitionend", onEnd2);
             });
@@ -248,7 +253,8 @@ export default function PosterViewer({
           draggable={false}
         />
 
-        {/* Hotspots — invisible areas with magnifier in bottom-right */}
+        {/* Hotspots container — hidden during slide via DOM ref */}
+        <div ref={hotspotsRef} className="absolute inset-0">
         {pageHotspots.map((hs) => {
           const w = (hs.x1 - hs.x0) * 100;
           const h = (hs.y1 - hs.y0) * 100;
@@ -305,6 +311,7 @@ export default function PosterViewer({
             </button>
           );
         })}
+        </div>
       </div>
 
       {/* Navigation arrows */}
