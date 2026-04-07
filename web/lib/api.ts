@@ -41,9 +41,9 @@ export async function lookupBarcode(barcode: string): Promise<string | null> {
     console.log("[barcode] Numeric retry:", { data: data2, error: error2 });
 
     if (error2 || !data2 || data2.length === 0) return null;
-    return data2[0].urun_kod as string;
+    return String(data2[0].urun_kod);
   }
-  return data[0].urun_kod as string;
+  return String(data[0].urun_kod);
 }
 
 /** Search by barcode: lookup barkod → get urun_kod → search stok */
