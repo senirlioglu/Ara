@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ code: string }> }
-) {
-  const { code } = await params;
+export async function GET(request: NextRequest) {
+  const code = request.nextUrl.searchParams.get("code") ?? "";
+
+  if (!code) {
+    return Response.json({ error: "code param required" });
+  }
 
   // Direct query to urun_barkod
   const { data, error } = await supabase
@@ -21,7 +22,7 @@ export async function GET(
     .eq("barkod", Number(code))
     .limit(5);
 
-  // Also check table exists by fetching 1 row
+  // Check table exists by fetching 1 row
   const { data: sample, error: sampleErr } = await supabase
     .from("urun_barkod")
     .select("*")
