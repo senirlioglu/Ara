@@ -18,14 +18,15 @@ function getStockLevel(adet: number): {
   label: string;
   badgeClass: string;
   rowClass: string;
+  linkClass: string;
 } {
   if (adet <= 0)
-    return { label: "Yok", badgeClass: "bg-gray-400 text-white", rowClass: "bg-gray-50 border-gray-200" };
+    return { label: "Yok", badgeClass: "bg-gray-400 text-white", rowClass: "bg-gray-50 border-gray-200", linkClass: "text-blue-600" };
   if (adet <= 2)
-    return { label: "Düşük", badgeClass: "bg-red-500 text-white", rowClass: "bg-red-50 border-red-200" };
+    return { label: "Düşük", badgeClass: "bg-red-500 text-white", rowClass: "bg-red-50 border-red-200", linkClass: "text-blue-700" };
   if (adet <= 5)
-    return { label: "Orta", badgeClass: "bg-amber-500 text-white", rowClass: "bg-amber-200/60 border-amber-300" };
-  return { label: "Yüksek", badgeClass: "bg-green-600 text-white", rowClass: "bg-green-50 border-green-200" };
+    return { label: "Orta", badgeClass: "bg-amber-500 text-white", rowClass: "bg-amber-200/60 border-amber-300", linkClass: "text-red-500" };
+  return { label: "Yüksek", badgeClass: "bg-green-600 text-white", rowClass: "bg-green-50 border-green-200", linkClass: "text-red-500" };
 }
 
 function mapsUrl(lat: number, lon: number): string {
@@ -192,7 +193,7 @@ export default function ProductCard({
                           href={mapsUrl(m.latitude, m.longitude)}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 mt-1 text-sm text-red-500 font-medium"
+                          className={`inline-flex items-center gap-1 mt-1 text-sm font-medium ${level.linkClass}`}
                         >
                           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
