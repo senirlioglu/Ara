@@ -180,11 +180,6 @@ export default function Home() {
                 <div className="flex items-center gap-2 mb-3 text-sm">
                   <span className="text-primary font-bold">{results.length}</span>
                   <span className="text-muted-foreground">ürün bulundu</span>
-                  {lat && lon && (
-                    <span className="text-red-500 font-medium flex items-center gap-1">
-                      · 📍 Yakınına göre sıralı
-                    </span>
-                  )}
                 </div>
                 <div className="space-y-3">
                   {results.slice(0, 40).map((p) => (
