@@ -31,6 +31,19 @@ export default function PosterViewer({
     animatingRef.current = false;
   }, [pagesKey]);
 
+  // Preload adjacent images so they're cached before swipe
+  useEffect(() => {
+    if (total <= 1) return;
+    const preload = (idx: number) => {
+      const p = pages[idx];
+      if (!p) return;
+      const img = new Image();
+      img.src = getPosterImageUrl(p.image_path);
+    };
+    preload((currentIdx + 1) % total);
+    if (currentIdx > 0) preload(currentIdx - 1);
+  }, [currentIdx, total, pages]);
+
   const pageHotspots = mappings.filter(
     (m) =>
       m.flyer_filename === page?.flyer_filename && m.page_no === page?.page_no
@@ -53,27 +66,35 @@ export default function PosterViewer({
     const hotspotEl = curEl.querySelector("[data-hotspots]") as HTMLElement;
     if (hotspotEl) hotspotEl.style.visibility = "hidden";
 
-    // Setup next image
+    // Preload next image, then animate
     const nxtImg = nxtEl.querySelector("img") as HTMLImageElement;
-    if (nxtImg) nxtImg.src = nextUrl;
+    const startAnim = () => {
+      const startPos = direction === "left" ? "100%" : "-100%";
+      const endPos = direction === "left" ? "-100%" : "100%";
 
-    // Position next off-screen
-    const startPos = direction === "left" ? "100%" : "-100%";
-    const endPos = direction === "left" ? "-100%" : "100%";
+      nxtEl.style.display = "block";
+      nxtEl.style.transform = `translateX(${startPos})`;
+      nxtEl.style.transition = "none";
+      curEl.style.transition = "none";
+      curEl.style.transform = "translateX(0)";
 
-    nxtEl.style.display = "block";
-    nxtEl.style.transform = `translateX(${startPos})`;
-    nxtEl.style.transition = "none";
-    curEl.style.transition = "none";
-    curEl.style.transform = "translateX(0)";
+      // Force reflow then animate
+      void nxtEl.offsetWidth;
 
-    // Force reflow then animate
-    void nxtEl.offsetWidth;
+      nxtEl.style.transition = "transform 0.3s ease";
+      curEl.style.transition = "transform 0.3s ease";
+      nxtEl.style.transform = "translateX(0)";
+      curEl.style.transform = `translateX(${endPos})`;
+    };
 
-    nxtEl.style.transition = "transform 0.3s ease";
-    curEl.style.transition = "transform 0.3s ease";
-    nxtEl.style.transform = "translateX(0)";
-    curEl.style.transform = `translateX(${endPos})`;
+    // If image already cached, start immediately
+    if (nxtImg.src === nextUrl && nxtImg.complete) {
+      startAnim();
+    } else {
+      nxtImg.onload = () => startAnim();
+      nxtImg.onerror = () => startAnim(); // fallback: animate even if load fails
+      nxtImg.src = nextUrl;
+    }
 
     const cleanup = () => {
       curEl.removeEventListener("transitionend", cleanup);
