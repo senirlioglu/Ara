@@ -16,88 +16,49 @@ export default function PosterViewer({
   onHotspotClick,
 }: PosterViewerProps) {
   const [currentIdx, setCurrentIdx] = useState(0);
+  const [transitioning, setTransitioning] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
-  const hotspotsRef = useRef<HTMLDivElement>(null);
 
   const total = pages.length;
   const page = pages[currentIdx];
 
-  const pageHotspots = mappings.filter(
-    (m) =>
-      m.flyer_filename === page?.flyer_filename && m.page_no === page?.page_no
-  );
+  // Reset to first page when pages change (week switch)
+  const pagesKey = pages.map((p) => p.id).join(",");
+  useEffect(() => {
+    setCurrentIdx(0);
+    setTransitioning(false);
+  }, [pagesKey]);
 
-  // Hide/show hotspots directly via DOM (no React timing issues)
-  function hideHotspots() {
-    if (hotspotsRef.current) hotspotsRef.current.style.visibility = "hidden";
-  }
-  function showHotspots() {
-    if (hotspotsRef.current) hotspotsRef.current.style.visibility = "";
-  }
+  const pageHotspots = transitioning
+    ? []
+    : mappings.filter(
+        (m) =>
+          m.flyer_filename === page?.flyer_filename && m.page_no === page?.page_no
+      );
 
-  // Refs for swipe state (no re-renders during gesture)
+  // Swipe state
   const touchState = useRef({
     startX: 0,
     startY: 0,
     startTime: 0,
     isDragging: false,
-    dragOffset: 0,
     dirLocked: false,
     isHorizontal: false,
-    isSliding: false,
   });
 
-  const goTo = useCallback((idx: number) => {
-    if (idx < 0 || idx >= total) return;
-    setCurrentIdx(idx);
-  }, [total]);
-
-  // Slide animation (3-phase like Streamlit)
-  const slideTo = useCallback((idx: number) => {
-    const ts = touchState.current;
-    const track = trackRef.current;
-    const wrap = wrapRef.current;
-    if (ts.isSliding || !track || !wrap) return;
+  const changePage = useCallback((idx: number) => {
     if (idx < 0 || idx >= total || idx === currentIdx) return;
-
-    const direction = idx > currentIdx ? -1 : 1;
-    const wrapW = wrap.clientWidth;
-    ts.isSliding = true;
-    hideHotspots();
-
-    // Phase 1: slide out
-    track.style.transition = "transform 0.3s ease";
-    track.style.transform = `translateX(${direction * wrapW}px)`;
-
-    const onEnd = () => {
-      track.removeEventListener("transitionend", onEnd);
-      // Phase 2: reposition off-screen, load new page
-      track.style.transition = "none";
-      track.style.transform = `translateX(${-direction * wrapW}px)`;
+    setTransitioning(true);
+    // Brief fade-out, then switch
+    setTimeout(() => {
       setCurrentIdx(idx);
-
-      // Phase 3: slide in
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          track.style.transition = "transform 0.3s ease";
-          track.style.transform = "translateX(0)";
-          const onEnd2 = () => {
-            track.removeEventListener("transitionend", onEnd2);
-            track.style.transition = "";
-            track.style.transform = "";
-            ts.isSliding = false;
-            showHotspots();
-          };
-          track.addEventListener("transitionend", onEnd2);
-        });
-      });
-    };
-    track.addEventListener("transitionend", onEnd);
+      // Fade-in after state update
+      setTimeout(() => setTransitioning(false), 50);
+    }, 150);
   }, [total, currentIdx]);
 
-  const goNext = useCallback(() => slideTo((currentIdx + 1) % total), [slideTo, currentIdx, total]);
-  const goPrev = useCallback(() => slideTo((currentIdx - 1 + total) % total), [slideTo, currentIdx, total]);
+  const goNext = useCallback(() => changePage((currentIdx + 1) % total), [changePage, currentIdx, total]);
+  const goPrev = useCallback(() => changePage((currentIdx - 1 + total) % total), [changePage, currentIdx, total]);
 
   // Keyboard
   useEffect(() => {
@@ -109,208 +70,157 @@ export default function PosterViewer({
     return () => window.removeEventListener("keydown", handleKey);
   }, [goNext, goPrev]);
 
-  // Touch handlers
+  // Touch: swipe detection with direction lock
   const handleTouchStart = (e: React.TouchEvent) => {
     const ts = touchState.current;
-    if (ts.isSliding || total <= 1) return;
-    const track = trackRef.current;
-    if (!track) return;
+    if (total <= 1) return;
 
     ts.startX = e.touches[0].clientX;
     ts.startY = e.touches[0].clientY;
     ts.startTime = Date.now();
     ts.isDragging = false;
-    ts.dragOffset = 0;
     ts.dirLocked = false;
     ts.isHorizontal = false;
-
-    track.style.transition = "";
-    track.style.transform = "";
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
     const ts = touchState.current;
-    const track = trackRef.current;
-    if (ts.isSliding || total <= 1 || !track) return;
+    if (total <= 1) return;
 
     const dx = e.touches[0].clientX - ts.startX;
     const dy = e.touches[0].clientY - ts.startY;
 
-    // Lock direction on first significant move
     if (!ts.dirLocked && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
       ts.dirLocked = true;
       ts.isHorizontal = Math.abs(dx) > Math.abs(dy);
     }
-    if (!ts.isHorizontal) return;
 
-    // Prevent vertical scroll when swiping horizontally
-    e.preventDefault();
-
-    ts.isDragging = true;
-    ts.dragOffset = dx;
-
-    // Resistance at edges
-    if ((currentIdx === 0 && dx > 0) || (currentIdx === total - 1 && dx < 0)) {
-      ts.dragOffset = dx * 0.25;
+    if (ts.isHorizontal) {
+      e.preventDefault();
+      ts.isDragging = true;
     }
-
-    track.style.transform = `translateX(${ts.dragOffset}px)`;
   };
 
   const handleTouchEnd = () => {
     const ts = touchState.current;
-    const track = trackRef.current;
-    const wrap = wrapRef.current;
-    if (ts.isSliding || !ts.isDragging || !track || !wrap) {
-      if (track) {
-        track.style.transform = "";
-      }
-      return;
-    }
+    if (!ts.isDragging || !ts.isHorizontal) return;
 
-    const wrapW = wrap.clientWidth;
-    const threshold = wrapW * 0.08;
-    const elapsed = Date.now() - ts.startTime;
-    const velocity = Math.abs(ts.dragOffset) / (elapsed || 1);
-    const shouldSlide = Math.abs(ts.dragOffset) > threshold || (velocity > 0.3 && Math.abs(ts.dragOffset) > 15);
+    const dx = ts.isDragging
+      ? (event as unknown as TouchEvent)?.changedTouches?.[0]?.clientX
+        ? (event as unknown as TouchEvent).changedTouches[0].clientX - ts.startX
+        : 0
+      : 0;
 
-    if (shouldSlide) {
-      const direction = ts.dragOffset > 0 ? 1 : -1;
-      const targetIdx = currentIdx - direction;
-
-      if (targetIdx >= 0 && targetIdx < total) {
-        ts.isSliding = true;
-        hideHotspots();
-
-        track.style.transition = "transform 0.3s ease";
-        track.style.transform = `translateX(${direction * wrapW}px)`;
-
-        const onEnd = () => {
-          track.removeEventListener("transitionend", onEnd);
-          track.style.transition = "none";
-          track.style.transform = `translateX(${-direction * wrapW}px)`;
-          setCurrentIdx(targetIdx);
-
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              track.style.transition = "transform 0.3s ease";
-              track.style.transform = "translateX(0)";
-              const onEnd2 = () => {
-                track.removeEventListener("transitionend", onEnd2);
-                track.style.transition = "";
-                track.style.transform = "";
-                ts.isSliding = false;
-                showHotspots();
-              };
-              track.addEventListener("transitionend", onEnd2);
-            });
-          });
-        };
-        track.addEventListener("transitionend", onEnd);
-      } else {
-        snapBack(track);
-      }
-    } else {
-      snapBack(track);
-    }
-
-    // Delay reset so hotspot click handlers can check isDragging
-    setTimeout(() => { ts.isDragging = false; }, 0);
-    ts.dragOffset = 0;
+    // Use stored start position for calculation
+    ts.isDragging = false;
   };
 
-  function snapBack(track: HTMLDivElement) {
-    track.style.transition = "transform 0.3s ease";
-    track.style.transform = "translateX(0)";
-    const onSnap = () => {
-      track.removeEventListener("transitionend", onSnap);
-      track.style.transition = "";
-      track.style.transform = "";
-    };
-    track.addEventListener("transitionend", onSnap);
-  }
+  // Simplified touch end using a ref to track last position
+  const lastTouchX = useRef(0);
+
+  const handleTouchMoveTracked = (e: React.TouchEvent) => {
+    lastTouchX.current = e.touches[0].clientX;
+    handleTouchMove(e);
+  };
+
+  const handleTouchEndTracked = () => {
+    const ts = touchState.current;
+    if (!ts.isHorizontal) return;
+
+    const dx = lastTouchX.current - ts.startX;
+    const elapsed = Date.now() - ts.startTime;
+    const velocity = Math.abs(dx) / (elapsed || 1);
+
+    if (Math.abs(dx) > 40 || (velocity > 0.3 && Math.abs(dx) > 15)) {
+      if (dx < 0) goNext();
+      else goPrev();
+    }
+
+    ts.isDragging = false;
+  };
 
   if (!page) return null;
 
   const imageUrl = getPosterImageUrl(page.image_path);
 
   return (
-    <div className="relative w-full overflow-hidden rounded-xl" ref={wrapRef}>
-      {/* Slide track — swipeable */}
+    <div className="relative w-full" ref={wrapRef}>
+      {/* Image + hotspots with fade transition */}
       <div
-        ref={trackRef}
-        className="relative w-full"
-        style={{ touchAction: "pan-y", willChange: "transform" }}
+        className="relative w-full overflow-hidden rounded-xl"
         onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMoveTracked}
+        onTouchEnd={handleTouchEndTracked}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={imageUrl}
-          alt={page.title || `Sayfa ${currentIdx + 1}`}
-          className="w-full h-auto select-none"
-          draggable={false}
-        />
+        <div
+          className="transition-opacity duration-150 ease-in-out"
+          style={{ opacity: transitioning ? 0 : 1 }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imageUrl}
+            alt={page.title || `Sayfa ${currentIdx + 1}`}
+            className="w-full h-auto select-none"
+            draggable={false}
+          />
 
-        {/* Hotspots container — hidden during slide via DOM ref */}
-        <div ref={hotspotsRef} className="absolute inset-0">
-        {pageHotspots.map((hs) => {
-          const w = (hs.x1 - hs.x0) * 100;
-          const h = (hs.y1 - hs.y0) * 100;
-          // Dynamic icon size based on hotspot dimensions (matches Streamlit)
-          const shorter = Math.min(w, h);
-          const iconSize = Math.max(4, Math.min(8, shorter * 0.35));
+          {/* Hotspots */}
+          <div className="absolute inset-0">
+            {pageHotspots.map((hs) => {
+              const w = (hs.x1 - hs.x0) * 100;
+              const h = (hs.y1 - hs.y0) * 100;
+              const shorter = Math.min(w, h);
+              const iconSize = Math.max(4, Math.min(8, shorter * 0.35));
 
-          return (
-            <button
-              key={hs.mapping_id}
-              onClick={() => {
-                if (touchState.current.isDragging || touchState.current.isSliding) return;
-                onHotspotClick?.(hs.urun_kodu);
-              }}
-              className="absolute bg-transparent border-none cursor-pointer"
-              style={{
-                left: `${hs.x0 * 100}%`,
-                top: `${hs.y0 * 100}%`,
-                width: `${w}%`,
-                height: `${h}%`,
-                touchAction: "manipulation",
-                WebkitTapHighlightColor: "transparent",
-              }}
-              aria-label={`Ürün: ${hs.urun_kodu}`}
-            >
-              {/* Magnifier icon — bottom-right, white semi-transparent */}
-              <span
-                className="absolute bottom-0.5 right-0.5 rounded-full
-                           bg-white/75 text-gray-700 flex items-center justify-center
-                           shadow-sm hover:bg-white/95 active:bg-red-500 active:text-white
-                           transition-all"
-                style={{
-                  width: `${iconSize}vw`,
-                  height: `${iconSize}vw`,
-                  maxWidth: "34px",
-                  maxHeight: "34px",
-                  minWidth: "16px",
-                  minHeight: "16px",
-                }}
-              >
-                <svg
-                  className="w-[55%] h-[55%]"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2.5}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+              return (
+                <button
+                  key={hs.mapping_id}
+                  onClick={() => {
+                    if (touchState.current.isDragging) return;
+                    onHotspotClick?.(hs.urun_kodu);
+                  }}
+                  className="absolute bg-transparent border-none cursor-pointer"
+                  style={{
+                    left: `${hs.x0 * 100}%`,
+                    top: `${hs.y0 * 100}%`,
+                    width: `${w}%`,
+                    height: `${h}%`,
+                    touchAction: "manipulation",
+                    WebkitTapHighlightColor: "transparent",
+                  }}
+                  aria-label={`Ürün: ${hs.urun_kodu}`}
                 >
-                  <circle cx="10" cy="10" r="6" />
-                  <line x1="14.5" y1="14.5" x2="20" y2="20" />
-                </svg>
-              </span>
-            </button>
-          );
-        })}
+                  <span
+                    className="absolute bottom-0.5 right-0.5 rounded-full
+                               bg-white/75 text-gray-700 flex items-center justify-center
+                               shadow-sm hover:bg-white/95 active:bg-red-500 active:text-white
+                               transition-all"
+                    style={{
+                      width: `${iconSize}vw`,
+                      height: `${iconSize}vw`,
+                      maxWidth: "34px",
+                      maxHeight: "34px",
+                      minWidth: "16px",
+                      minHeight: "16px",
+                    }}
+                  >
+                    <svg
+                      className="w-[55%] h-[55%]"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <circle cx="10" cy="10" r="6" />
+                      <line x1="14.5" y1="14.5" x2="20" y2="20" />
+                    </svg>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -350,7 +260,7 @@ export default function PosterViewer({
               {pages.map((_, i) => (
                 <button
                   key={i}
-                  onClick={() => goTo(i)}
+                  onClick={() => changePage(i)}
                   className={`w-2 h-2 rounded-full transition-all ${
                     i === currentIdx
                       ? "bg-[#1e3a5f] scale-125"
@@ -361,7 +271,7 @@ export default function PosterViewer({
               ))}
             </div>
           )}
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-muted-foreground">
             {currentIdx + 1} / {total}
           </span>
         </div>
