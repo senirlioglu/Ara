@@ -1301,12 +1301,13 @@ def _mapping_tool_tab():
                         "w": 0, "h": 0,
                     } for pg in db_pages]
                     raw_prods = [
-                        {"urun_kod": p["urun_kodu"], "urun_ad": p.get("urun_aciklamasi", "")}
+                        {"urun_kod": p["urun_kodu"], "urun_ad": p.get("urun_aciklamasi", ""), "urun_fiyat": p.get("afis_fiyat", "")}
                         for p in db_prods
                     ]
                     st.session_state["mt_products"] = build_search_index(raw_prods)
                     st.session_state["mt_product_labels"] = [
-                        f'{p["urun_kodu"]} — {p.get("urun_aciklamasi", "")}' for p in db_prods
+                        f'{p["urun_kodu"]} — {p.get("urun_aciklamasi", "")}{" — " + str(p.get("afis_fiyat", "")) + " ₺" if p.get("afis_fiyat") else ""}'
+                        for p in db_prods
                     ]
                     st.session_state["mt_week_id"] = resume_wid
                     st.session_state["mt_bbox"] = None
@@ -1464,7 +1465,7 @@ def _mapping_tool_tab():
                 # Radio options keyed by product code for stable identity
                 radio_codes = [rp["urun_kod"] for _, rp in visible_slice]
                 radio_labels_map = {
-                    rp["urun_kod"]: f"`{rp['urun_kod']}` — {rp.get('urun_ad', '')}"
+                    rp["urun_kod"]: f"`{rp['urun_kod']}` — {rp.get('urun_ad', '')}{' — ' + str(rp.get('urun_fiyat', '')) + ' ₺' if rp.get('urun_fiyat') else ''}"
                     for _, rp in visible_slice
                 }
                 radio_default_idx = radio_codes.index(sel_kod) if sel_kod in radio_codes else 0
@@ -1523,7 +1524,8 @@ def _mapping_tool_tab():
                     for r in results:
                         is_mapped = r["urun_kod"] in mapped_codes
                         status = " ✓" if is_mapped else ""
-                        sr_labels_map[r["urun_kod"]] = f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{status}"
+                        fiyat_str = f" — {r.get('urun_fiyat', '')} ₺" if r.get('urun_fiyat') else ""
+                        sr_labels_map[r["urun_kod"]] = f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{fiyat_str}{status}"
 
                     sel_sr_code = st.radio(
                         "Sonuç seç:", sr_codes,
@@ -2022,8 +2024,9 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
                 kod = str(r.get("urun_kodu", "")).strip()
                 ad = str(r.get("urun_aciklamasi", "")).strip()
                 fiyat = str(r.get("afis_fiyat", "")).strip() if "afis_fiyat" in r.index else ""
-                prods.append({"urun_kod": kod, "urun_ad": ad})
-                labels.append(f"{kod} — {ad}" if ad else kod)
+                prods.append({"urun_kod": kod, "urun_ad": ad, "urun_fiyat": fiyat})
+                fiyat_label = f" — {fiyat} ₺" if fiyat else ""
+                labels.append(f"{kod} — {ad}{fiyat_label}" if ad else kod)
                 db_prods.append({"urun_kodu": kod, "urun_aciklamasi": ad, "afis_fiyat": fiyat})
             from mapping_ui.search import build_search_index
             st.session_state["mt_products"] = build_search_index(prods)
@@ -2325,11 +2328,11 @@ def _admin_tab_weeks():
                 else:
                     st.info("Değişiklik yok.")
 
-        # Durum ve silme işlemleri (form dışında)
+        # Durum, düzenle ve silme işlemleri (form dışında)
         for w in weeks:
             wid = w["week_id"]
             with st.container(border=True):
-                wc1, wc2, wc3 = st.columns([3, 2, 1])
+                wc1, wc2, wc3, wc4 = st.columns([3, 1.5, 1.5, 1])
                 with wc1:
                     name = w.get("week_name") or wid
                     st.caption(f"{name} ({wid})")
@@ -2348,9 +2351,84 @@ def _admin_tab_weeks():
                             update_week_status(wid, "draft")
                             st.rerun()
                 with wc3:
+                    if st.button("Düzenle", key=f"wl_edit_{wid}", use_container_width=True):
+                        st.session_state[f"_edit_wl_{wid}"] = not st.session_state.get(f"_edit_wl_{wid}", False)
+                        st.rerun()
+                with wc4:
                     if st.button("Sil", key=f"wl_del_{wid}", use_container_width=True):
                         st.session_state[f"_confirm_del_wl_{wid}"] = True
 
+            # ── Düzenleme paneli (isim değiştir + Excel ekle) ──
+            if st.session_state.get(f"_edit_wl_{wid}"):
+                with st.container(border=True):
+                    st.markdown(f"**{w.get('week_name') or wid}** — Düzenle")
+
+                    # İsim değiştirme
+                    new_name = st.text_input(
+                        "Hafta İsmi", value=w.get("week_name") or wid,
+                        key=f"wl_rename_{wid}",
+                    )
+                    if st.button("İsmi Kaydet", key=f"wl_rename_btn_{wid}"):
+                        if new_name.strip() and new_name.strip() != (w.get("week_name") or wid):
+                            save_week(wid, new_name.strip(),
+                                      w.get("start_date"), w.get("end_date"),
+                                      w.get("status", "draft"),
+                                      w.get("sort_order", 0) or 0)
+                            st.success(f"Hafta ismi güncellendi: {new_name.strip()}")
+                            st.session_state.pop(f"_edit_wl_{wid}", None)
+                            st.rerun()
+                        else:
+                            st.info("İsim aynı, değişiklik yok.")
+
+                    st.divider()
+
+                    # Mevcut haftaya Excel ekleme
+                    st.markdown("**Ürün Listesi Güncelle (Excel)**")
+                    st.caption("Mevcut ürün listesinin üzerine yazar. Sütunlar: Ürün Kod, Ürün Açıklaması, SATIŞ FİYATI")
+                    from storage import save_week_products
+                    excel_file = st.file_uploader(
+                        "Excel yükle", type=["xlsx", "xls", "csv"],
+                        key=f"wl_excel_{wid}",
+                    )
+                    if excel_file and st.button("Yükle", key=f"wl_excel_btn_{wid}"):
+                        try:
+                            if excel_file.name.endswith(".csv"):
+                                import pandas as pd
+                                edf = pd.read_csv(excel_file)
+                            else:
+                                import pandas as pd
+                                edf = pd.read_excel(excel_file)
+
+                            # Column mapping (same logic as _mt_process_uploads)
+                            col_map = {}
+                            for c in edf.columns:
+                                cu = str(c).strip().upper()
+                                if "KOD" in cu:
+                                    col_map[c] = "urun_kodu"
+                                elif "AÇIKLAMA" in cu or "ACIKLAMA" in cu:
+                                    col_map[c] = "urun_aciklamasi"
+                                elif "FİYAT" in cu or "FIYAT" in cu:
+                                    col_map[c] = "afis_fiyat"
+                            edf = edf.rename(columns=col_map)
+
+                            if "urun_kodu" not in edf.columns:
+                                st.error("Excel'de 'Ürün Kod' sütunu bulunamadı.")
+                            else:
+                                db_prods = []
+                                for _, r in edf.iterrows():
+                                    kod = str(r.get("urun_kodu", "")).strip()
+                                    ad = str(r.get("urun_aciklamasi", "")).strip() if "urun_aciklamasi" in r.index else ""
+                                    fiyat = str(r.get("afis_fiyat", "")).strip() if "afis_fiyat" in r.index else ""
+                                    if kod:
+                                        db_prods.append({"urun_kodu": kod, "urun_aciklamasi": ad, "afis_fiyat": fiyat})
+                                save_week_products(wid, db_prods)
+                                st.success(f"{len(db_prods)} ürün yüklendi!")
+                                st.session_state.pop(f"_edit_wl_{wid}", None)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Excel okuma hatası: {e}")
+
+            # Silme onayı
             if st.session_state.get(f"_confirm_del_wl_{wid}"):
                 st.warning(f"**{w.get('week_name') or wid}** — tüm afişler, eşleştirmeler ve ürünler silinecek!")
                 dc1, dc2 = st.columns(2)
