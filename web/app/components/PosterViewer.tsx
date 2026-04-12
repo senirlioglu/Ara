@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import useEmblaCarousel from "embla-carousel-react";
 import type { PosterPage, Hotspot } from "@/lib/types";
+import { analytics } from "@/lib/analytics";
 import { getPosterImageUrl } from "@/lib/api";
 
 interface PosterViewerProps {
@@ -37,7 +38,11 @@ export default function PosterViewer({
   // Track current slide
   useEffect(() => {
     if (!emblaApi) return;
-    const onSelect = () => setCurrentIdx(emblaApi.selectedScrollSnap());
+    const onSelect = () => {
+      const idx = emblaApi.selectedScrollSnap();
+      setCurrentIdx(idx);
+      analytics.posterSwipe(idx + 1, total);
+    };
     emblaApi.on("select", onSelect);
     return () => { emblaApi.off("select", onSelect); };
   }, [emblaApi]);

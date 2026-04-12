@@ -7,6 +7,7 @@ import PosterViewer from "./components/PosterViewer";
 import BarcodeScanner from "./components/BarcodeScanner";
 import LocationBanner from "./components/LocationBanner";
 import { useLocation } from "./components/LocationProvider";
+import { analytics } from "@/lib/analytics";
 import {
   searchProducts,
   searchByBarcode,
@@ -81,6 +82,7 @@ export default function Home() {
       let products: ProductCardType[];
 
       if (isBarcode) {
+        analytics.barcodeScan(query.trim());
         products = await searchByBarcode(query.trim());
         if (products.length === 0) {
           products = await searchProducts(query);
@@ -90,6 +92,7 @@ export default function Home() {
       }
 
       setResults(products);
+      analytics.search(query, products.length);
       logSearch(query, products.length);
     } catch {
       setSearchError("Arama sırasında bir hata oluştu. Lütfen tekrar deneyin.");
@@ -110,15 +113,25 @@ export default function Home() {
 
   const handleHotspotClick = useCallback(
     (urunKodu: string) => {
-      if (urunKodu) handleSearch(urunKodu);
+      if (urunKodu) {
+        analytics.hotspotClick(urunKodu);
+        handleSearch(urunKodu);
+      }
     },
     [handleSearch]
   );
 
   // When user clicks "Evet" on our banner → trigger browser geolocation
   const handleLocationAccept = useCallback(() => {
+    analytics.locationResponse("accept");
     acceptAndRequest();
   }, [acceptAndRequest]);
+
+  const handleWeekChange = useCallback((weekId: string) => {
+    setSelectedWeek(weekId);
+    const week = weeks.find((w) => w.week_id === weekId);
+    if (week) analytics.posterWeek(week.week_name);
+  }, [weeks]);
 
   return (
     <div className="flex flex-col min-h-full">
@@ -209,7 +222,7 @@ export default function Home() {
               {weeks.map((w) => (
                 <button
                   key={w.week_id}
-                  onClick={() => setSelectedWeek(w.week_id)}
+                  onClick={() => handleWeekChange(w.week_id)}
                   className={`shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all
                     ${
                       selectedWeek === w.week_id

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { normalizeTurkish } from "@/lib/turkish";
+import { analytics } from "@/lib/analytics";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
@@ -119,6 +120,7 @@ export default function SearchBar({
   };
 
   const handlePopularClick = (term: string) => {
+    analytics.popularSearch(term);
     setQuery(term);
     setShowSuggestions(false);
     onSearch(term);

@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import type { ProductCard as ProductCardType, StoreStock } from "@/lib/types";
 import { sortStoresByDistance, haversineKm, formatDistance } from "@/lib/distance";
+import { analytics } from "@/lib/analytics";
 
 function formatPrice(price: number): string {
   if (!price) return "";
@@ -76,6 +77,7 @@ export default function ProductCard({
       }
       return;
     }
+    analytics.sortChange(mode);
     setSortModeOverride(mode);
   };
 
@@ -83,7 +85,10 @@ export default function ProductCard({
     <div className="bg-card border border-border rounded-xl overflow-hidden shadow-card">
       {/* Header */}
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => {
+          if (!expanded) analytics.productExpand(urun_kod, urun_ad);
+          setExpanded(!expanded);
+        }}
         className="w-full flex items-start justify-between gap-3 p-4 text-left"
       >
         <div className="flex-1 min-w-0">
@@ -182,6 +187,7 @@ export default function ProductCard({
                         {m.latitude && m.longitude && (
                           <a
                             href={mapsUrl(m.latitude, m.longitude)}
+                            onClick={() => analytics.directionsClick(m.magaza_ad || "", m.magaza_kod)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className={`text-xs font-medium flex items-center gap-0.5 mt-0.5 ${level.linkClass}`}

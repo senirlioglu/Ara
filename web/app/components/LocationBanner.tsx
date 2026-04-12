@@ -1,6 +1,7 @@
 "use client";
 
 import { useLocation } from "./LocationProvider";
+import { analytics } from "@/lib/analytics";
 
 interface LocationBannerProps {
   onAccept: () => void;
@@ -31,7 +32,7 @@ export default function LocationBanner({ onAccept }: LocationBannerProps) {
               Evet, göster
             </button>
             <button
-              onClick={dismissPrompt}
+              onClick={() => { analytics.locationResponse("dismiss"); dismissPrompt(); }}
               className="px-4 py-2 bg-white border border-gray-200 text-sm text-gray-600 font-medium rounded-xl
                          active:scale-95 transition-transform"
             >
