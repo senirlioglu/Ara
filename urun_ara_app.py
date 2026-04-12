@@ -1761,10 +1761,15 @@ def _poster_viewer_tab():
         st.info("Önce 'Eşleştir' sekmesinden PDF yükleyip 'Haftayı Yükle' basın.")
         return
 
+    # Görsel oluşturulan haftaları session state'ten oku
+    backfilled_weeks = st.session_state.get("_backfilled_weeks", set())
+
     # --- Hafta Seçimi + Durum + Silme ---
     wc1, wc2, wc3 = st.columns([3, 2, 1])
     with wc1:
-        selected_week = st.selectbox("Hafta:", weeks, key="pv_admin_week")
+        week_labels = {w: f"{w} ✅" if w in backfilled_weeks else w for w in weeks}
+        selected_week = st.selectbox("Hafta:", weeks, key="pv_admin_week",
+                                      format_func=lambda w: week_labels.get(w, w))
     with wc2:
         week_meta = get_week(selected_week)
         current_status = week_meta["status"] if week_meta else "draft"
@@ -1856,6 +1861,10 @@ def _poster_viewer_tab():
                     f"Tamamlandı: {stats['uploaded']} yüklendi, "
                     f"{stats['skipped']} atlandı, {stats['errors']} hata"
                 )
+                # Görsel oluşturulan haftayı işaretle
+                bw = st.session_state.get("_backfilled_weeks", set())
+                bw.add(selected_week)
+                st.session_state["_backfilled_weeks"] = bw
 
     # --- Yeni Afiş Ekleme (mevcut haftaya) ---
     with st.expander("Bu Haftaya Yeni Afiş Ekle", expanded=False):
