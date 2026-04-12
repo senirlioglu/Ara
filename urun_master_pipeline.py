@@ -178,6 +178,12 @@ def build_and_save_urun_master() -> tuple[int, int]:
     with ONERI_JSON.open('w', encoding='utf-8') as f:
         json.dump(oneri_listesi, f, ensure_ascii=False)
 
+    # Next.js kullanıcı tarafı için de kopyala
+    web_oneri = Path("web/public/oneri_listesi.json")
+    if web_oneri.parent.exists():
+        with web_oneri.open('w', encoding='utf-8') as f:
+            json.dump(oneri_listesi, f, ensure_ascii=False)
+
     return len(master_df), len(oneri_listesi)
 
 
