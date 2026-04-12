@@ -158,13 +158,6 @@ def build_and_save_urun_master() -> tuple[int, int]:
     def _format_oneri(row) -> str:
         kod = str(row['urun_kod']).strip()
         ad = str(row['urun_ad']).strip()
-        fiyat = row.get('birim_fiyat')
-        fiyat_str = ""
-        if pd.notna(fiyat) and fiyat > 0:
-            # Tam sayıysa .00 gösterme
-            fiyat_str = f"{fiyat:.0f}" if fiyat == int(fiyat) else f"{fiyat:.2f}"
-        if kod and fiyat_str:
-            return f"{kod} - {ad} - {fiyat_str}"
         if kod:
             return f"{kod} - {ad}"
         return ad
