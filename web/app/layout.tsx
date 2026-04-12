@@ -1,3 +1,4 @@
+import Script from "next/script";
 import type { Metadata, Viewport } from "next";
 import ServiceWorkerRegistrar from "./components/ServiceWorkerRegistrar";
 import ClientProviders from "./components/ClientProviders";
@@ -30,6 +31,13 @@ export default function RootLayout({
   return (
     <html lang="tr" className="h-full">
       <head>
+        <Script src="https://www.googletagmanager.com/gtag/js?id=G-45WGM4W8SZ" strategy="afterInteractive" />
+        <Script id="gtag-init" strategy="afterInteractive">{`
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', 'G-45WGM4W8SZ');
+        `}</Script>
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
       </head>
