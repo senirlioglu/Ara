@@ -10,11 +10,24 @@ import base64
 import io
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
+
+# Storage path whitelist — path traversal ve kontrol karakterlerine karşı koruma
+_UNSAFE_CHAR_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_path_segment(value: str, fallback: str = "file") -> str:
+    """Normalize a user-provided string for use in a storage object key."""
+    s = _UNSAFE_CHAR_RE.sub("_", str(value or ""))
+    # Leading dots ve "." / ".." gibi path traversal formlarını önle
+    s = s.lstrip(".") or fallback
+    # Uzun bir path segmentini kısalt (Supabase key 1024B limit; pratik sınır)
+    return s[:200]
 
 # ---------------------------------------------------------------------------
 # Supabase client (singleton)
@@ -255,9 +268,11 @@ def _upload_image(week_id: str, flyer_filename: str, page_no: int,
                   image_bytes: bytes) -> str:
     """Upload image to Supabase Storage and return the path."""
     sb = _get_client()
-    # Deterministic path so upsert works
-    safe_name = flyer_filename.replace(" ", "_").replace("/", "_")
-    path = f"{week_id}/{safe_name}_p{page_no}.jpg"
+    # Deterministic path so upsert works. Hem week_id hem filename whitelist
+    # ile normalize edilir (path traversal + kontrol karakterlerine karşı).
+    safe_week = _safe_path_segment(week_id, fallback="week")
+    safe_name = _safe_path_segment(flyer_filename, fallback="file")
+    path = f"{safe_week}/{safe_name}_p{int(page_no)}.jpg"
     try:
         sb.storage.from_(BUCKET).upload(
             path, image_bytes,
