@@ -18,6 +18,9 @@ import re
 import json
 import unicodedata
 import html
+import hmac
+import time
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
@@ -71,9 +74,12 @@ def _pipeline_gunluk_guncelle():
             timeout=600,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         )
-    except Exception:
-        pass
+    except subprocess.TimeoutExpired:
+        logging.warning("urun_master_pipeline timeout (600s)")
+    except Exception as e:
+        logging.warning("urun_master_pipeline failed: %s", e)
 
 def _pipeline_kontrol():
     from datetime import date
@@ -1945,7 +1951,7 @@ def _poster_viewer_tab():
             with dc2:
                 if st.session_state.get(f"_confirm_del_page_{pid}"):
                     if st.button("Onayla", key=f"pv_cdel_y_{pid}", type="primary", use_container_width=True):
-                        delete_poster_page(pid)
+                        delete_poster_page(pid, week_id=selected_week)
                         _clear_week_session_state()
                         st.rerun()
                 else:
@@ -2202,14 +2208,33 @@ def admin_panel():
 
     if not st.session_state.get('admin_auth', False):
         st.title("Admin Girişi")
+
+        # Basit rate-limit: 5 başarısız denemeden sonra 60 sn bekleme
+        fails = int(st.session_state.get('admin_fails', 0))
+        locked_until = float(st.session_state.get('admin_locked_until', 0))
+        now = time.time()
+        if locked_until > now:
+            remaining = int(locked_until - now)
+            st.error(f"Çok fazla hatalı deneme. Lütfen {remaining} sn bekleyin.")
+            return
+
         password = st.text_input("Şifre:", type="password")
         if st.button("Giriş"):
-            if password == admin_pass:
+            # Constant-time karşılaştırma (timing attack'e karşı)
+            if hmac.compare_digest(str(password), str(admin_pass)):
                 st.session_state.admin_auth = True
-                st.query_params["admin"] = "true"
+                st.session_state.admin_fails = 0
+                st.session_state.admin_locked_until = 0
                 st.rerun()
             else:
-                st.error("Yanlış şifre!")
+                fails += 1
+                st.session_state.admin_fails = fails
+                if fails >= 5:
+                    st.session_state.admin_locked_until = now + 60
+                    st.session_state.admin_fails = 0
+                    st.error("Çok fazla hatalı deneme. 60 sn kilitlendi.")
+                else:
+                    st.error(f"Yanlış şifre! ({fails}/5)")
         return
 
     # ---- Header ----

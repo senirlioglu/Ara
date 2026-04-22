@@ -6,6 +6,13 @@ import os
 from pathlib import Path
 
 
+def _require_env(name: str) -> str:
+    val = os.getenv(name)
+    if not val:
+        raise RuntimeError(f"{name} environment variable is required")
+    return val
+
+
 class Settings:
     # --- Database ---
     DATABASE_URL: str = os.getenv(
@@ -25,7 +32,8 @@ class Settings:
     DATA_DIR: Path = Path(os.getenv("DATA_DIR", "/data"))
 
     # --- Auth ---
-    API_KEY: str = os.getenv("API_KEY", "dev-key-change-me")
+    # API_KEY zorunlu: dev için .env'de ayarla, prod'da Railway/Streamlit secrets
+    API_KEY: str = _require_env("API_KEY")
 
     # --- Render ---
     RENDER_ZOOM: float = float(os.getenv("RENDER_ZOOM", "2.0"))

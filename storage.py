@@ -112,6 +112,14 @@ def _ensure_week_sort_order():
 # MAPPINGS CRUD
 # ============================================================================
 
+_MAPPING_ALLOWED_FIELDS = {
+    "week_id", "flyer_filename", "page_no",
+    "x0", "y0", "x1", "y1",
+    "urun_kodu", "urun_aciklamasi", "afis_fiyat", "ocr_text",
+    "source", "status", "created_at",
+}
+
+
 def save_mapping(m: dict, db_path=None) -> int:
     """Insert a mapping and return its ID."""
     sb = _get_client()
@@ -128,6 +136,8 @@ def save_mapping(m: dict, db_path=None) -> int:
         "status": m.get("status", "matched"),
         "created_at": m.get("created_at") or datetime.now(timezone.utc).isoformat(),
     }
+    # Mass assignment koruması — sadece whitelist alanlar DB'ye gitsin
+    row = {k: v for k, v in row.items() if k in _MAPPING_ALLOWED_FIELDS}
     res = sb.table("mappings").insert(row).execute()
     return res.data[0]["mapping_id"]
 
@@ -181,8 +191,13 @@ def update_mapping(mapping_id: int, fields: dict, db_path=None):
 
 
 def delete_mapping(mapping_id: int, db_path=None, week_id: str = None):
-    """Delete a single mapping by ID, optionally guarded by week_id."""
+    """Delete a single mapping by ID, guarded by week_id when provided.
+
+    week_id verilmediğinde güvenlik audit log'u yazılır (IDOR riski).
+    """
     sb = _get_client()
+    if week_id is None:
+        log.warning("delete_mapping called without week_id (ownership check atlandı): mapping_id=%s", mapping_id)
     q = sb.table("mappings").delete().eq("mapping_id", mapping_id)
     if week_id:
         q = q.eq("week_id", week_id)
@@ -385,8 +400,11 @@ def update_poster_page(page_id: int, fields: dict, db_path=None):
     sb.table("poster_pages").update(to_set).eq("id", page_id).execute()
 
 
-def delete_poster_page(page_id: int, db_path=None):
-    """Delete a poster page by ID, including its mappings and storage image."""
+def delete_poster_page(page_id: int, db_path=None, week_id: str = None):
+    """Delete a poster page by ID, including its mappings and storage image.
+
+    week_id verilirse ownership doğrulanır; verilmezse audit log yazılır.
+    """
     sb = _get_client()
     # Get page info
     res = (
@@ -397,6 +415,19 @@ def delete_poster_page(page_id: int, db_path=None):
     )
     if res.data:
         row = res.data[0]
+        if week_id is not None and row["week_id"] != week_id:
+            log.warning(
+                "delete_poster_page ownership mismatch: page=%s expected_week=%s actual=%s",
+                page_id, week_id, row["week_id"],
+            )
+            raise PermissionError(
+                f"Page {page_id} does not belong to week {week_id}"
+            )
+        if week_id is None:
+            log.warning(
+                "delete_poster_page called without week_id (ownership check atlandı): page_id=%s",
+                page_id,
+            )
         # Delete associated mappings
         (
             sb.table("mappings")
