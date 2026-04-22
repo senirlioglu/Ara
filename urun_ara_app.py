@@ -521,13 +521,15 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                 return df
         except Exception as e:
             if not ("timeout" in str(e).lower() or "57014" in str(e)):
-                st.error(f"Beklenmeyen Hata: {e}")
+                logging.exception("ara_urun RPC call failed")
+                st.error("Arama servisi şu an yanıt vermedi. Lütfen kısa süre sonra tekrar deneyin.")
 
         # Hata kontrolü (result nesnesi üzerinden)
         if 'result' in locals() and getattr(result, 'error', None):
             err_msg = str(result.error)
             if not ("timeout" in err_msg.lower() or "57014" in err_msg):
-                st.error(f"Arama hatası (RPC): {result.error}")
+                logging.error("ara_urun RPC returned error: %s", result.error)
+                st.error("Arama servisi şu an yanıt vermedi. Lütfen kısa süre sonra tekrar deneyin.")
 
         # Kod aramasında fallback yapma - kod ya var ya yok
         if is_kod_araması:
@@ -596,9 +598,23 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         st.warning("Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
         return pd.DataFrame()
 
-    except Exception as e:
-        st.error(f"Beklenmeyen Hata: {e}")
+    except Exception:
+        logging.exception("ara_urun unhandled error")
+        st.error("Arama sırasında bir sorun oluştu. Lütfen kısa süre sonra tekrar deneyin.")
         return None
+
+
+# Arama log'una yazılacak terimler için whitelist — HTML/script injection'a karşı
+# sadece harf (Türkçe dahil), rakam, boşluk ve minimal noktalama karakterleri kalır.
+_LOG_TERM_RE = re.compile(r"[^0-9a-zçğıöşüâîû\s\-.,']")
+
+
+def _sanitize_log_term(term: str) -> str:
+    """Log/popüler terim olarak saklanabilir güvenli bir string döndürür."""
+    s = _safe_str(term).strip().lower()
+    s = _LOG_TERM_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:100]
 
 
 def log_arama(arama_terimi: str, sonuc_sayisi: int):
@@ -606,7 +622,9 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
     try:
         client = get_supabase_client()
         if client and arama_terimi:
-            terim = arama_terimi.strip().lower()[:100]
+            terim = _sanitize_log_term(arama_terimi)
+            if not terim or len(terim) < 2:
+                return
             bugun = datetime.now().strftime('%Y-%m-%d')
 
             # Bugün bu terim arandı mı?
@@ -631,8 +649,8 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
                     client.table('arama_log').insert({**veri, 'son_arama_zamani': simdi}).execute()
                 except Exception:
                     client.table('arama_log').insert(veri).execute()
-    except:
-        pass
+    except Exception:
+        logging.exception("log_arama failed")
 
 
 @st.cache_data(ttl=3600)
@@ -653,12 +671,18 @@ def get_populer_terimler():
             .execute()
 
         if result.data:
-            # Saf ürün kodlarını filtrele (kullanıcıya anlamsız)
-            terimler = [r['arama_terimi'] for r in result.data
-                        if not r['arama_terimi'].strip().isdigit()]
+            # Defensive: DB'de eski/kötü biçimli terim varsa tekrar sanitize et.
+            # Saf ürün kodlarını (tam sayı) filtrele (kullanıcıya anlamsız).
+            terimler = []
+            for r in result.data:
+                raw = r.get('arama_terimi') or ""
+                safe = _sanitize_log_term(raw)
+                if not safe or len(safe) < 2 or safe.isdigit():
+                    continue
+                terimler.append(safe)
             return list(dict.fromkeys(terimler))[:10]
-    except:
-        pass
+    except Exception:
+        logging.exception("get_populer_terimler failed")
     return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
 
 
@@ -891,7 +915,14 @@ def main():
     if oneriler:
         import json
         import streamlit.components.v1 as components
-        _ac_data = json.dumps(oneriler, ensure_ascii=True)
+        # json.dumps default olarak </ ve <! escape etmez → inline <script>
+        # içine embed ederken script-tag break / HTML comment başlangıcı riskine
+        # karşı bu iki pattern'i nötralize ediyoruz.
+        _ac_data = (
+            json.dumps(oneriler, ensure_ascii=True)
+            .replace("</", "<\\/")
+            .replace("<!--", "<\\!--")
+        )
         _ac_js = """
 <script>
 (function(){
@@ -2345,11 +2376,13 @@ def _admin_tab_weeks():
                         key=f"wl_sort_{wid}", label_visibility="collapsed",
                     )
                 with sc2:
-                    name = w.get("week_name") or wid
+                    name = _safe_html(w.get("week_name") or wid)
                     s = w.get("status", "draft")
-                    badge = (f'<span style="background:{status_colors.get(s,"#999")}; color:white; '
+                    label = _safe_html(status_labels.get(s, s))
+                    color = status_colors.get(s, "#999")
+                    badge = (f'<span style="background:{color}; color:white; '
                              f'padding:2px 8px; border-radius:10px; font-size:11px; margin-left:8px;">'
-                             f'{status_labels.get(s, s)}</span>')
+                             f'{label}</span>')
                     st.markdown(f"**{name}**{badge}", unsafe_allow_html=True)
                 with sc3:
                     pg_cnt = w.get("page_count", 0)
@@ -2992,8 +3025,9 @@ def _admin_tab_poster_view():
     # Sayfayı render et
     try:
         png_bytes = render_page_image(pdf_bytes, page_no, dpi=150)
-    except Exception as e:
-        st.error(f"Sayfa render hatası: {e}")
+    except Exception:
+        logging.exception("render_page_image failed")
+        st.error("Sayfa görüntülenemedi. Lütfen kısa süre sonra tekrar deneyin.")
         return
 
     # Hotspot'ları getir
