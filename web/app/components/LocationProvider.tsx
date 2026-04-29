@@ -40,12 +40,18 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Check session dismiss (survives page refresh, clears on tab close)
+    if (sessionStorage.getItem("location_dismissed")) {
+      setStatus("dismissed");
+      return;
+    }
+
     const cached = localStorage.getItem(STORAGE_KEY);
     if (cached) {
       try {
         const { lat: cLat, lon: cLon, ts } = JSON.parse(cached);
-        // Cache valid for 1 hour
-        if (Date.now() - ts < 3600000) {
+        // Cache valid for 7 days
+        if (Date.now() - ts < 7 * 86400000) {
           setLat(cLat);
           setLon(cLon);
           setStatus("granted");
@@ -57,10 +63,8 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (pref === "granted") {
-      // Previously granted — request silently
       requestBrowserLocation();
     }
-    // Otherwise stay "idle" — will show prompt on first search
   }, []);
 
   const requestBrowserLocation = useCallback(() => {
@@ -101,10 +105,10 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
     setStatus("prompt");
   }, [status, requestBrowserLocation]);
 
-  // "Şimdi değil" — dismiss for this session only, ask again next visit
+  // "Şimdi değil" — dismiss for this browser session
   const dismissPrompt = useCallback(() => {
     setStatus("dismissed");
-    // No localStorage write — next visit will ask again
+    sessionStorage.setItem("location_dismissed", "1");
   }, []);
 
   // Called when user clicks "Evet" on our custom banner → triggers browser permission

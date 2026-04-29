@@ -76,7 +76,6 @@ export default function Home() {
     setSearchError("");
     setSearched(true);
     setLastBarcode("");
-    maybeRequestLocation();
     try {
       const isBarcode = /^\d{8,14}$/.test(query.trim()) && query.trim().length >= 8;
       let products: ProductCardType[];
@@ -94,6 +93,8 @@ export default function Home() {
       setResults(products);
       analytics.search(query, products.length);
       logSearch(query, products.length);
+      // Ask for location after results are shown (not before)
+      if (products.length > 0) maybeRequestLocation();
     } catch {
       setSearchError("Arama sırasında bir hata oluştu. Lütfen tekrar deneyin.");
       setResults([]);
@@ -157,10 +158,7 @@ export default function Home() {
         {/* Search */}
         <SearchBar
           onSearch={handleSearch}
-          onBarcodeClick={() => {
-            maybeRequestLocation();
-            setScannerOpen(true);
-          }}
+          onBarcodeClick={() => setScannerOpen(true)}
           loading={loading}
           popularTerms={popularTerms}
         />
