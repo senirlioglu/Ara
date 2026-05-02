@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  @apply bg-slate-50 text-ink-900;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Mağaza kartı — Ara'nın stok kartı biriminin Tailwind hâli.
+   Renk varyasyonları class ile geliyor (border-l + bg gradient) */
+.store-card {
+  @apply rounded-lg px-4 py-3 mb-2 border-l-4 flex justify-between items-center
+         flex-wrap gap-2;
+}
