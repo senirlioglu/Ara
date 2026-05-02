@@ -2474,6 +2474,8 @@ _HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Önizleme"]
 
 def _admin_halkgunu():
     """Halk Günü ana sekmesi — alt sekmeli conditional router."""
+    import halkgunu_storage as hgs
+
     st.subheader("Halk Günü")
     st.caption("Belirli tarihte belirli mağazalarda indirimli ürünler. "
                "Frontend halkgunu.net (ayrı Vercel app), aynı Supabase backend.")
@@ -2490,12 +2492,38 @@ def _admin_halkgunu():
         st.session_state["hg_section"] = sub_active
     sub_active = st.session_state["hg_section"]
 
+    # Etkinlikler sekmesi bağımsız; diğerleri için ortak etkinlik seçimi
     if sub_active == "Etkinlikler":
         _admin_halkgunu_events()
-    elif sub_active == "Afiş Modu":
+        return
+
+    events = hgs.list_events_with_meta()
+    if not events:
+        st.info("Önce 'Etkinlikler' sekmesinden bir etkinlik oluştur.")
+        return
+
+    options = [e["event_id"] for e in events]
+    labels = {e["event_id"]: f"{e.get('event_name') or e['event_id']} ({e.get('event_date') or '—'})"
+              for e in events}
+    cur = st.session_state.get("hg_active_event") or options[0]
+    if cur not in options:
+        cur = options[0]
+    selected = st.selectbox(
+        "Etkinlik",
+        options,
+        index=options.index(cur),
+        format_func=lambda x: labels.get(x, x),
+        key="hg_event_select",
+    )
+    if selected != st.session_state.get("hg_active_event"):
+        st.session_state["hg_active_event"] = selected
+    event_id = st.session_state["hg_active_event"]
+    event_meta = next((e for e in events if e["event_id"] == event_id), None)
+
+    if sub_active == "Afiş Modu":
         st.info("Afiş modu yakında — Excel + afiş PDF/JPG yükleme + bbox eşleştirme.")
     elif sub_active == "Liste Modu":
-        st.info("Liste modu yakında — Excel yükleme + ürün resmi (tek/toplu) yükleme.")
+        _admin_halkgunu_list_mode(event_id, event_meta)
     elif sub_active == "Önizleme":
         st.info("Önizleme yakında — frontend görünümünü buradan test edebileceksin.")
 
@@ -2641,6 +2669,251 @@ def _admin_halkgunu_events():
                 if st.button("İptal", key=f"hg_cdel_n_{eid}", use_container_width=True):
                     st.session_state.pop(f"_confirm_del_hg_{eid}", None)
                     st.rerun()
+
+
+# Excel kolon adlarını fiziksel şema kolonlarımıza eşleyen tablo.
+# Kullanıcı "ürün kodu" / "URUN_KODU" / "Sku" yazsa da yakalanır.
+_HG_EXCEL_COLUMN_MAP = {
+    "urun_kod": ["urun_kod", "urun_kodu", "kod", "sku", "stok_kodu", "barkod_kod"],
+    "urun_ad": ["urun_ad", "urun_adi", "urun_aciklamasi", "aciklama", "urun", "ad", "isim"],
+    "magaza_kod": ["magaza_kod", "magaza_kodu", "magaza", "store", "store_id", "store_code", "subekod", "sube_kod"],
+    "magaza_ad": ["magaza_ad", "magaza_adi", "magaza_isim", "store_name", "sube_adi"],
+    "normal_fiyat": ["normal_fiyat", "liste_fiyati", "liste_fiyat", "orijinal_fiyat", "fiyat", "satis_fiyat", "etiket_fiyat"],
+    "indirimli_fiyat": ["indirimli_fiyat", "kampanya_fiyati", "kampanya_fiyat", "yeni_fiyat", "indirim_fiyat", "halkgunu_fiyat"],
+}
+
+
+def _hg_normalize_col(name) -> str:
+    """Normalize an Excel header for fuzzy matching."""
+    s = str(name or "").strip().lower()
+    s = s.translate(str.maketrans("ıİğĞüÜşŞöÖçÇ", "iIgGuUsSoOcC")).lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s
+
+
+def _hg_resolve_excel_columns(df_columns) -> dict[str, str]:
+    """Map physical schema fields → DataFrame column name (whichever variant is present)."""
+    norm = {_hg_normalize_col(c): c for c in df_columns}
+    out: dict[str, str] = {}
+    for target, aliases in _HG_EXCEL_COLUMN_MAP.items():
+        for a in aliases:
+            if a in norm:
+                out[target] = norm[a]
+                break
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB: Halk Günü → Liste Modu
+# ---------------------------------------------------------------------------
+
+def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
+    """Liste modu — Excel yükle + ürün resimleri tek/toplu yükle."""
+    import halkgunu_storage as hgs
+
+    event_label = (event_meta or {}).get("event_name") or event_id
+
+    st.markdown(f"#### Liste Modu — {event_label}")
+    st.caption("Excel'den indirimli ürün listesi yükle, eksik ürün resimlerini tek tek "
+               "veya toplu yükle.")
+
+    # =========================================================================
+    # 1) EXCEL YÜKLEME
+    # =========================================================================
+    with st.expander("📄 Excel Yükle (indirim listesi)", expanded=False):
+        st.caption(
+            "Beklenen kolonlar: **ürün kodu**, ürün adı, **mağaza kodu**, "
+            "normal fiyat, indirimli fiyat. (Kolon başlıkları büyük/küçük harf "
+            "duyarsız, Türkçe karakter farketmez.)"
+        )
+        upload = st.file_uploader(
+            "Excel dosyası (.xlsx)",
+            type=["xlsx", "xls"],
+            key=f"hg_xlsx_{event_id}",
+        )
+        if upload is not None:
+            try:
+                df = pd.read_excel(upload)
+            except Exception as e:
+                st.error(f"Excel okunamadı: {e}")
+                df = None
+            if df is not None and not df.empty:
+                col_map = _hg_resolve_excel_columns(df.columns)
+                missing_required = [k for k in ("urun_kod", "magaza_kod") if k not in col_map]
+                if missing_required:
+                    st.error(
+                        "Zorunlu kolonlar eksik: "
+                        + ", ".join(missing_required)
+                        + ". Bulunan kolonlar: " + ", ".join(map(str, df.columns))
+                    )
+                else:
+                    # Map to schema fields, keep only known
+                    rename = {v: k for k, v in col_map.items()}
+                    parsed = df.rename(columns=rename)[list(col_map.keys())].copy()
+                    # Cast text columns to str for stable display
+                    for c in ("urun_kod", "magaza_kod", "urun_ad", "magaza_ad"):
+                        if c in parsed.columns:
+                            parsed[c] = parsed[c].astype(str).str.strip()
+                            parsed.loc[parsed[c] == "nan", c] = ""
+
+                    st.markdown("**Önizleme** (ilk 20 satır)")
+                    st.dataframe(parsed.head(20), use_container_width=True, hide_index=True)
+
+                    pc1, pc2, pc3 = st.columns(3)
+                    pc1.metric("Toplam satır", f"{len(parsed):,}")
+                    pc2.metric("Benzersiz ürün", f"{parsed['urun_kod'].nunique():,}")
+                    pc3.metric("Benzersiz mağaza", f"{parsed['magaza_kod'].nunique():,}")
+
+                    if st.button(
+                        "✅ Yükle (mevcut listeyi değiştirir)",
+                        type="primary",
+                        key=f"hg_xlsx_save_{event_id}",
+                        use_container_width=True,
+                    ):
+                        rows = parsed.to_dict("records")
+                        with st.spinner("Veritabanına yazılıyor…"):
+                            inserted = hgs.save_event_products(event_id, rows)
+                        st.success(f"{inserted} satır yüklendi.")
+                        st.rerun()
+
+    # =========================================================================
+    # 2) ÜRÜN ÖZET TABLOSU
+    # =========================================================================
+    summary = hgs.get_event_product_summary(event_id)
+    if not summary:
+        st.info("Bu etkinlik için henüz ürün yüklenmemiş.")
+        return
+
+    img_status = hgs.list_event_product_image_status(event_id)
+    rows_for_df = []
+    missing_codes: list[str] = []
+    for s in summary:
+        kod = s["urun_kod"]
+        has = img_status.get(kod, False)
+        if not has:
+            missing_codes.append(kod)
+        rows_for_df.append({
+            "Resim": "✅" if has else "❌",
+            "Ürün Kodu": kod,
+            "Ürün Adı": s.get("urun_ad") or "—",
+            "Normal": s.get("max_normal"),
+            "İndirimli": s.get("min_indirimli"),
+        })
+    df_summary = pd.DataFrame(rows_for_df)
+
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric("Ürün", f"{len(summary):,}")
+    sc2.metric("Resimli", f"{len(summary) - len(missing_codes):,}")
+    sc3.metric("Resimsiz", f"{len(missing_codes):,}")
+
+    st.markdown("**Ürün Listesi**")
+    st.dataframe(df_summary, use_container_width=True, hide_index=True, height=320)
+
+    # =========================================================================
+    # 3) RESİM YÜKLEME — TEK
+    # =========================================================================
+    with st.expander("🖼️ Tek Ürün Resmi Yükle", expanded=False):
+        if missing_codes:
+            st.caption(f"{len(missing_codes)} ürün resimsiz. Bunları üstte gösteriyoruz.")
+            default_options = missing_codes + [k for k in (s["urun_kod"] for s in summary) if k not in missing_codes]
+        else:
+            default_options = [s["urun_kod"] for s in summary]
+
+        sel_kod = st.selectbox(
+            "Ürün",
+            default_options,
+            format_func=lambda k: f"{'❌' if k in missing_codes else '✅'} {k}",
+            key=f"hg_img_single_sel_{event_id}",
+        )
+        img_file = st.file_uploader(
+            "Resim (.jpg / .jpeg / .png)",
+            type=["jpg", "jpeg", "png"],
+            key=f"hg_img_single_file_{event_id}",
+        )
+        if img_file is not None and sel_kod:
+            preview = img_file.getvalue()
+            st.image(preview, width=200, caption=f"Önizleme — {sel_kod}")
+            if st.button(
+                "Yükle",
+                type="primary",
+                key=f"hg_img_single_save_{event_id}",
+                use_container_width=True,
+            ):
+                jpeg_bytes = _hg_image_to_jpeg(preview)
+                hgs.upload_event_product_image(sel_kod, jpeg_bytes)
+                st.success(f"{sel_kod} için resim yüklendi.")
+                st.rerun()
+
+    # =========================================================================
+    # 4) RESİM YÜKLEME — TOPLU
+    # =========================================================================
+    with st.expander("📦 Toplu Resim Yükle", expanded=False):
+        st.caption(
+            "Dosya adı **ürün kodu** olmalı (örn: `12345.jpg`, `12345.png`). "
+            "Listede olmayan kodlar atlanır."
+        )
+        bulk = st.file_uploader(
+            "Birden çok resim seçin",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key=f"hg_img_bulk_{event_id}",
+        )
+        if bulk:
+            valid_codes = {s["urun_kod"] for s in summary}
+            preview_rows = []
+            for f in bulk:
+                stem = re.sub(r"\.(jpg|jpeg|png)$", "", f.name, flags=re.I).strip()
+                in_list = stem in valid_codes
+                already = img_status.get(stem, False)
+                preview_rows.append({
+                    "Dosya": f.name,
+                    "Ürün Kodu": stem,
+                    "Listede": "✅" if in_list else "❌",
+                    "Mevcut": "Var (üzerine yazılır)" if already else "—",
+                })
+            st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+
+            if st.button(
+                f"✅ {len(bulk)} dosyayı yükle",
+                type="primary",
+                key=f"hg_img_bulk_save_{event_id}",
+                use_container_width=True,
+            ):
+                done, skipped, errors = 0, 0, 0
+                progress = st.progress(0)
+                for i, f in enumerate(bulk):
+                    stem = re.sub(r"\.(jpg|jpeg|png)$", "", f.name, flags=re.I).strip()
+                    if stem not in valid_codes:
+                        skipped += 1
+                    else:
+                        try:
+                            jpeg_bytes = _hg_image_to_jpeg(f.getvalue())
+                            hgs.upload_event_product_image(stem, jpeg_bytes)
+                            done += 1
+                        except Exception as e:
+                            log.warning("Halk Günü bulk upload (%s): %s", f.name, e)
+                            errors += 1
+                    progress.progress((i + 1) / len(bulk))
+                st.success(f"{done} yüklendi · {skipped} atlandı · {errors} hata")
+                st.rerun()
+
+
+def _hg_image_to_jpeg(raw_bytes: bytes, quality: int = 88) -> bytes:
+    """Convert any uploaded image (PNG/JPEG) to JPEG bytes for the product bucket."""
+    from io import BytesIO
+    from PIL import Image
+    img = Image.open(BytesIO(raw_bytes))
+    if img.mode in ("RGBA", "P", "LA"):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        bg.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    out = BytesIO()
+    img.save(out, format="JPEG", quality=quality, optimize=True)
+    return out.getvalue()
 
 
 # ---------------------------------------------------------------------------
