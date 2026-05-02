@@ -10,11 +10,24 @@ import base64
 import io
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
+
+# Storage path whitelist — path traversal ve kontrol karakterlerine karşı koruma
+_UNSAFE_CHAR_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_path_segment(value: str, fallback: str = "file") -> str:
+    """Normalize a user-provided string for use in a storage object key."""
+    s = _UNSAFE_CHAR_RE.sub("_", str(value or ""))
+    # Leading dots ve "." / ".." gibi path traversal formlarını önle
+    s = s.lstrip(".") or fallback
+    # Uzun bir path segmentini kısalt (Supabase key 1024B limit; pratik sınır)
+    return s[:200]
 
 # ---------------------------------------------------------------------------
 # Supabase client (singleton)
@@ -112,6 +125,14 @@ def _ensure_week_sort_order():
 # MAPPINGS CRUD
 # ============================================================================
 
+_MAPPING_ALLOWED_FIELDS = {
+    "week_id", "flyer_filename", "page_no",
+    "x0", "y0", "x1", "y1",
+    "urun_kodu", "urun_aciklamasi", "afis_fiyat", "ocr_text",
+    "source", "status", "created_at",
+}
+
+
 def save_mapping(m: dict, db_path=None) -> int:
     """Insert a mapping and return its ID."""
     sb = _get_client()
@@ -128,6 +149,8 @@ def save_mapping(m: dict, db_path=None) -> int:
         "status": m.get("status", "matched"),
         "created_at": m.get("created_at") or datetime.now(timezone.utc).isoformat(),
     }
+    # Mass assignment koruması — sadece whitelist alanlar DB'ye gitsin
+    row = {k: v for k, v in row.items() if k in _MAPPING_ALLOWED_FIELDS}
     res = sb.table("mappings").insert(row).execute()
     return res.data[0]["mapping_id"]
 
@@ -181,8 +204,13 @@ def update_mapping(mapping_id: int, fields: dict, db_path=None):
 
 
 def delete_mapping(mapping_id: int, db_path=None, week_id: str = None):
-    """Delete a single mapping by ID, optionally guarded by week_id."""
+    """Delete a single mapping by ID, guarded by week_id when provided.
+
+    week_id verilmediğinde güvenlik audit log'u yazılır (IDOR riski).
+    """
     sb = _get_client()
+    if week_id is None:
+        log.warning("delete_mapping called without week_id (ownership check atlandı): mapping_id=%s", mapping_id)
     q = sb.table("mappings").delete().eq("mapping_id", mapping_id)
     if week_id:
         q = q.eq("week_id", week_id)
@@ -240,9 +268,11 @@ def _upload_image(week_id: str, flyer_filename: str, page_no: int,
                   image_bytes: bytes) -> str:
     """Upload image to Supabase Storage and return the path."""
     sb = _get_client()
-    # Deterministic path so upsert works
-    safe_name = flyer_filename.replace(" ", "_").replace("/", "_")
-    path = f"{week_id}/{safe_name}_p{page_no}.jpg"
+    # Deterministic path so upsert works. Hem week_id hem filename whitelist
+    # ile normalize edilir (path traversal + kontrol karakterlerine karşı).
+    safe_week = _safe_path_segment(week_id, fallback="week")
+    safe_name = _safe_path_segment(flyer_filename, fallback="file")
+    path = f"{safe_week}/{safe_name}_p{int(page_no)}.jpg"
     try:
         sb.storage.from_(BUCKET).upload(
             path, image_bytes,
@@ -385,8 +415,11 @@ def update_poster_page(page_id: int, fields: dict, db_path=None):
     sb.table("poster_pages").update(to_set).eq("id", page_id).execute()
 
 
-def delete_poster_page(page_id: int, db_path=None):
-    """Delete a poster page by ID, including its mappings and storage image."""
+def delete_poster_page(page_id: int, db_path=None, week_id: str = None):
+    """Delete a poster page by ID, including its mappings and storage image.
+
+    week_id verilirse ownership doğrulanır; verilmezse audit log yazılır.
+    """
     sb = _get_client()
     # Get page info
     res = (
@@ -397,6 +430,19 @@ def delete_poster_page(page_id: int, db_path=None):
     )
     if res.data:
         row = res.data[0]
+        if week_id is not None and row["week_id"] != week_id:
+            log.warning(
+                "delete_poster_page ownership mismatch: page=%s expected_week=%s actual=%s",
+                page_id, week_id, row["week_id"],
+            )
+            raise PermissionError(
+                f"Page {page_id} does not belong to week {week_id}"
+            )
+        if week_id is None:
+            log.warning(
+                "delete_poster_page called without week_id (ownership check atlandı): page_id=%s",
+                page_id,
+            )
         # Delete associated mappings
         (
             sb.table("mappings")

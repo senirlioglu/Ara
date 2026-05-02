@@ -18,6 +18,9 @@ import re
 import json
 import unicodedata
 import html
+import hmac
+import time
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
@@ -71,9 +74,12 @@ def _pipeline_gunluk_guncelle():
             timeout=600,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         )
-    except Exception:
-        pass
+    except subprocess.TimeoutExpired:
+        logging.warning("urun_master_pipeline timeout (600s)")
+    except Exception as e:
+        logging.warning("urun_master_pipeline failed: %s", e)
 
 def _pipeline_kontrol():
     from datetime import date
@@ -515,13 +521,15 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
                 return df
         except Exception as e:
             if not ("timeout" in str(e).lower() or "57014" in str(e)):
-                st.error(f"Beklenmeyen Hata: {e}")
+                logging.exception("ara_urun RPC call failed")
+                st.error("Arama servisi şu an yanıt vermedi. Lütfen kısa süre sonra tekrar deneyin.")
 
         # Hata kontrolü (result nesnesi üzerinden)
         if 'result' in locals() and getattr(result, 'error', None):
             err_msg = str(result.error)
             if not ("timeout" in err_msg.lower() or "57014" in err_msg):
-                st.error(f"Arama hatası (RPC): {result.error}")
+                logging.error("ara_urun RPC returned error: %s", result.error)
+                st.error("Arama servisi şu an yanıt vermedi. Lütfen kısa süre sonra tekrar deneyin.")
 
         # Kod aramasında fallback yapma - kod ya var ya yok
         if is_kod_araması:
@@ -590,9 +598,23 @@ def ara_urun(arama_text: str) -> Optional[pd.DataFrame]:
         st.warning("Aradığınız kriterlerde sonuç bulunamadı veya veri tabanı meşgul. Lütfen daha kısa/farklı kelimeler deneyin.")
         return pd.DataFrame()
 
-    except Exception as e:
-        st.error(f"Beklenmeyen Hata: {e}")
+    except Exception:
+        logging.exception("ara_urun unhandled error")
+        st.error("Arama sırasında bir sorun oluştu. Lütfen kısa süre sonra tekrar deneyin.")
         return None
+
+
+# Arama log'una yazılacak terimler için whitelist — HTML/script injection'a karşı
+# sadece harf (Türkçe dahil), rakam, boşluk ve minimal noktalama karakterleri kalır.
+_LOG_TERM_RE = re.compile(r"[^0-9a-zçğıöşüâîû\s\-.,']")
+
+
+def _sanitize_log_term(term: str) -> str:
+    """Log/popüler terim olarak saklanabilir güvenli bir string döndürür."""
+    s = _safe_str(term).strip().lower()
+    s = _LOG_TERM_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:100]
 
 
 def log_arama(arama_terimi: str, sonuc_sayisi: int):
@@ -600,7 +622,9 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
     try:
         client = get_supabase_client()
         if client and arama_terimi:
-            terim = arama_terimi.strip().lower()[:100]
+            terim = _sanitize_log_term(arama_terimi)
+            if not terim or len(terim) < 2:
+                return
             bugun = datetime.now().strftime('%Y-%m-%d')
 
             # Bugün bu terim arandı mı?
@@ -625,8 +649,8 @@ def log_arama(arama_terimi: str, sonuc_sayisi: int):
                     client.table('arama_log').insert({**veri, 'son_arama_zamani': simdi}).execute()
                 except Exception:
                     client.table('arama_log').insert(veri).execute()
-    except:
-        pass
+    except Exception:
+        logging.exception("log_arama failed")
 
 
 @st.cache_data(ttl=3600)
@@ -647,12 +671,18 @@ def get_populer_terimler():
             .execute()
 
         if result.data:
-            # Saf ürün kodlarını filtrele (kullanıcıya anlamsız)
-            terimler = [r['arama_terimi'] for r in result.data
-                        if not r['arama_terimi'].strip().isdigit()]
+            # Defensive: DB'de eski/kötü biçimli terim varsa tekrar sanitize et.
+            # Saf ürün kodlarını (tam sayı) filtrele (kullanıcıya anlamsız).
+            terimler = []
+            for r in result.data:
+                raw = r.get('arama_terimi') or ""
+                safe = _sanitize_log_term(raw)
+                if not safe or len(safe) < 2 or safe.isdigit():
+                    continue
+                terimler.append(safe)
             return list(dict.fromkeys(terimler))[:10]
-    except:
-        pass
+    except Exception:
+        logging.exception("get_populer_terimler failed")
     return ["tv", "klima", "supurge", "mama", "tuvalet kagidi"]
 
 
@@ -885,7 +915,14 @@ def main():
     if oneriler:
         import json
         import streamlit.components.v1 as components
-        _ac_data = json.dumps(oneriler, ensure_ascii=True)
+        # json.dumps default olarak </ ve <! escape etmez → inline <script>
+        # içine embed ederken script-tag break / HTML comment başlangıcı riskine
+        # karşı bu iki pattern'i nötralize ediyoruz.
+        _ac_data = (
+            json.dumps(oneriler, ensure_ascii=True)
+            .replace("</", "<\\/")
+            .replace("<!--", "<\\!--")
+        )
         _ac_js = """
 <script>
 (function(){
@@ -1860,34 +1897,45 @@ def _poster_viewer_tab():
         new_pdfs = st.file_uploader("Afiş Dosyası (PDF / JPEG / PNG)", type=["pdf", "jpeg", "jpg", "png"],
                                      accept_multiple_files=True, key="pv_new_pdf")
         if new_pdfs and st.button("Yükle", key="pv_upload_new", type="primary", use_container_width=True):
-            from pdf_render import render_pdf_bytes_to_pages, render_image_bytes_to_page
+            from pdf_render import (
+                render_pdf_bytes_to_pages, render_image_bytes_to_page,
+                UploadValidationError,
+            )
             from storage import save_poster_pages_bulk, get_max_sort_order
             base_sort = get_max_sort_order(selected_week) + 1
             new_pages = []
+            rejected: list[str] = []
             for f in new_pdfs:
                 raw = f.read()
                 ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
-                if ext == "pdf":
-                    rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
-                    for p in rendered:
+                try:
+                    if ext == "pdf":
+                        rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
+                        for p in rendered:
+                            new_pages.append({
+                                "week_id": selected_week,
+                                "flyer_filename": f.name,
+                                "page_no": p["page_no"],
+                                "png_data": p["png_bytes"],
+                                "sort_order": base_sort,
+                            })
+                            base_sort += 1
+                    elif ext in ("jpeg", "jpg", "png"):
+                        p = render_image_bytes_to_page(raw, f.name, page_no=1)
                         new_pages.append({
                             "week_id": selected_week,
                             "flyer_filename": f.name,
-                            "page_no": p["page_no"],
+                            "page_no": 1,
                             "png_data": p["png_bytes"],
                             "sort_order": base_sort,
                         })
                         base_sort += 1
-                elif ext in ("jpeg", "jpg", "png"):
-                    p = render_image_bytes_to_page(raw, f.name, page_no=1)
-                    new_pages.append({
-                        "week_id": selected_week,
-                        "flyer_filename": f.name,
-                        "page_no": 1,
-                        "png_data": p["png_bytes"],
-                        "sort_order": base_sort,
-                    })
-                    base_sort += 1
+                    else:
+                        rejected.append(f"{f.name}: desteklenmeyen uzantı")
+                except UploadValidationError as e:
+                    rejected.append(f"{f.name}: {e}")
+            if rejected:
+                st.warning("Bazı dosyalar atlandı:\n- " + "\n- ".join(rejected))
             if new_pages:
                 save_poster_pages_bulk(new_pages)
                 _clear_week_session_state()
@@ -1945,7 +1993,7 @@ def _poster_viewer_tab():
             with dc2:
                 if st.session_state.get(f"_confirm_del_page_{pid}"):
                     if st.button("Onayla", key=f"pv_cdel_y_{pid}", type="primary", use_container_width=True):
-                        delete_poster_page(pid)
+                        delete_poster_page(pid, week_id=selected_week)
                         _clear_week_session_state()
                         st.rerun()
                 else:
@@ -2035,15 +2083,33 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
             return
 
     if mt_pdfs:
-        from pdf_render import render_pdf_bytes_to_pages, render_image_bytes_to_page
+        from pdf_render import (
+            render_pdf_bytes_to_pages, render_image_bytes_to_page,
+            UploadValidationError,
+        )
         all_pages = []
         img_counter = {}  # filename → page counter for multi-image uploads
+        rejected: list[str] = []
         for f in mt_pdfs:
             raw = f.read()
             ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
-            if ext == "pdf":
-                rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
-                for p in rendered:
+            try:
+                if ext == "pdf":
+                    rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
+                    for p in rendered:
+                        all_pages.append({
+                            "flyer_id": str(_uuid.uuid4())[:8],
+                            "flyer_filename": f.name,
+                            "page_no": p["page_no"],
+                            "png_bytes": p["png_bytes"],
+                            "w": p["w"],
+                            "h": p["h"],
+                        })
+                elif ext in ("jpeg", "jpg", "png"):
+                    # Her resim dosyası = 1 sayfa
+                    page_no = img_counter.get(f.name, 0) + 1
+                    img_counter[f.name] = page_no
+                    p = render_image_bytes_to_page(raw, f.name, page_no=page_no)
                     all_pages.append({
                         "flyer_id": str(_uuid.uuid4())[:8],
                         "flyer_filename": f.name,
@@ -2052,19 +2118,12 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
                         "w": p["w"],
                         "h": p["h"],
                     })
-            elif ext in ("jpeg", "jpg", "png"):
-                # Her resim dosyası = 1 sayfa
-                page_no = img_counter.get(f.name, 0) + 1
-                img_counter[f.name] = page_no
-                p = render_image_bytes_to_page(raw, f.name, page_no=page_no)
-                all_pages.append({
-                    "flyer_id": str(_uuid.uuid4())[:8],
-                    "flyer_filename": f.name,
-                    "page_no": p["page_no"],
-                    "png_bytes": p["png_bytes"],
-                    "w": p["w"],
-                    "h": p["h"],
-                })
+                else:
+                    rejected.append(f"{f.name}: desteklenmeyen uzantı")
+            except UploadValidationError as e:
+                rejected.append(f"{f.name}: {e}")
+        if rejected:
+            st.warning("Bazı dosyalar atlandı:\n- " + "\n- ".join(rejected))
         st.session_state["mt_pages"] = all_pages
 
         # Poster sayfalarını DB'ye kaydet (frontend için)
@@ -2202,14 +2261,33 @@ def admin_panel():
 
     if not st.session_state.get('admin_auth', False):
         st.title("Admin Girişi")
+
+        # Basit rate-limit: 5 başarısız denemeden sonra 60 sn bekleme
+        fails = int(st.session_state.get('admin_fails', 0))
+        locked_until = float(st.session_state.get('admin_locked_until', 0))
+        now = time.time()
+        if locked_until > now:
+            remaining = int(locked_until - now)
+            st.error(f"Çok fazla hatalı deneme. Lütfen {remaining} sn bekleyin.")
+            return
+
         password = st.text_input("Şifre:", type="password")
         if st.button("Giriş"):
-            if password == admin_pass:
+            # Constant-time karşılaştırma (timing attack'e karşı)
+            if hmac.compare_digest(str(password), str(admin_pass)):
                 st.session_state.admin_auth = True
-                st.query_params["admin"] = "true"
+                st.session_state.admin_fails = 0
+                st.session_state.admin_locked_until = 0
                 st.rerun()
             else:
-                st.error("Yanlış şifre!")
+                fails += 1
+                st.session_state.admin_fails = fails
+                if fails >= 5:
+                    st.session_state.admin_locked_until = now + 60
+                    st.session_state.admin_fails = 0
+                    st.error("Çok fazla hatalı deneme. 60 sn kilitlendi.")
+                else:
+                    st.error(f"Yanlış şifre! ({fails}/5)")
         return
 
     # ---- Header ----
@@ -2298,11 +2376,13 @@ def _admin_tab_weeks():
                         key=f"wl_sort_{wid}", label_visibility="collapsed",
                     )
                 with sc2:
-                    name = w.get("week_name") or wid
+                    name = _safe_html(w.get("week_name") or wid)
                     s = w.get("status", "draft")
-                    badge = (f'<span style="background:{status_colors.get(s,"#999")}; color:white; '
+                    label = _safe_html(status_labels.get(s, s))
+                    color = status_colors.get(s, "#999")
+                    badge = (f'<span style="background:{color}; color:white; '
                              f'padding:2px 8px; border-radius:10px; font-size:11px; margin-left:8px;">'
-                             f'{status_labels.get(s, s)}</span>')
+                             f'{label}</span>')
                     st.markdown(f"**{name}**{badge}", unsafe_allow_html=True)
                 with sc3:
                     pg_cnt = w.get("page_count", 0)
@@ -2945,8 +3025,9 @@ def _admin_tab_poster_view():
     # Sayfayı render et
     try:
         png_bytes = render_page_image(pdf_bytes, page_no, dpi=150)
-    except Exception as e:
-        st.error(f"Sayfa render hatası: {e}")
+    except Exception:
+        logging.exception("render_page_image failed")
+        st.error("Sayfa görüntülenemedi. Lütfen kısa süre sonra tekrar deneyin.")
         return
 
     # Hotspot'ları getir
