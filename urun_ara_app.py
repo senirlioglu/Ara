@@ -2314,7 +2314,7 @@ def admin_panel():
         return output.getvalue()
 
     # ---- Conditional router (replaces st.tabs to avoid executing all tabs on every rerun) ----
-    _ADMIN_SECTIONS = ["Haftalar", "Eşleştir", "Poster Yönetimi", "Analitikler"]
+    _ADMIN_SECTIONS = ["Haftalar", "Eşleştir", "Poster Yönetimi", "Halk Günü", "Analitikler"]
     if "admin_section" not in st.session_state:
         st.session_state["admin_section"] = "Eşleştir"
     active = st.segmented_control(
@@ -2333,6 +2333,8 @@ def admin_panel():
         _mapping_tool_tab()
     elif active == "Poster Yönetimi":
         _poster_viewer_tab()
+    elif active == "Halk Günü":
+        _admin_halkgunu()
     elif active == "Analitikler":
         _admin_tab_analytics(df_to_xlsx)
 
@@ -2460,6 +2462,184 @@ def _admin_tab_weeks():
             with oc2:
                 if st.button("Kayıt Oluştur", key=f"wl_fix_{oid}", use_container_width=True):
                     save_week(oid, week_name=oid)
+                    st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB: Halk Günü (etkinlik yönetimi + afiş/liste modları)
+# ---------------------------------------------------------------------------
+
+_HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Önizleme"]
+
+
+def _admin_halkgunu():
+    """Halk Günü ana sekmesi — alt sekmeli conditional router."""
+    st.subheader("Halk Günü")
+    st.caption("Belirli tarihte belirli mağazalarda indirimli ürünler. "
+               "Frontend halkgunu.net (ayrı Vercel app), aynı Supabase backend.")
+
+    if "hg_section" not in st.session_state:
+        st.session_state["hg_section"] = "Etkinlikler"
+    sub_active = st.segmented_control(
+        "Mod", _HG_SUBSECTIONS,
+        default=st.session_state["hg_section"],
+        key="hg_section_ctrl",
+        selection_mode="single",
+    )
+    if sub_active and sub_active != st.session_state["hg_section"]:
+        st.session_state["hg_section"] = sub_active
+    sub_active = st.session_state["hg_section"]
+
+    if sub_active == "Etkinlikler":
+        _admin_halkgunu_events()
+    elif sub_active == "Afiş Modu":
+        st.info("Afiş modu yakında — Excel + afiş PDF/JPG yükleme + bbox eşleştirme.")
+    elif sub_active == "Liste Modu":
+        st.info("Liste modu yakında — Excel yükleme + ürün resmi (tek/toplu) yükleme.")
+    elif sub_active == "Önizleme":
+        st.info("Önizleme yakında — frontend görünümünü buradan test edebileceksin.")
+
+
+def _admin_halkgunu_events():
+    """Etkinlik listesi — oluştur, sırala, durum, sil."""
+    import halkgunu_storage as hgs
+
+    st.markdown("#### Etkinlikler")
+    st.caption("Sıra numarası küçük olan etkinlik halkgunu.net'te ilk gösterilir. "
+               "Sıra 0 ise tarihi en yakın olan varsayılan olur.")
+
+    # ---- YENİ ETKİNLİK ----
+    with st.expander("➕ Yeni Etkinlik", expanded=False):
+        with st.form("hg_new_event", clear_on_submit=True):
+            nc1, nc2 = st.columns(2)
+            with nc1:
+                new_date = st.date_input("Etkinlik Tarihi", key="hg_new_date")
+            with nc2:
+                new_name = st.text_input(
+                    "Görünen Ad",
+                    placeholder="Örn: 15 Mayıs 2026 Halk Günü",
+                    key="hg_new_name",
+                )
+            new_id = st.text_input(
+                "Etkinlik ID (boş bırakılırsa tarihten üretilir)",
+                placeholder="halkgunu_2026_05_15",
+                key="hg_new_id",
+            )
+            if st.form_submit_button("Oluştur", type="primary", use_container_width=True):
+                date_str = new_date.strftime("%Y-%m-%d") if new_date else ""
+                event_id = (new_id or "").strip() or (
+                    f"halkgunu_{date_str.replace('-', '_')}" if date_str else ""
+                )
+                if not event_id:
+                    st.error("Etkinlik ID veya tarih gerekli.")
+                elif hgs.get_event(event_id):
+                    st.error(f"`{event_id}` zaten var.")
+                else:
+                    hgs.save_event(
+                        event_id=event_id,
+                        event_name=(new_name or event_id).strip(),
+                        event_date=date_str,
+                        status="draft",
+                        sort_order=0,
+                    )
+                    st.success(f"Etkinlik oluşturuldu: {event_id}")
+                    st.rerun()
+
+    events = hgs.list_events_with_meta()
+    status_labels = {"draft": "Taslak", "active": "Yayında", "archived": "Arşiv"}
+    status_colors = {"draft": "#f0ad4e", "active": "#5cb85c", "archived": "#999"}
+
+    if not events:
+        st.info("Henüz etkinlik yok. Yukarıdan ilk etkinliği oluştur.")
+        return
+
+    # ---- SIRALAMA FORMU ----
+    with st.form("hg_sort_form", clear_on_submit=False):
+        for ev in events:
+            eid = ev["event_id"]
+            sc1, sc2, sc3 = st.columns([0.8, 3, 4])
+            with sc1:
+                cur_sort = ev.get("sort_order", 0) or 0
+                st.text_input(
+                    "Sıra", value=str(cur_sort),
+                    key=f"hg_sort_{eid}", label_visibility="collapsed",
+                )
+            with sc2:
+                name = _safe_html(ev.get("event_name") or eid)
+                s = ev.get("status", "draft")
+                label = _safe_html(status_labels.get(s, s))
+                color = status_colors.get(s, "#999")
+                badge = (
+                    f'<span style="background:{color}; color:white; padding:2px 8px; '
+                    f'border-radius:10px; font-size:11px; margin-left:8px;">{label}</span>'
+                )
+                st.markdown(f"**{name}**{badge}", unsafe_allow_html=True)
+            with sc3:
+                date_str = ev.get("event_date") or "—"
+                pg_cnt = ev.get("page_count", 0)
+                mp_cnt = ev.get("mapping_count", 0)
+                pr_cnt = ev.get("product_count", 0)
+                store_cnt = ev.get("store_count", 0)
+                st.caption(
+                    f"📅 {date_str} · {pg_cnt} sayfa · {mp_cnt} eşleşme · "
+                    f"{pr_cnt} satır · {store_cnt} mağaza"
+                )
+
+        if st.form_submit_button("Sıralamayı Kaydet", type="primary", use_container_width=True):
+            changed = 0
+            for ev in events:
+                eid = ev["event_id"]
+                raw = st.session_state.get(f"hg_sort_{eid}", str(ev.get("sort_order", 0) or 0))
+                new_val = int(raw) if str(raw).strip().lstrip("-").isdigit() else (ev.get("sort_order", 0) or 0)
+                if new_val != (ev.get("sort_order", 0) or 0):
+                    hgs.update_event_sort_order(eid, new_val)
+                    changed += 1
+            if changed:
+                st.success(f"{changed} etkinlik sıralaması güncellendi.")
+                st.rerun()
+            else:
+                st.info("Değişiklik yok.")
+
+    # ---- DURUM & SİLME ----
+    st.markdown("---")
+    for ev in events:
+        eid = ev["event_id"]
+        with st.container(border=True):
+            wc1, wc2, wc3 = st.columns([3, 2, 1])
+            with wc1:
+                st.caption(f"{ev.get('event_name') or eid} ({eid})")
+            with wc2:
+                s = ev.get("status", "draft")
+                if s == "draft":
+                    if st.button("Yayınla", key=f"hg_pub_{eid}", use_container_width=True):
+                        hgs.update_event_status(eid, "active")
+                        st.rerun()
+                elif s == "active":
+                    if st.button("Arşivle", key=f"hg_arch_{eid}", use_container_width=True):
+                        hgs.update_event_status(eid, "archived")
+                        st.rerun()
+                else:
+                    if st.button("Taslak Yap", key=f"hg_draft_{eid}", use_container_width=True):
+                        hgs.update_event_status(eid, "draft")
+                        st.rerun()
+            with wc3:
+                if st.button("Sil", key=f"hg_del_{eid}", use_container_width=True):
+                    st.session_state[f"_confirm_del_hg_{eid}"] = True
+
+        if st.session_state.get(f"_confirm_del_hg_{eid}"):
+            st.warning(
+                f"**{ev.get('event_name') or eid}** — tüm afişler, eşleştirmeler "
+                f"ve indirim listesi silinecek!"
+            )
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                if st.button("Evet, Sil", key=f"hg_cdel_y_{eid}", type="primary", use_container_width=True):
+                    hgs.delete_event(eid)
+                    st.session_state.pop(f"_confirm_del_hg_{eid}", None)
+                    st.rerun()
+            with dc2:
+                if st.button("İptal", key=f"hg_cdel_n_{eid}", use_container_width=True):
+                    st.session_state.pop(f"_confirm_del_hg_{eid}", None)
                     st.rerun()
 
 
