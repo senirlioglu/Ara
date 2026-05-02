@@ -2521,7 +2521,7 @@ def _admin_halkgunu():
     event_meta = next((e for e in events if e["event_id"] == event_id), None)
 
     if sub_active == "Afiş Modu":
-        st.info("Afiş modu yakında — Excel + afiş PDF/JPG yükleme + bbox eşleştirme.")
+        _admin_halkgunu_poster_mode(event_id, event_meta)
     elif sub_active == "Liste Modu":
         _admin_halkgunu_list_mode(event_id, event_meta)
     elif sub_active == "Önizleme":
@@ -2701,6 +2701,216 @@ def _hg_resolve_excel_columns(df_columns) -> dict[str, str]:
                 out[target] = norm[a]
                 break
     return out
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB: Halk Günü → Afiş Modu (poster yükleme + sayfa yönetimi)
+# ---------------------------------------------------------------------------
+
+def _admin_halkgunu_poster_mode(event_id: str, event_meta: dict | None):
+    """Afiş modu — PDF/JPG yükle, sayfaları yönet (sıra/başlık/sil).
+
+    Bbox eşleştirme ileride Faz 4b'de ayrıca eklenecek.
+    """
+    import uuid as _uuid
+    import halkgunu_storage as hgs
+
+    event_label = (event_meta or {}).get("event_name") or event_id
+
+    st.markdown(f"#### Afiş Modu — {event_label}")
+    st.caption(
+        "Afiş PDF veya JPG/PNG yükle. İndirim listesi (Excel) zaten 'Liste Modu' "
+        "sekmesinde halkgunu_products tablosuna yüklendiği için burada tekrar "
+        "yüklenmesine gerek yok. Bbox ile ürün eşleştirme yakında."
+    )
+
+    # =========================================================================
+    # 1) AFİŞ YÜKLE
+    # =========================================================================
+    with st.expander("📤 Afiş Yükle (PDF / JPG / PNG)", expanded=False):
+        uploads = st.file_uploader(
+            "Bir veya birden fazla dosya seç",
+            type=["pdf", "jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key=f"hg_poster_up_{event_id}",
+        )
+        if uploads and st.button(
+            f"✅ {len(uploads)} dosyayı yükle ve sayfalara dönüştür",
+            type="primary",
+            key=f"hg_poster_save_{event_id}",
+            use_container_width=True,
+        ):
+            from pdf_render import (
+                render_pdf_bytes_to_pages,
+                render_image_bytes_to_page,
+                UploadValidationError,
+            )
+            base_sort = hgs.get_max_page_sort_order(event_id)
+            all_pages: list[dict] = []
+            rejected: list[str] = []
+            img_counter: dict[str, int] = {}
+            for f in uploads:
+                raw = f.read()
+                ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
+                try:
+                    if ext == "pdf":
+                        rendered = render_pdf_bytes_to_pages(raw, zoom=2.0)
+                        for p in rendered:
+                            all_pages.append({
+                                "event_id": event_id,
+                                "flyer_filename": f.name,
+                                "page_no": p["page_no"],
+                                "png_data": p["png_bytes"],
+                                "title": "",
+                                "sort_order": 0,
+                            })
+                    elif ext in ("jpg", "jpeg", "png"):
+                        page_no = img_counter.get(f.name, 0) + 1
+                        img_counter[f.name] = page_no
+                        p = render_image_bytes_to_page(raw, f.name, page_no=page_no)
+                        all_pages.append({
+                            "event_id": event_id,
+                            "flyer_filename": f.name,
+                            "page_no": p["page_no"],
+                            "png_data": p["png_bytes"],
+                            "title": "",
+                            "sort_order": 0,
+                        })
+                    else:
+                        rejected.append(f"{f.name}: desteklenmeyen uzantı")
+                except UploadValidationError as e:
+                    rejected.append(f"{f.name}: {e}")
+                except Exception as e:
+                    rejected.append(f"{f.name}: {e}")
+
+            if rejected:
+                st.warning("Bazı dosyalar atlandı:\n- " + "\n- ".join(rejected))
+
+            if all_pages:
+                # Yüklenen sayfaları mevcut sırlamanın sonuna ekle (1'er artırarak)
+                for i, pg in enumerate(all_pages, start=1):
+                    pg["sort_order"] = base_sort + i
+
+                with st.spinner(f"{len(all_pages)} sayfa kaydediliyor…"):
+                    hgs.save_pages_bulk(all_pages)
+                st.success(f"{len(all_pages)} sayfa yüklendi.")
+                st.rerun()
+
+    # =========================================================================
+    # 2) SAYFA LİSTESİ — başlık, sıra, sil
+    # =========================================================================
+    pages = hgs.get_event_pages_meta(event_id)
+    if not pages:
+        st.info("Bu etkinlik için henüz afiş sayfası yok. Yukarıdan yükle.")
+        return
+
+    st.markdown(f"**{len(pages)} sayfa**")
+
+    # ---- Başlık + sıra formu (toplu kaydet) ----
+    with st.form(f"hg_pages_form_{event_id}", clear_on_submit=False):
+        for pg in pages:
+            pid = pg["id"]
+            cols = st.columns([1.2, 0.8, 3.5, 1.5])
+            with cols[0]:
+                if pg.get("url"):
+                    st.image(pg["url"], width=120)
+                else:
+                    st.caption("(önizleme yok)")
+            with cols[1]:
+                cur_sort = pg.get("sort_order", 0) or 0
+                st.text_input(
+                    "Sıra",
+                    value=str(cur_sort),
+                    key=f"hg_pg_sort_{pid}",
+                    label_visibility="collapsed",
+                )
+            with cols[2]:
+                cur_title = pg.get("title") or ""
+                st.text_input(
+                    "Başlık",
+                    value=cur_title,
+                    key=f"hg_pg_title_{pid}",
+                    placeholder="(opsiyonel)",
+                    label_visibility="collapsed",
+                )
+            with cols[3]:
+                st.caption(
+                    f"{pg.get('flyer_filename','—')}\np.{pg.get('page_no','?')}"
+                )
+
+        if st.form_submit_button(
+            "Başlık ve Sıralamayı Kaydet",
+            type="primary",
+            use_container_width=True,
+        ):
+            changed = 0
+            for pg in pages:
+                pid = pg["id"]
+                raw_sort = st.session_state.get(f"hg_pg_sort_{pid}", str(pg.get("sort_order", 0) or 0))
+                new_sort = (
+                    int(raw_sort)
+                    if str(raw_sort).strip().lstrip("-").isdigit()
+                    else (pg.get("sort_order", 0) or 0)
+                )
+                new_title = st.session_state.get(f"hg_pg_title_{pid}", pg.get("title") or "")
+                fields: dict = {}
+                if new_sort != (pg.get("sort_order", 0) or 0):
+                    fields["sort_order"] = new_sort
+                if new_title != (pg.get("title") or ""):
+                    fields["title"] = new_title
+                if fields:
+                    hgs.update_page(pid, fields)
+                    changed += 1
+            if changed:
+                st.success(f"{changed} sayfa güncellendi.")
+                st.rerun()
+            else:
+                st.info("Değişiklik yok.")
+
+    # ---- Silme (form dışında, confirm flow ile) ----
+    st.markdown("---")
+    st.markdown("**Sayfa Sil**")
+    for pg in pages:
+        pid = pg["id"]
+        with st.container(border=True):
+            sc1, sc2, sc3 = st.columns([1, 4, 1])
+            with sc1:
+                if pg.get("url"):
+                    st.image(pg["url"], width=80)
+            with sc2:
+                st.caption(
+                    f"**{pg.get('title') or '(başlık yok)'}** — "
+                    f"{pg.get('flyer_filename','?')} · p.{pg.get('page_no','?')} · "
+                    f"sıra {pg.get('sort_order',0)}"
+                )
+            with sc3:
+                if st.button("Sil", key=f"hg_pg_del_{pid}", use_container_width=True):
+                    st.session_state[f"_confirm_del_hgpg_{pid}"] = True
+        if st.session_state.get(f"_confirm_del_hgpg_{pid}"):
+            st.warning(
+                f"Bu sayfayı (ve sayfaya ait tüm bbox eşleştirmelerini) silmek "
+                f"istediğine emin misin?"
+            )
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                if st.button(
+                    "Evet, Sil",
+                    type="primary",
+                    key=f"hg_pg_cdel_y_{pid}",
+                    use_container_width=True,
+                ):
+                    hgs.delete_page(pid, event_id=event_id)
+                    st.session_state.pop(f"_confirm_del_hgpg_{pid}", None)
+                    st.rerun()
+            with dc2:
+                if st.button("İptal", key=f"hg_pg_cdel_n_{pid}", use_container_width=True):
+                    st.session_state.pop(f"_confirm_del_hgpg_{pid}", None)
+                    st.rerun()
+
+    st.info(
+        "🔜 Bbox ile ürün eşleştirme bir sonraki adımda eklenecek. "
+        "Şimdilik afişleri buradan yönet, ürün listesi 'Liste Modu'nda."
+    )
 
 
 # ---------------------------------------------------------------------------
