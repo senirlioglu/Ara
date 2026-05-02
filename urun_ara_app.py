@@ -2708,20 +2708,45 @@ def _hg_resolve_excel_columns(df_columns) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def _admin_halkgunu_poster_mode(event_id: str, event_meta: dict | None):
-    """Afiş modu — PDF/JPG yükle, sayfaları yönet (sıra/başlık/sil).
-
-    Bbox eşleştirme ileride Faz 4b'de ayrıca eklenecek.
-    """
-    import uuid as _uuid
+    """Afiş modu — PDF/JPG yükle + sayfa yönetimi + bbox eşleştirme."""
     import halkgunu_storage as hgs
 
     event_label = (event_meta or {}).get("event_name") or event_id
+
+    # Phase toggle: "manage" (yükle + listele) | "mapping" (bbox eşleştir)
+    phase_key = f"hg_poster_phase_{event_id}"
+    if phase_key not in st.session_state:
+        st.session_state[phase_key] = "manage"
+
+    pc1, pc2, _ = st.columns([1.4, 1.4, 5])
+    with pc1:
+        if st.button(
+            "📋 Sayfa Yönetimi",
+            type=("primary" if st.session_state[phase_key] == "manage" else "secondary"),
+            key=f"hg_phase_manage_{event_id}",
+            use_container_width=True,
+        ):
+            st.session_state[phase_key] = "manage"
+            st.rerun()
+    with pc2:
+        if st.button(
+            "🎯 Bbox Eşleştirme",
+            type=("primary" if st.session_state[phase_key] == "mapping" else "secondary"),
+            key=f"hg_phase_mapping_{event_id}",
+            use_container_width=True,
+        ):
+            st.session_state[phase_key] = "mapping"
+            st.rerun()
+
+    if st.session_state[phase_key] == "mapping":
+        _admin_halkgunu_mapping_phase(event_id, event_label)
+        return
 
     st.markdown(f"#### Afiş Modu — {event_label}")
     st.caption(
         "Afiş PDF veya JPG/PNG yükle. İndirim listesi (Excel) zaten 'Liste Modu' "
         "sekmesinde halkgunu_products tablosuna yüklendiği için burada tekrar "
-        "yüklenmesine gerek yok. Bbox ile ürün eşleştirme yakında."
+        "yüklenmesine gerek yok."
     )
 
     # =========================================================================
@@ -2908,9 +2933,504 @@ def _admin_halkgunu_poster_mode(event_id: str, event_meta: dict | None):
                     st.rerun()
 
     st.info(
-        "🔜 Bbox ile ürün eşleştirme bir sonraki adımda eklenecek. "
-        "Şimdilik afişleri buradan yönet, ürün listesi 'Liste Modu'nda."
+        "Bbox eşleştirme için yukarıdaki **🎯 Bbox Eşleştirme** sekmesine geç."
     )
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB: Halk Günü → Bbox Eşleştirme (Mapping editor)
+# ---------------------------------------------------------------------------
+
+def _hgmt_session_keys(event_id: str) -> dict:
+    """Session state key map scoped to this event so multiple events don't collide."""
+    return {
+        "bbox": f"hgmt_bbox_{event_id}",
+        "bbox_consumed": f"hgmt_bbox_consumed_{event_id}",
+        "queue_kod": f"hgmt_queue_kod_{event_id}",
+        "current_page": f"hgmt_current_page_{event_id}",
+        "pending_mappings": f"hgmt_pending_mappings_{event_id}",
+        "pending_deletes": f"hgmt_pending_deletes_{event_id}",
+        "pending_updates": f"hgmt_pending_updates_{event_id}",
+        "db_cache": f"hgmt_db_cache_{event_id}",
+        "db_mapped_codes": f"hgmt_db_mapped_codes_{event_id}",
+        "dirty": f"hgmt_dirty_{event_id}",
+        "next_temp_id": f"hgmt_next_temp_id_{event_id}",
+        "last_mapping_id": f"hgmt_last_mapping_id_{event_id}",
+    }
+
+
+def _hgmt_init_state(event_id: str) -> None:
+    keys = _hgmt_session_keys(event_id)
+    defaults = {
+        "bbox": None,
+        "bbox_consumed": False,
+        "queue_kod": None,
+        "current_page": None,
+        "pending_mappings": [],
+        "pending_deletes": [],
+        "pending_updates": {},
+        "db_cache": {},
+        "db_mapped_codes": None,
+        "dirty": False,
+        "next_temp_id": -1,
+        "last_mapping_id": None,
+    }
+    for short, default in defaults.items():
+        full = keys[short]
+        if full not in st.session_state:
+            st.session_state[full] = default
+
+
+def _hgmt_save_local(event_id: str, page: dict, bbox: dict,
+                     urun_kod: str, urun_ad: str | None, source: str) -> None:
+    """Add a new mapping to pending state (in-memory until flush)."""
+    keys = _hgmt_session_keys(event_id)
+    temp_id = st.session_state[keys["next_temp_id"]]
+    st.session_state[keys["next_temp_id"]] = temp_id - 1
+
+    mapping = {
+        "mapping_id": temp_id,
+        "event_id": event_id,
+        "flyer_filename": page["flyer_filename"],
+        "page_no": page["page_no"],
+        "x0": bbox["x0"], "y0": bbox["y0"],
+        "x1": bbox["x1"], "y1": bbox["y1"],
+        "urun_kodu": urun_kod,
+        "urun_aciklamasi": urun_ad,
+        "afis_fiyat": None,
+        "ocr_text": None,
+        "source": source,
+        "status": "matched",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    st.session_state[keys["pending_mappings"]].append(mapping)
+    st.session_state[keys["dirty"]] = True
+    st.session_state[keys["last_mapping_id"]] = temp_id
+    st.session_state[keys["bbox"]] = None
+    st.session_state[keys["bbox_consumed"]] = True
+    st.rerun()
+
+
+def _hgmt_flush_to_supabase(event_id: str, page_lookup: dict) -> None:
+    """Bulk-flush all pending changes for this event to Supabase + crop product images."""
+    import halkgunu_storage as hgs
+    from storage import crop_and_upload_product_image
+
+    keys = _hgmt_session_keys(event_id)
+    pending = st.session_state[keys["pending_mappings"]]
+    deletes = st.session_state[keys["pending_deletes"]]
+    updates = st.session_state[keys["pending_updates"]]
+
+    insert_rows = []
+    for m in pending:
+        row = {k: v for k, v in m.items()
+               if k not in ("mapping_id", "_norm_text", "_norm_tokens", "_kod", "score")}
+        insert_rows.append(row)
+    if insert_rows:
+        hgs.save_mappings_bulk(insert_rows)
+
+    # Crop + upload product images for each new mapping
+    for m in pending:
+        kod = m.get("urun_kodu")
+        if not kod:
+            continue
+        png = page_lookup.get((m["flyer_filename"], m["page_no"]))
+        if not png:
+            continue
+        try:
+            crop_and_upload_product_image(png, kod, m["x0"], m["y0"], m["x1"], m["y1"])
+        except Exception:
+            pass
+
+    if deletes:
+        hgs.delete_mappings_bulk(deletes, event_id=event_id)
+    if updates:
+        hgs.update_mappings_bulk(updates)
+
+    # Reset
+    st.session_state[keys["pending_mappings"]] = []
+    st.session_state[keys["pending_deletes"]] = []
+    st.session_state[keys["pending_updates"]] = {}
+    st.session_state[keys["db_cache"]] = {}
+    st.session_state[keys["db_mapped_codes"]] = None
+    st.session_state[keys["dirty"]] = False
+    st.session_state[keys["next_temp_id"]] = -1
+
+
+def _admin_halkgunu_mapping_phase(event_id: str, event_label: str) -> None:
+    """Bbox eşleştirme — Ara'nın _mapping_tool_tab eşdeğeri, halkgunu için sadeleştirilmiş."""
+    import halkgunu_storage as hgs
+    from components.bbox_canvas import bbox_canvas
+    from mapping_ui.search import search_products, build_search_index
+
+    _hgmt_init_state(event_id)
+    keys = _hgmt_session_keys(event_id)
+
+    st.markdown(f"#### 🎯 Bbox Eşleştirme — {event_label}")
+
+    # ---- Sayfaları DB'den çek (görseller dahil — canvas için png gerek) ----
+    cache_key = f"_hgmt_pages_cache_{event_id}"
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = hgs.get_event_pages(event_id)
+    pages = st.session_state[cache_key]
+    if not pages:
+        st.warning("Bu etkinlik için afiş sayfası yok. Sayfa Yönetimi sekmesinden yükleyin.")
+        return
+
+    # ---- Ürün kuyruğu — halkgunu_products'tan distinct urun_kod ----
+    summary = hgs.get_event_product_summary(event_id)
+    if not summary:
+        st.warning("Ürün listesi yok. Liste Modu'ndan Excel yükleyin.")
+        return
+    products_raw = [{"urun_kod": s["urun_kod"], "urun_ad": s.get("urun_ad") or ""} for s in summary]
+    products = build_search_index(products_raw)
+
+    # ---- DB mapped codes (cached) ----
+    if st.session_state[keys["db_mapped_codes"]] is None:
+        db_mapped = {m.get("urun_kodu") for m in hgs.list_event_mappings(event_id) if m.get("urun_kodu")}
+        st.session_state[keys["db_mapped_codes"]] = db_mapped
+    pending_mapped = {m.get("urun_kodu") for m in st.session_state[keys["pending_mappings"]] if m.get("urun_kodu")}
+    pending_deletes = set(st.session_state[keys["pending_deletes"]])
+    pending_unmapped: set = set()
+    if pending_deletes:
+        # Find which urun_kodu codes those deletions remove
+        for cache_pg_mappings in st.session_state[keys["db_cache"]].values():
+            for m in cache_pg_mappings:
+                if m["mapping_id"] in pending_deletes and m.get("urun_kodu"):
+                    pending_unmapped.add(m["urun_kodu"])
+    mapped_codes = (st.session_state[keys["db_mapped_codes"]] | pending_mapped) - pending_unmapped
+
+    # ---- Üst bar: sayfa seç + ilerleme ----
+    hdr1, hdr2 = st.columns([4, 4])
+    with hdr1:
+        page_labels = [f'{p["flyer_filename"]} - s{p["page_no"]}' for p in pages]
+        sel_idx = st.selectbox(
+            "Sayfa", range(len(pages)),
+            format_func=lambda i: page_labels[i],
+            key=f"hgmt_sel_page_{event_id}",
+        )
+    with hdr2:
+        total = len(products)
+        mapped = len(mapped_codes)
+        if total:
+            pct = int(mapped / total * 100)
+            st.progress(
+                pct / 100,
+                text=f"{mapped}/{total} eşleşti ({pct}%) — {total - mapped} kaldı",
+            )
+
+    page = pages[sel_idx]
+
+    # ---- Reset bbox on page change ----
+    page_id = f"{page['flyer_filename']}_p{page['page_no']}"
+    if st.session_state.get(keys["current_page"]) != page_id:
+        st.session_state[keys["current_page"]] = page_id
+        st.session_state[keys["bbox"]] = None
+
+    # ---- Load page mappings (DB cache + pending) ----
+    page_key = f'{event_id}_{page["flyer_filename"]}_p{page["page_no"]}'
+    cache = st.session_state[keys["db_cache"]]
+    if page_key not in cache:
+        cache[page_key] = hgs.list_page_mappings(event_id, page["flyer_filename"], page["page_no"])
+    db_saved = cache[page_key]
+    db_filtered = [m for m in db_saved if m["mapping_id"] not in pending_deletes]
+    upd = st.session_state[keys["pending_updates"]]
+    for m in db_filtered:
+        if m["mapping_id"] in upd:
+            m.update(upd[m["mapping_id"]])
+    pending_for_page = [
+        m for m in st.session_state[keys["pending_mappings"]]
+        if m["flyer_filename"] == page["flyer_filename"]
+        and m["page_no"] == page["page_no"]
+    ]
+    saved = db_filtered + pending_for_page
+    saved_boxes = [
+        {"x0": m["x0"], "y0": m["y0"], "x1": m["x1"], "y1": m["y1"],
+         "label": m.get("urun_kodu") or "?"}
+        for m in saved
+    ]
+
+    # ---- LAYOUT ----
+    col_img, col_ctrl = st.columns([7, 3])
+
+    with col_img:
+        canvas_key = f"hgmt_bbox_{event_id}_{page['flyer_filename']}_p{page['page_no']}"
+        result = bbox_canvas(
+            page_png_bytes=page["png_data"],
+            saved_boxes=saved_boxes,
+            active_bbox=st.session_state[keys["bbox"]],
+            key=canvas_key,
+        )
+        if result and isinstance(result, dict) and "x0" in result:
+            if st.session_state.get(keys["bbox_consumed"]):
+                st.session_state[keys["bbox_consumed"]] = False
+            elif result != st.session_state.get(keys["bbox"]):
+                st.session_state[keys["bbox"]] = result
+
+    with col_ctrl:
+        bbox = st.session_state[keys["bbox"]]
+        if bbox:
+            st.success(
+                f"Kutu: ({bbox['x0']:.2f},{bbox['y0']:.2f})→"
+                f"({bbox['x1']:.2f},{bbox['y1']:.2f})"
+            )
+        else:
+            st.info("Poster üzerinde kutu çizin (ENTER ile onayla)")
+
+        q_remaining, q_search, q_done, q_manual = st.tabs(
+            ["Kalan", "Ara", "Tamamlanan", "Manuel"]
+        )
+
+        remaining_prods = [(i, p) for i, p in enumerate(products) if p["urun_kod"] not in mapped_codes]
+        completed_prods = [(i, p) for i, p in enumerate(products) if p["urun_kod"] in mapped_codes]
+
+        # ── Kalan ──
+        with q_remaining:
+            if remaining_prods:
+                st.caption(f"{len(remaining_prods)} ürün kaldı")
+                sel_kod = st.session_state[keys["queue_kod"]]
+                rem_idx = {rp["urun_kod"]: i for i, (_, rp) in enumerate(remaining_prods)}
+                if sel_kod not in rem_idx:
+                    sel_kod = remaining_prods[0][1]["urun_kod"]
+                    st.session_state[keys["queue_kod"]] = sel_kod
+                q_idx = rem_idx[sel_kod]
+
+                _Q = 15
+                start = max(0, q_idx - _Q // 2)
+                end = min(len(remaining_prods), start + _Q)
+                start = max(0, end - _Q)
+                visible = remaining_prods[start:end]
+                radio_codes = [rp["urun_kod"] for _, rp in visible]
+                radio_labels = {rp["urun_kod"]: f"`{rp['urun_kod']}` — {rp.get('urun_ad','')}"
+                                for _, rp in visible}
+                idx_in_visible = radio_codes.index(sel_kod) if sel_kod in radio_codes else 0
+                sel_radio = st.radio(
+                    "Ürün seç:", radio_codes,
+                    index=idx_in_visible,
+                    format_func=lambda c: radio_labels[c],
+                    key=f"hgmt_q_radio_{event_id}",
+                    label_visibility="collapsed",
+                )
+                if sel_radio != sel_kod:
+                    st.session_state[keys["queue_kod"]] = sel_radio
+                    sel_kod = sel_radio
+                    q_idx = rem_idx[sel_kod]
+                active_prod = remaining_prods[q_idx][1]
+                if len(remaining_prods) > _Q:
+                    st.caption(f"Gösterilen: {start+1}–{end} / {len(remaining_prods)}")
+
+                if st.button(
+                    "Eşleştir (kutu + bu ürün)",
+                    type="primary",
+                    disabled=(bbox is None),
+                    key=f"hgmt_q_save_{event_id}",
+                    use_container_width=True,
+                ):
+                    _hgmt_save_local(event_id, page, bbox, active_prod["urun_kod"],
+                                     active_prod.get("urun_ad"), "excel")
+
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    if st.button("Atla →", key=f"hgmt_skip_{event_id}", use_container_width=True):
+                        n = (q_idx + 1) % len(remaining_prods)
+                        st.session_state[keys["queue_kod"]] = remaining_prods[n][1]["urun_kod"]
+                        st.rerun()
+                with ac2:
+                    if st.button("← Geri", key=f"hgmt_prev_{event_id}", use_container_width=True):
+                        n = (q_idx - 1) % len(remaining_prods)
+                        st.session_state[keys["queue_kod"]] = remaining_prods[n][1]["urun_kod"]
+                        st.rerun()
+            else:
+                st.success("Tüm ürünler eşleştirildi!")
+
+        # ── Ara ──
+        with q_search:
+            query = st.text_input("Ürün kodu veya adı:", key=f"hgmt_q_search_{event_id}")
+            if query:
+                results = search_products(query, products, limit=10)
+                if results:
+                    sr_codes = [r["urun_kod"] for r in results]
+                    sr_lookup = {r["urun_kod"]: r for r in results}
+                    sr_labels = {
+                        r["urun_kod"]: (
+                            f"`{r['urun_kod']}` — {r.get('urun_ad', '')}"
+                            f"{' ✓' if r['urun_kod'] in mapped_codes else ''}"
+                        )
+                        for r in results
+                    }
+                    sel_sr = st.radio(
+                        "Sonuç seç:", sr_codes,
+                        format_func=lambda c: sr_labels[c],
+                        key=f"hgmt_sr_radio_{event_id}",
+                        label_visibility="collapsed",
+                    )
+                    sel_r = sr_lookup[sel_sr]
+                    if st.button(
+                        "Eşleştir (kutu + seçili)",
+                        type="primary",
+                        disabled=(bbox is None),
+                        key=f"hgmt_sr_save_{event_id}",
+                        use_container_width=True,
+                    ):
+                        _hgmt_save_local(event_id, page, bbox, sel_r["urun_kod"],
+                                         sel_r.get("urun_ad"), "excel")
+                else:
+                    st.caption("Sonuç bulunamadı")
+
+        # ── Tamamlanan ──
+        with q_done:
+            if completed_prods:
+                st.caption(f"{len(completed_prods)} ürün eşleştirildi")
+                for _, cp in completed_prods[:50]:
+                    st.markdown(f"~~`{cp['urun_kod']}`~~ {cp.get('urun_ad','')}")
+                if len(completed_prods) > 50:
+                    st.caption(f"... ve {len(completed_prods)-50} ürün daha")
+            else:
+                st.caption("Henüz eşleştirme yok")
+
+        # ── Manuel ──
+        with q_manual:
+            code_in = st.text_input("Ürün Kodu:", key=f"hgmt_man_code_{event_id}")
+            desc_in = st.text_input("Açıklama:", key=f"hgmt_man_desc_{event_id}")
+            if st.button(
+                "Kaydet",
+                disabled=(not code_in or bbox is None),
+                key=f"hgmt_man_save_{event_id}",
+                use_container_width=True,
+            ):
+                _hgmt_save_local(event_id, page, bbox, code_in.strip(),
+                                 desc_in.strip() or None, "manual")
+
+    # ---- Hızlı eylemler: Kaydet + Undo + Toplu sil ----
+    st.markdown("---")
+    if st.session_state[keys["dirty"]]:
+        pc = len(st.session_state[keys["pending_mappings"]])
+        dc = len(st.session_state[keys["pending_deletes"]])
+        uc = len(st.session_state[keys["pending_updates"]])
+        parts = []
+        if pc: parts.append(f"{pc} yeni")
+        if dc: parts.append(f"{dc} silme")
+        if uc: parts.append(f"{uc} güncelleme")
+        text = ", ".join(parts)
+        sc1, sc2 = st.columns([3, 5])
+        with sc1:
+            if st.button(
+                f"Kaydet ({text})",
+                type="primary",
+                key=f"hgmt_flush_{event_id}",
+                use_container_width=True,
+            ):
+                page_lookup = {(p["flyer_filename"], p["page_no"]): p["png_data"] for p in pages}
+                with st.spinner("Supabase'e yazılıyor…"):
+                    _hgmt_flush_to_supabase(event_id, page_lookup)
+                # Refresh pages cache
+                st.session_state.pop(cache_key, None)
+                st.success("Tüm değişiklikler kaydedildi!")
+                st.rerun()
+        with sc2:
+            st.caption("Kaydedilmemiş değişiklikleriniz var")
+
+    uc1, uc2, _ = st.columns([2, 2, 4])
+    with uc1:
+        last_mid = st.session_state[keys["last_mapping_id"]]
+        if last_mid is not None and st.button(
+            "Geri Al (Son)",
+            key=f"hgmt_undo_{event_id}",
+            use_container_width=True,
+        ):
+            target = next((m for m in saved if m["mapping_id"] == last_mid), None)
+            if last_mid < 0:
+                st.session_state[keys["pending_mappings"]] = [
+                    m for m in st.session_state[keys["pending_mappings"]]
+                    if m["mapping_id"] != last_mid
+                ]
+            else:
+                st.session_state[keys["pending_deletes"]].append(last_mid)
+            st.session_state[keys["dirty"]] = True
+            st.session_state[keys["last_mapping_id"]] = None
+            st.rerun()
+    with uc2:
+        if saved and st.button(
+            f"Tümünü Sil ({len(saved)})",
+            key=f"hgmt_clear_{event_id}",
+            use_container_width=True,
+        ):
+            st.session_state[f"_hgmt_confirm_clear_{event_id}_{page_id}"] = True
+    if st.session_state.get(f"_hgmt_confirm_clear_{event_id}_{page_id}"):
+        st.warning(f"Bu sayfadaki **{len(saved)}** eşleştirme silinecek!")
+        yc1, yc2 = st.columns(2)
+        with yc1:
+            if st.button("Evet, Sil", type="primary", key=f"hgmt_clear_y_{event_id}", use_container_width=True):
+                st.session_state[keys["pending_mappings"]] = [
+                    m for m in st.session_state[keys["pending_mappings"]]
+                    if not (m["flyer_filename"] == page["flyer_filename"]
+                            and m["page_no"] == page["page_no"])
+                ]
+                for m in db_filtered:
+                    st.session_state[keys["pending_deletes"]].append(m["mapping_id"])
+                st.session_state[keys["dirty"]] = True
+                st.session_state.pop(f"_hgmt_confirm_clear_{event_id}_{page_id}", None)
+                st.rerun()
+        with yc2:
+            if st.button("İptal", key=f"hgmt_clear_n_{event_id}", use_container_width=True):
+                st.session_state.pop(f"_hgmt_confirm_clear_{event_id}_{page_id}", None)
+                st.rerun()
+
+    # ---- Saved mappings selectbox + edit form ----
+    if saved:
+        with st.expander(f"Bu Sayfadaki Eşleştirmeler ({len(saved)})", expanded=False):
+            mid_list = [m["mapping_id"] for m in saved]
+            mid_to_m = {m["mapping_id"]: m for m in saved}
+            mid_labels = {
+                mid: (
+                    f"{('*'+str(abs(mid))) if mid < 0 else ('#'+str(mid))}  "
+                    f"{m.get('urun_kodu') or '?'} — {m.get('urun_aciklamasi') or ''}"
+                )
+                for mid, m in mid_to_m.items()
+            }
+            sel_mid = st.selectbox(
+                "Eşleştirme seç:", mid_list,
+                format_func=lambda m: mid_labels[m],
+                key=f"hgmt_map_select_{event_id}",
+            )
+            sel_m = mid_to_m[sel_mid]
+            is_pending = sel_mid < 0
+
+            new_kod = st.text_input(
+                "Kod", value=sel_m.get("urun_kodu") or "",
+                key=f"hgmt_ek_{event_id}_{sel_mid}",
+            )
+            new_desc = st.text_input(
+                "Açıklama", value=sel_m.get("urun_aciklamasi") or "",
+                key=f"hgmt_ed_{event_id}_{sel_mid}",
+            )
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                if st.button("Güncelle", key=f"hgmt_eu_{event_id}", use_container_width=True):
+                    if is_pending:
+                        for pm in st.session_state[keys["pending_mappings"]]:
+                            if pm["mapping_id"] == sel_mid:
+                                pm["urun_kodu"] = new_kod.strip()
+                                pm["urun_aciklamasi"] = new_desc.strip() or None
+                                break
+                    else:
+                        st.session_state[keys["pending_updates"]][sel_mid] = {
+                            "urun_kodu": new_kod.strip(),
+                            "urun_aciklamasi": new_desc.strip() or None,
+                        }
+                    st.session_state[keys["dirty"]] = True
+                    st.rerun()
+            with ec2:
+                if st.button("Sil", key=f"hgmt_edel_{event_id}", use_container_width=True):
+                    if is_pending:
+                        st.session_state[keys["pending_mappings"]] = [
+                            pm for pm in st.session_state[keys["pending_mappings"]]
+                            if pm["mapping_id"] != sel_mid
+                        ]
+                    else:
+                        st.session_state[keys["pending_deletes"]].append(sel_mid)
+                    st.session_state[keys["dirty"]] = True
+                    st.rerun()
 
 
 # ---------------------------------------------------------------------------
