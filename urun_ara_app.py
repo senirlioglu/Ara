@@ -3157,12 +3157,36 @@ def _admin_halkgunu_mapping_phase(event_id: str, event_label: str) -> None:
 
     with col_img:
         canvas_key = f"hgmt_bbox_{event_id}_{page['flyer_filename']}_p{page['page_no']}"
-        result = bbox_canvas(
-            page_png_bytes=page["png_data"],
-            saved_boxes=saved_boxes,
-            active_bbox=st.session_state[keys["bbox"]],
-            key=canvas_key,
-        )
+        png_bytes = page.get("png_data") or b""
+        if not png_bytes:
+            st.error(
+                f"⚠️ Sayfa görseli yüklenemedi: `{page.get('image_path') or '?'}`. "
+                f"Storage'da dosya yok ya da indirilemedi. "
+                f"Afişi 'Sayfa Yönetimi' sekmesinden yeniden yükle."
+            )
+            result = None
+        else:
+            try:
+                result = bbox_canvas(
+                    page_png_bytes=png_bytes,
+                    saved_boxes=saved_boxes,
+                    active_bbox=st.session_state[keys["bbox"]],
+                    key=canvas_key,
+                )
+            except Exception as e:
+                from PIL import UnidentifiedImageError
+                if isinstance(e, UnidentifiedImageError):
+                    st.error(
+                        f"⚠️ Sayfa görseli geçersiz (PIL açamadı): "
+                        f"`{page.get('image_path') or '?'}`. "
+                        f"Boyut: {len(png_bytes)} byte. "
+                        f"Afişi 'Sayfa Yönetimi' sekmesinden tekrar yükle."
+                    )
+                    # Cache'i temizle ki tekrar denemede taze indirme olsun
+                    st.session_state.pop(f"_bbox_b64_{canvas_key}", None)
+                    result = None
+                else:
+                    raise
         if result and isinstance(result, dict) and "x0" in result:
             if st.session_state.get(keys["bbox_consumed"]):
                 st.session_state[keys["bbox_consumed"]] = False
