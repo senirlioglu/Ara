@@ -2630,12 +2630,12 @@ def _admin_halkgunu_events():
             else:
                 st.info("Değişiklik yok.")
 
-    # ---- DURUM & SİLME ----
+    # ---- DURUM & DÜZENLEME & SİLME ----
     st.markdown("---")
     for ev in events:
         eid = ev["event_id"]
         with st.container(border=True):
-            wc1, wc2, wc3 = st.columns([3, 2, 1])
+            wc1, wc2, wc3, wc4 = st.columns([3, 2, 1, 1])
             with wc1:
                 st.caption(f"{ev.get('event_name') or eid} ({eid})")
             with wc2:
@@ -2653,8 +2653,50 @@ def _admin_halkgunu_events():
                         hgs.update_event_status(eid, "draft")
                         st.rerun()
             with wc3:
+                if st.button("Düzenle", key=f"hg_edit_{eid}", use_container_width=True):
+                    st.session_state[f"_edit_hg_{eid}"] = not st.session_state.get(f"_edit_hg_{eid}", False)
+            with wc4:
                 if st.button("Sil", key=f"hg_del_{eid}", use_container_width=True):
                     st.session_state[f"_confirm_del_hg_{eid}"] = True
+
+        if st.session_state.get(f"_edit_hg_{eid}"):
+            with st.form(f"hg_edit_form_{eid}", clear_on_submit=False):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    cur_date_str = ev.get("event_date")
+                    cur_date = None
+                    if cur_date_str:
+                        try:
+                            from datetime import date as _date
+                            cur_date = _date.fromisoformat(str(cur_date_str)[:10])
+                        except Exception:
+                            cur_date = None
+                    new_date = st.date_input(
+                        "Etkinlik Tarihi",
+                        value=cur_date,
+                        key=f"hg_edit_date_{eid}",
+                    )
+                with ec2:
+                    new_name = st.text_input(
+                        "Görünen Ad",
+                        value=ev.get("event_name") or "",
+                        key=f"hg_edit_name_{eid}",
+                    )
+                fc1, fc2 = st.columns(2)
+                with fc1:
+                    save = st.form_submit_button("Kaydet", type="primary", use_container_width=True)
+                with fc2:
+                    cancel = st.form_submit_button("İptal", use_container_width=True)
+                if save:
+                    name_val = (new_name or "").strip() or eid
+                    date_val = new_date.strftime("%Y-%m-%d") if new_date else ""
+                    hgs.update_event_meta(eid, event_name=name_val, event_date=date_val)
+                    st.session_state.pop(f"_edit_hg_{eid}", None)
+                    st.success("Güncellendi.")
+                    st.rerun()
+                if cancel:
+                    st.session_state.pop(f"_edit_hg_{eid}", None)
+                    st.rerun()
 
         if st.session_state.get(f"_confirm_del_hg_{eid}"):
             st.warning(
