@@ -370,6 +370,254 @@ Vercel build hatası: `Module not found: Can't resolve '@/lib/api'`
 - `format.ts` — `formatPrice` (TRY), `formatEventDate`, `formatShortDate`,
   `discountPercent`
 
+#### 4 Dosyanın Tam İçeriği (kopyala-yapıştır)
+
+##### `src/lib/supabase.ts`
+
+```typescript
+import { createClient } from "@supabase/supabase-js";
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!url || !anon) {
+  throw new Error(
+    "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY env vars",
+  );
+}
+
+export const supabase = createClient(url, anon, {
+  auth: { persistSession: false },
+});
+
+const PRODUCT_BUCKET = "product-images";
+const POSTER_BUCKET = "poster-images";
+
+function safeProductCode(kod: string): string {
+  return kod.replace(/\//g, "_").replace(/ /g, "_");
+}
+
+export function productImageUrl(urunKod: string): string {
+  return supabase.storage
+    .from(PRODUCT_BUCKET)
+    .getPublicUrl(`${safeProductCode(urunKod)}.jpg`).data.publicUrl;
+}
+
+export function posterImageUrl(path: string): string {
+  return supabase.storage.from(POSTER_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+```
+
+##### `src/lib/types.ts`
+
+```typescript
+// halkgunu_schema.sql tablolarına karşılık gelen TypeScript tipleri.
+
+export type EventStatus = "draft" | "active" | "archived";
+
+export interface HalkgunuEvent {
+  event_id: string;
+  event_name: string;
+  event_date: string; // ISO yyyy-mm-dd
+  status: EventStatus;
+  sort_order: number | null;
+}
+
+export interface HalkgunuPage {
+  id: number;
+  event_id: string;
+  flyer_filename: string;
+  page_no: number;
+  image_path: string;
+  title: string | null;
+  sort_order: number | null;
+}
+
+export interface HalkgunuMapping {
+  mapping_id: number;
+  event_id: string;
+  flyer_filename: string;
+  page_no: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  urun_kodu: string | null;
+  urun_aciklamasi: string | null;
+  afis_fiyat: string | null;
+}
+
+// Liste görünümü için distinct ürün satırı (admin'in get_event_product_summary çıktısı).
+export interface HalkgunuProductSummary {
+  urun_kod: string;
+  urun_ad: string | null;
+  min_indirimli: number | null;
+  max_normal: number | null;
+}
+
+// Mağaza listesi (RPC: get_halkgunu_product_stores)
+export interface HalkgunuProductStore {
+  magaza_kod: string;
+  magaza_adi: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  adres: string | null;
+  normal_fiyat: number | null;
+  indirimli_fiyat: number | null;
+  stok_adet: number;
+}
+```
+
+##### `src/lib/api.ts`
+
+```typescript
+import { supabase } from "./supabase";
+import type {
+  HalkgunuEvent,
+  HalkgunuMapping,
+  HalkgunuPage,
+  HalkgunuProductStore,
+  HalkgunuProductSummary,
+} from "./types";
+
+export async function listActiveEvents(): Promise<HalkgunuEvent[]> {
+  const { data, error } = await supabase
+    .from("halkgunu_events")
+    .select("event_id, event_name, event_date, status, sort_order")
+    .eq("status", "active")
+    .order("sort_order", { ascending: true })
+    .order("event_date", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function listEventPages(eventId: string): Promise<HalkgunuPage[]> {
+  const { data, error } = await supabase
+    .from("halkgunu_pages")
+    .select("id, event_id, flyer_filename, page_no, image_path, title, sort_order")
+    .eq("event_id", eventId)
+    .order("sort_order", { ascending: true })
+    .order("flyer_filename", { ascending: true })
+    .order("page_no", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function listEventMappings(
+  eventId: string,
+): Promise<HalkgunuMapping[]> {
+  const { data, error } = await supabase
+    .from("halkgunu_mappings")
+    .select(
+      "mapping_id, event_id, flyer_filename, page_no, x0, y0, x1, y1, urun_kodu, urun_aciklamasi, afis_fiyat",
+    )
+    .eq("event_id", eventId);
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Distinct ürün özeti — admin _admin_halkgunu_list_mode ile aynı agregasyonu yapar.
+// (RPC tanımlamadık çünkü PostgREST üzerinden çekip JS'de gruplamak yeterli.)
+export async function listEventProductSummary(
+  eventId: string,
+): Promise<HalkgunuProductSummary[]> {
+  const { data, error } = await supabase
+    .from("halkgunu_products")
+    .select("urun_kod, urun_ad, normal_fiyat, indirimli_fiyat")
+    .eq("event_id", eventId);
+  if (error) throw error;
+
+  const byKod = new Map<string, HalkgunuProductSummary>();
+  for (const row of data ?? []) {
+    const kod = row.urun_kod;
+    if (!kod) continue;
+    const ind = row.indirimli_fiyat as number | null;
+    const nor = row.normal_fiyat as number | null;
+    const cur = byKod.get(kod);
+    if (!cur) {
+      byKod.set(kod, {
+        urun_kod: kod,
+        urun_ad: row.urun_ad ?? null,
+        min_indirimli: ind,
+        max_normal: nor,
+      });
+    } else {
+      if (ind != null && (cur.min_indirimli == null || ind < cur.min_indirimli)) {
+        cur.min_indirimli = ind;
+      }
+      if (nor != null && (cur.max_normal == null || nor > cur.max_normal)) {
+        cur.max_normal = nor;
+      }
+      if (!cur.urun_ad && row.urun_ad) cur.urun_ad = row.urun_ad;
+    }
+  }
+  return Array.from(byKod.values()).sort((a, b) =>
+    a.urun_kod.localeCompare(b.urun_kod, "tr"),
+  );
+}
+
+export async function getProductStores(
+  eventId: string,
+  urunKod: string,
+): Promise<HalkgunuProductStore[]> {
+  const { data, error } = await supabase.rpc("get_halkgunu_product_stores", {
+    p_event_id: eventId,
+    p_urun_kod: urunKod,
+  });
+  if (error) throw error;
+  return (data ?? []) as HalkgunuProductStore[];
+}
+```
+
+##### `src/lib/format.ts`
+
+```typescript
+const _tl = new Intl.NumberFormat("tr-TR", {
+  style: "currency",
+  currency: "TRY",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+export function formatPrice(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return _tl.format(value);
+}
+
+const _date = new Intl.DateTimeFormat("tr-TR", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
+
+export function formatEventDate(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return _date.format(d);
+}
+
+export function formatShortDate(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("tr-TR", {
+    day: "2-digit",
+    month: "2-digit",
+  }).format(d);
+}
+
+// İndirim yüzdesi (Ara'daki rozetle uyumlu)
+export function discountPercent(
+  normal: number | null | undefined,
+  indirimli: number | null | undefined,
+): number | null {
+  if (normal == null || indirimli == null) return null;
+  if (normal <= 0 || indirimli >= normal) return null;
+  return Math.round((1 - indirimli / normal) * 100);
+}
+```
+
 ### 🟡 2. Ara'nın `.gitignore`'ında `lib/` kuralı
 
 `lib/` (root + her alt klasör) Python build artifact için ama Next.js'te
