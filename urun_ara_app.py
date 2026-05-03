@@ -2469,7 +2469,7 @@ def _admin_tab_weeks():
 # ADMIN TAB: Halk Günü (etkinlik yönetimi + afiş/liste modları)
 # ---------------------------------------------------------------------------
 
-_HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Önizleme"]
+_HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Bizden Fotoğraflar", "Önizleme"]
 
 
 def _admin_halkgunu():
@@ -2524,6 +2524,8 @@ def _admin_halkgunu():
         _admin_halkgunu_poster_mode(event_id, event_meta)
     elif sub_active == "Liste Modu":
         _admin_halkgunu_list_mode(event_id, event_meta)
+    elif sub_active == "Bizden Fotoğraflar":
+        _admin_halkgunu_photos(event_id, event_meta)
     elif sub_active == "Önizleme":
         st.info("Önizleme yakında — frontend görünümünü buradan test edebileceksin.")
 
@@ -3644,6 +3646,205 @@ def _hg_image_to_jpeg(raw_bytes: bytes, quality: int = 88) -> bytes:
     out = BytesIO()
     img.save(out, format="JPEG", quality=quality, optimize=True)
     return out.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# ADMIN TAB: Halk Günü → Bizden Fotoğraflar (halkgunu_photos)
+# ---------------------------------------------------------------------------
+
+_HG_PHOTO_NO_STORE = "__none__"
+
+
+def _admin_halkgunu_photos(event_id: str, event_meta: dict | None):
+    """Mağaza ziyaretlerinde çekilen fotoğraflar — yükle/listele/düzenle/sil."""
+    import halkgunu_storage as hgs
+
+    event_label = (event_meta or {}).get("event_name") or event_id
+
+    st.markdown(f"#### Bizden Fotoğraflar — {event_label}")
+    st.caption(
+        "halkgunu.net üzerindeki yeşil **Bizden Fotoğraflar** sekmesini besler. "
+        "Mağaza seçimi opsiyoneldir; mağaza seçilmezse foto sadece görsel + caption "
+        "olarak görünür. Sekme yalnızca bu etkinlikte en az bir foto varken kullanıcılara açılır."
+    )
+    if (event_meta or {}).get("status") != "active":
+        st.warning(
+            "⚠️ Bu etkinlik henüz **yayında değil**. Foto yükleyebilirsin ama "
+            "halkgunu.net'te ancak etkinlik 'Yayında' olduğunda görünür."
+        )
+
+    magazalar = hgs.list_magazalar()
+    magaza_label = {m["magaza_kod"]: f"{m['magaza_kod']} — {m.get('magaza_adi') or m['magaza_kod']}"
+                    for m in magazalar}
+    magaza_options = [_HG_PHOTO_NO_STORE] + [m["magaza_kod"] for m in magazalar]
+
+    def _fmt_magaza(opt: str) -> str:
+        return "(mağaza yok)" if opt == _HG_PHOTO_NO_STORE else magaza_label.get(opt, opt)
+
+    # =========================================================================
+    # 1) YENİ FOTOĞRAF YÜKLE
+    # =========================================================================
+    with st.expander("➕ Yeni Fotoğraf Yükle", expanded=True):
+        files = st.file_uploader(
+            "Fotoğraflar (.jpg / .jpeg / .png) — birden fazla seçebilirsin",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key=f"hg_photo_uploader_{event_id}",
+        )
+        uc1, uc2 = st.columns([3, 1])
+        with uc1:
+            sel_magaza = st.selectbox(
+                "Mağaza (opsiyonel)",
+                magaza_options,
+                index=0,
+                format_func=_fmt_magaza,
+                key=f"hg_photo_new_magaza_{event_id}",
+            )
+        with uc2:
+            sort_raw = st.text_input(
+                "Sıra (boşsa sona eklenir)",
+                value="",
+                key=f"hg_photo_new_sort_{event_id}",
+                placeholder="auto",
+            )
+        caption = st.text_input(
+            "Caption (opsiyonel — tüm yüklenen dosyalara aynı metin)",
+            value="",
+            key=f"hg_photo_new_caption_{event_id}",
+        )
+
+        if files:
+            st.caption(f"Yüklenecek: {len(files)} dosya")
+            if st.button(
+                f"✅ {len(files)} fotoğrafı yükle",
+                type="primary",
+                key=f"hg_photo_save_{event_id}",
+                use_container_width=True,
+            ):
+                magaza_val = None if sel_magaza == _HG_PHOTO_NO_STORE else sel_magaza
+                base_sort: int | None = None
+                if sort_raw.strip().lstrip("-").isdigit():
+                    base_sort = int(sort_raw.strip())
+                done, errors = 0, 0
+                progress = st.progress(0)
+                for i, f in enumerate(files):
+                    try:
+                        raw = f.getvalue()
+                        # Always normalize to JPEG to keep bucket consistent and small
+                        jpeg = _hg_image_to_jpeg(raw)
+                        path = hgs._hg_photo_path(event_id, f.name)
+                        # Ensure .jpg extension since we re-encoded
+                        if not path.endswith(".jpg"):
+                            path = path.rsplit(".", 1)[0] + ".jpg"
+                        ok = hgs._hg_upload_photo(path, jpeg, content_type="image/jpeg")
+                        if not ok:
+                            errors += 1
+                            continue
+                        sort_for_row = (base_sort + i) if base_sort is not None else None
+                        hgs.save_photo(
+                            event_id=event_id,
+                            image_path=path,
+                            magaza_kod=magaza_val,
+                            caption=(caption or None),
+                            sort_order=sort_for_row,
+                        )
+                        done += 1
+                    except Exception as e:
+                        log.warning("Halk Günü photo upload (%s): %s", f.name, e)
+                        errors += 1
+                    progress.progress((i + 1) / len(files))
+                if done:
+                    st.success(f"{done} foto yüklendi" + (f" · {errors} hata" if errors else ""))
+                else:
+                    st.error(f"Yükleme başarısız ({errors} hata).")
+                st.rerun()
+
+    # =========================================================================
+    # 2) MEVCUT FOTOĞRAFLAR
+    # =========================================================================
+    photos = hgs.list_event_photos(event_id)
+
+    pc1, pc2 = st.columns(2)
+    pc1.metric("Toplam foto", f"{len(photos):,}")
+    pc2.metric("Mağaza atamalı", f"{sum(1 for p in photos if p.get('magaza_kod')):,}")
+
+    if not photos:
+        st.info("Henüz foto yok. Yukarıdan ilk fotoğrafları yükle.")
+        return
+
+    st.markdown("**Mevcut Fotoğraflar**")
+    st.caption("Her satırda mağaza/caption/sıra düzenlenip 'Kaydet' ile gönderilir. "
+               "Silme işlemi DB satırını ve storage'daki dosyayı kaldırır.")
+
+    for p in photos:
+        pid = p["id"]
+        url = hgs.get_photo_public_url(p.get("image_path") or "")
+        with st.container(border=True):
+            ic1, ic2 = st.columns([1, 3])
+            with ic1:
+                if url:
+                    st.image(url, use_container_width=True)
+                else:
+                    st.caption("(görsel yok)")
+                st.caption(f"ID: {pid}")
+            with ic2:
+                cur_magaza = p.get("magaza_kod") or _HG_PHOTO_NO_STORE
+                if cur_magaza != _HG_PHOTO_NO_STORE and cur_magaza not in magaza_label:
+                    # Eski/silinmiş mağaza referansı — yine de seçenekler arasında göster
+                    magaza_options_row = magaza_options + [cur_magaza]
+                else:
+                    magaza_options_row = magaza_options
+                idx = magaza_options_row.index(cur_magaza) if cur_magaza in magaza_options_row else 0
+                new_magaza = st.selectbox(
+                    "Mağaza",
+                    magaza_options_row,
+                    index=idx,
+                    format_func=_fmt_magaza,
+                    key=f"hg_photo_magaza_{pid}",
+                )
+                new_caption = st.text_input(
+                    "Caption",
+                    value=p.get("caption") or "",
+                    key=f"hg_photo_caption_{pid}",
+                )
+                new_sort = st.number_input(
+                    "Sıra",
+                    value=int(p.get("sort_order") or 0),
+                    step=1,
+                    key=f"hg_photo_sort_{pid}",
+                )
+
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button("Kaydet", key=f"hg_photo_upd_{pid}",
+                                 type="primary", use_container_width=True):
+                        magaza_val = None if new_magaza == _HG_PHOTO_NO_STORE else new_magaza
+                        hgs.update_photo(pid, {
+                            "magaza_kod": magaza_val,
+                            "caption": new_caption.strip() or None,
+                            "sort_order": int(new_sort),
+                        })
+                        st.success("Güncellendi.")
+                        st.rerun()
+                with bc2:
+                    if st.button("Sil", key=f"hg_photo_del_{pid}",
+                                 use_container_width=True):
+                        st.session_state[f"_confirm_del_hgphoto_{pid}"] = True
+
+            if st.session_state.get(f"_confirm_del_hgphoto_{pid}"):
+                st.warning("Foto silinecek (DB + storage).")
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    if st.button("Evet, Sil", key=f"hg_photo_cdel_y_{pid}",
+                                 type="primary", use_container_width=True):
+                        hgs.delete_photo(pid, also_storage=True)
+                        st.session_state.pop(f"_confirm_del_hgphoto_{pid}", None)
+                        st.rerun()
+                with dc2:
+                    if st.button("İptal", key=f"hg_photo_cdel_n_{pid}",
+                                 use_container_width=True):
+                        st.session_state.pop(f"_confirm_del_hgphoto_{pid}", None)
+                        st.rerun()
 
 
 # ---------------------------------------------------------------------------

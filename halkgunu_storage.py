@@ -18,6 +18,8 @@ Mağaza bilgisi `magazalar`, canlı stok `stok_gunluk` tablosundan join ile alı
 from __future__ import annotations
 
 import logging
+import pathlib
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -799,3 +801,186 @@ def backfill_event_product_images(event_id: str, progress_callback=None) -> dict
         if progress_callback:
             progress_callback(i + 1, stats["total"])
     return stats
+
+
+# ============================================================================
+# PHOTOS CRUD — halkgunu_photos ("Bizden Fotoğraflar")
+# ----------------------------------------------------------------------------
+# Mağaza ziyaretlerinde çekilen fotoğraflar. Frontend halkgunu.net'te yeşil
+# "Bizden Fotoğraflar" sekmesinde grid olarak görünür. Foto/mağaza ilişkisi
+# opsiyonel (magaza_kod NULL olabilir). Bucket: poster-images, path:
+# photos/{event_id}/{uuid}.{ext}  (halkgunu/ prefix'i değil — frontend
+# kontratı bu yolda bekliyor).
+# ============================================================================
+
+_HALKGUNU_PHOTO_PREFIX = "photos"
+
+_PHOTO_FIELDS = {"event_id", "magaza_kod", "image_path", "caption", "sort_order"}
+
+_PHOTO_CONTENT_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
+
+
+def _hg_photo_path(event_id: str, original_filename: str) -> str:
+    """Build a unique storage path for a photo upload."""
+    safe_event = _safe_path_segment(event_id, fallback="event")
+    ext = pathlib.Path(original_filename or "").suffix.lower()
+    if ext not in _PHOTO_CONTENT_TYPES:
+        ext = ".jpg"
+    return f"{_HALKGUNU_PHOTO_PREFIX}/{safe_event}/{uuid.uuid4().hex}{ext}"
+
+
+def _hg_upload_photo(path: str, image_bytes: bytes,
+                     content_type: str | None = None) -> bool:
+    """Upload a photo to poster-images bucket. Returns True on success."""
+    sb = _get_client()
+    if not sb:
+        return False
+    if not content_type:
+        ext = pathlib.Path(path).suffix.lower()
+        content_type = _PHOTO_CONTENT_TYPES.get(ext, "image/jpeg")
+    try:
+        sb.storage.from_(BUCKET).upload(
+            path, image_bytes,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+        return True
+    except Exception as e:
+        log.warning("Halk Günü photo upload fallback: %s", e)
+        try:
+            sb.storage.from_(BUCKET).update(
+                path, image_bytes,
+                file_options={"content-type": content_type},
+            )
+            return True
+        except Exception as e2:
+            log.error("Halk Günü photo upload failed: %s", e2)
+            return False
+
+
+def get_photo_public_url(image_path: str) -> str:
+    """Public URL for a stored photo (poster-images bucket)."""
+    sb = _get_client()
+    if not sb or not image_path:
+        return ""
+    return sb.storage.from_(BUCKET).get_public_url(image_path)
+
+
+def get_max_photo_sort_order(event_id: str) -> int:
+    sb = _get_client()
+    if not sb:
+        return 0
+    res = (
+        sb.table("halkgunu_photos")
+        .select("sort_order")
+        .eq("event_id", event_id)
+        .order("sort_order", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return (res.data[0]["sort_order"] if res.data else 0) or 0
+
+
+def save_photo(event_id: str, image_path: str,
+               magaza_kod: str | None = None,
+               caption: str | None = None,
+               sort_order: int | None = None) -> int | None:
+    """Insert a halkgunu_photos row. If sort_order is None, append (max+1)."""
+    sb = _get_client()
+    if not sb:
+        return None
+    if sort_order is None:
+        sort_order = (get_max_photo_sort_order(event_id) or 0) + 1
+    row = {
+        "event_id": event_id,
+        "image_path": image_path,
+        "magaza_kod": (magaza_kod or None) or None,
+        "caption": (caption or None) or None,
+        "sort_order": int(sort_order or 0),
+    }
+    res = sb.table("halkgunu_photos").insert(row).execute()
+    return res.data[0]["id"] if res.data else None
+
+
+def list_event_photos(event_id: str) -> list[dict]:
+    """All photos for an event, ordered by sort_order then id."""
+    sb = _get_client()
+    if not sb:
+        return []
+    res = (
+        sb.table("halkgunu_photos")
+        .select("*")
+        .eq("event_id", event_id)
+        .order("sort_order")
+        .order("id")
+        .execute()
+    )
+    return res.data or []
+
+
+def update_photo(photo_id: int, fields: dict) -> None:
+    sb = _get_client()
+    if not sb:
+        return
+    payload = {k: v for k, v in (fields or {}).items() if k in _PHOTO_FIELDS}
+    if not payload:
+        return
+    # Empty strings → NULL for nullable cols
+    for k in ("magaza_kod", "caption"):
+        if k in payload and isinstance(payload[k], str) and not payload[k].strip():
+            payload[k] = None
+    if "sort_order" in payload and payload["sort_order"] is not None:
+        payload["sort_order"] = int(payload["sort_order"])
+    sb.table("halkgunu_photos").update(payload).eq("id", photo_id).execute()
+
+
+def delete_photo(photo_id: int, also_storage: bool = True) -> None:
+    """Delete a photo row; optionally remove the underlying storage object."""
+    sb = _get_client()
+    if not sb:
+        return
+    image_path = ""
+    if also_storage:
+        try:
+            res = (
+                sb.table("halkgunu_photos")
+                .select("image_path")
+                .eq("id", photo_id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                image_path = res.data[0].get("image_path") or ""
+        except Exception as e:
+            log.warning("Halk Günü photo lookup before delete failed: %s", e)
+    sb.table("halkgunu_photos").delete().eq("id", photo_id).execute()
+    if also_storage and image_path:
+        try:
+            sb.storage.from_(BUCKET).remove([image_path])
+        except Exception as e:
+            log.warning("Halk Günü photo storage delete: %s", e)
+
+
+# ============================================================================
+# MAGAZALAR — read-only, photo dropdown için
+# ============================================================================
+
+def list_magazalar() -> list[dict]:
+    """Return [{magaza_kod, magaza_adi}] for the photo store dropdown."""
+    sb = _get_client()
+    if not sb:
+        return []
+    try:
+        res = (
+            sb.table("magazalar")
+            .select("magaza_kod, magaza_adi")
+            .order("magaza_kod")
+            .execute()
+        )
+    except Exception as e:
+        log.warning("magazalar list failed: %s", e)
+        return []
+    return res.data or []
