@@ -3828,6 +3828,7 @@ def _hg_image_to_jpeg(raw_bytes: bytes, quality: int = 88,
     """Convert an uploaded file (image or PDF) to JPEG bytes for the product bucket.
 
     Accepted: jpg/jpeg/png/webp/tif(f)/bmp/gif (via Pillow) and pdf (PyMuPDF, first page).
+    PyMuPDF is also used as a fallback for TIFF/JP2 variants Pillow can't decode.
     """
     from io import BytesIO
     from PIL import Image, UnidentifiedImageError
@@ -3835,29 +3836,54 @@ def _hg_image_to_jpeg(raw_bytes: bytes, quality: int = 88,
     if not raw_bytes:
         raise ValueError("Boş dosya")
 
-    # PDF detection: magic bytes can sit a few bytes deep (BOM/whitespace).
-    # pdf_render uses the same lenient scan over the first 1 KB.
     head = raw_bytes[:1024]
-    is_pdf = b"%PDF" in head or (filename or "").lower().endswith(".pdf")
+    name_lower = (filename or "").lower()
+    is_pdf = b"%PDF" in head or name_lower.endswith(".pdf")
+
+    img = None
     if is_pdf:
         from pdf_render import render_pdf_bytes_to_pages
         pages = render_pdf_bytes_to_pages(raw_bytes, zoom=2.0, jpeg_quality=quality)
         if not pages:
             raise ValueError("PDF render edilemedi (sayfa yok).")
         img = Image.open(BytesIO(pages[0]["png_bytes"]))
+        img.load()
     else:
         try:
             img = Image.open(BytesIO(raw_bytes))
-            img.load()  # force decode now so we surface format errors here, not later
-        except UnidentifiedImageError:
-            # Friendlier hint: HEIC/AVIF/SVG vs Pillow defaults
-            sig = head[:12].hex()
-            ext = (filename or "").rsplit(".", 1)[-1].lower() if filename else "?"
-            raise ValueError(
-                f"Dosya formatı tanınamadı (uzantı: .{ext}, ilk byte: {sig}). "
-                "Desteklenen: JPG/PNG/WEBP/TIFF/BMP/GIF/PDF. "
-                "HEIC/HEIF/AVIF/SVG ise lütfen JPG/PNG'ye çevirip tekrar yükleyin."
-            ) from None
+            img.load()
+        except (UnidentifiedImageError, OSError) as pil_err:
+            # Fallback: PyMuPDF supports many image formats Pillow doesn't
+            # (or fails on due to compression variants — common with TIFF).
+            try:
+                import fitz
+                ext = name_lower.rsplit(".", 1)[-1] if "." in name_lower else ""
+                doc = fitz.open(stream=raw_bytes, filetype=ext or None)
+                if doc.page_count == 0:
+                    raise ValueError("Dosya boş")
+                pix = doc[0].get_pixmap(alpha=False, dpi=200)
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                doc.close()
+            except Exception as fitz_err:
+                sig = head[:12].hex()
+                raise ValueError(
+                    f"Dosya formatı tanınamadı (uzantı: .{ext or '?'}, ilk byte: {sig}). "
+                    f"Pillow: {pil_err.__class__.__name__}; PyMuPDF: {fitz_err.__class__.__name__}. "
+                    "Desteklenen: JPG/PNG/WEBP/TIFF/BMP/GIF/PDF. "
+                    "HEIC/HEIF/AVIF/SVG ise lütfen JPG/PNG'ye çevirip tekrar yükleyin."
+                ) from None
+
+    if img.mode in ("RGBA", "P", "LA"):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        bg.paste(img, mask=img.split()[-1] if img.mode in ("RGBA", "LA") else None)
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    out = BytesIO()
+    img.save(out, format="JPEG", quality=quality, optimize=True)
+    return out.getvalue()
 
     if img.mode in ("RGBA", "P", "LA"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
