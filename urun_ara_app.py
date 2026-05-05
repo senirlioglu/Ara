@@ -2677,18 +2677,21 @@ def _admin_halkgunu_events():
 # Kullanıcı "ürün kodu" / "URUN_KODU" / "Sku" yazsa da yakalanır.
 _HG_EXCEL_COLUMN_MAP = {
     "urun_kod": ["urun_kod", "urun_kodu", "kod", "sku", "stok_kodu", "barkod_kod"],
-    "urun_ad": ["urun_ad", "urun_adi", "urun_aciklamasi", "aciklama", "urun", "ad", "isim"],
+    "urun_ad": ["urun_ad", "urun_adi", "urun_ismi", "urun_isim", "urun_aciklamasi", "aciklama", "urun", "ad", "isim"],
     "magaza_kod": ["magaza_kod", "magaza_kodu", "magaza", "store", "store_id", "store_code", "subekod", "sube_kod"],
     "magaza_ad": ["magaza_ad", "magaza_adi", "magaza_isim", "store_name", "sube_adi"],
-    "normal_fiyat": ["normal_fiyat", "liste_fiyati", "liste_fiyat", "orijinal_fiyat", "fiyat", "satis_fiyat", "etiket_fiyat"],
+    "normal_fiyat": ["normal_fiyat", "birim_fiyat", "birim_fiyati", "liste_fiyati", "liste_fiyat", "orijinal_fiyat", "fiyat", "satis_fiyat", "etiket_fiyat"],
     "indirimli_fiyat": ["indirimli_fiyat", "kampanya_fiyati", "kampanya_fiyat", "yeni_fiyat", "indirim_fiyat", "halkgunu_fiyat"],
 }
 
 
 def _hg_normalize_col(name) -> str:
     """Normalize an Excel header for fuzzy matching."""
-    s = str(name or "").strip().lower()
-    s = s.translate(str.maketrans("ıİğĞüÜşŞöÖçÇ", "iIgGuUsSoOcC")).lower()
+    # Translate Turkish chars BEFORE lower(): Python's "İ".lower() yields
+    # "i̇" (i + combining dot) which then breaks downstream regex.
+    s = str(name or "").strip()
+    s = s.translate(str.maketrans("ıİğĞüÜşŞöÖçÇ", "iIgGuUsSoOcC"))
+    s = s.lower()
     s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
     return s
 
