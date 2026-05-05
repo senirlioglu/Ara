@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 from storage import (
     BUCKET,
+    MASTER_PRODUCT_IMG_BUCKET,
     PRODUCT_IMG_BUCKET,
     _crop_and_encode,
     _get_client,
@@ -554,17 +555,8 @@ def update_mappings_bulk(updates: dict[int, dict]) -> None:
 # PRODUCTS — halkgunu_products (Excel-loaded discounted product list)
 # ============================================================================
 
-def save_event_products(event_id: str, products: list[dict]) -> int:
-    """Replace all products for an event. Each row needs at minimum:
-        urun_kod, magaza_kod
-    Optional: urun_ad, normal_fiyat, indirimli_fiyat
-    Returns number of inserted rows.
-    """
-    sb = _get_client()
-    if not sb:
-        return 0
-    sb.table("halkgunu_products").delete().eq("event_id", event_id).execute()
-
+def _build_product_rows(event_id: str, products: list[dict]) -> list[dict]:
+    """Normalize raw product dicts to schema rows; dedupes by (urun_kod, magaza_kod)."""
     seen: set[tuple] = set()
     rows: list[dict] = []
     for p in products:
@@ -584,12 +576,77 @@ def save_event_products(event_id: str, products: list[dict]) -> int:
             "normal_fiyat": _safe_decimal(p.get("normal_fiyat")),
             "indirimli_fiyat": _safe_decimal(p.get("indirimli_fiyat")),
         })
+    return rows
+
+
+def save_event_products(event_id: str, products: list[dict]) -> int:
+    """Replace all products for an event. Each row needs at minimum:
+        urun_kod, magaza_kod
+    Optional: urun_ad, normal_fiyat, indirimli_fiyat
+    Returns number of inserted rows.
+    """
+    sb = _get_client()
+    if not sb:
+        return 0
+    sb.table("halkgunu_products").delete().eq("event_id", event_id).execute()
+
+    rows = _build_product_rows(event_id, products)
     inserted = 0
     for start in range(0, len(rows), 200):
         batch = rows[start:start + 200]
         sb.table("halkgunu_products").insert(batch).execute()
         inserted += len(batch)
     return inserted
+
+
+def add_event_products(event_id: str, products: list[dict]) -> dict:
+    """Append products to an event WITHOUT deleting existing rows.
+
+    Skips (urun_kod, magaza_kod) combinations that already exist in DB.
+    Returns {"inserted": N, "skipped": M}.
+    """
+    sb = _get_client()
+    if not sb:
+        return {"inserted": 0, "skipped": 0}
+    rows = _build_product_rows(event_id, products)
+    if not rows:
+        return {"inserted": 0, "skipped": 0}
+
+    existing: set[tuple] = set()
+    try:
+        res = (
+            sb.table("halkgunu_products")
+            .select("urun_kod, magaza_kod")
+            .eq("event_id", event_id)
+            .execute()
+        )
+        existing = {(r["urun_kod"], r["magaza_kod"]) for r in (res.data or [])}
+    except Exception as e:
+        log.warning("add_event_products: existing fetch failed: %s", e)
+
+    new_rows = [r for r in rows if (r["urun_kod"], r["magaza_kod"]) not in existing]
+    skipped = len(rows) - len(new_rows)
+
+    inserted = 0
+    for start in range(0, len(new_rows), 200):
+        batch = new_rows[start:start + 200]
+        sb.table("halkgunu_products").insert(batch).execute()
+        inserted += len(batch)
+    return {"inserted": inserted, "skipped": skipped}
+
+
+def delete_event_product(event_id: str, urun_kod: str,
+                         magaza_kod: str | None = None) -> int:
+    """Delete a product from an event. If magaza_kod is None, removes ALL stores
+    for that urun_kod. Returns deleted row count (best-effort)."""
+    sb = _get_client()
+    if not sb:
+        return 0
+    q = sb.table("halkgunu_products").delete().eq("event_id", event_id).eq("urun_kod", urun_kod)
+    if magaza_kod:
+        q = q.eq("magaza_kod", magaza_kod)
+    res = q.execute()
+    return len(res.data or [])
 
 
 def _safe_decimal(value):
@@ -763,7 +820,9 @@ def list_event_product_image_status(event_id: str) -> dict[str, bool]:
 def check_product_images_for_codes(codes) -> dict[str, bool]:
     """Like list_event_product_image_status but takes codes directly.
 
-    Used during Excel preview/upload — caller hasn't persisted products yet.
+    Considers a product as having an image if EITHER bucket holds it:
+      - urun-resimleri/{kod}.webp  (master e-commerce images)
+      - product-images/{kod}.jpg   (cropped from poster bbox)
     """
     codes = list(codes or [])
     if not codes:
@@ -771,15 +830,23 @@ def check_product_images_for_codes(codes) -> dict[str, bool]:
     sb = _get_client()
     if not sb:
         return {kod: False for kod in codes}
-    have: set[str] = set()
-    try:
-        listed = sb.storage.from_(PRODUCT_IMG_BUCKET).list("", {"limit": 10000})
-        for obj in listed or []:
-            name = obj.get("name") or ""
-            if name.endswith(".jpg"):
-                have.add(name[:-4])
-    except Exception as e:
-        log.warning("product-images list failed: %s", e)
+
+    def _list_stems(bucket: str, exts: tuple[str, ...]) -> set[str]:
+        out: set[str] = set()
+        try:
+            listed = sb.storage.from_(bucket).list("", {"limit": 10000})
+            for obj in listed or []:
+                name = obj.get("name") or ""
+                for ext in exts:
+                    if name.endswith(ext):
+                        out.add(name[: -len(ext)])
+                        break
+        except Exception as e:
+            log.warning("%s list failed: %s", bucket, e)
+        return out
+
+    have = _list_stems(MASTER_PRODUCT_IMG_BUCKET, (".webp", ".jpg", ".jpeg", ".png"))
+    have |= _list_stems(PRODUCT_IMG_BUCKET, (".jpg",))
     return {kod: ((kod.replace("/", "_").replace(" ", "_")) in have) for kod in codes}
 
 
