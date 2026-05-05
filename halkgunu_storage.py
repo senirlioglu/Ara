@@ -30,6 +30,7 @@ from storage import (
     _get_client,
     _safe_path_segment,
     crop_and_upload_product_image,
+    delete_product_image,
     get_product_image_url,
     upload_product_image,
 )
@@ -806,6 +807,11 @@ def upload_event_product_image(urun_kod: str, jpeg_bytes: bytes) -> str:
 
 def get_event_product_image_url(urun_kod: str) -> str:
     return get_product_image_url(urun_kod)
+
+
+def delete_event_product_image(urun_kod: str) -> bool:
+    """Remove product image from product-images bucket."""
+    return delete_product_image(urun_kod)
 
 
 def list_event_product_image_status(event_id: str) -> dict[str, bool]:

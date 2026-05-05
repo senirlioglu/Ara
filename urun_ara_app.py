@@ -3622,67 +3622,146 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
         return
 
     img_status = hgs.list_event_product_image_status(event_id)
-    rows_for_df = []
-    missing_codes: list[str] = []
-    for s in summary:
-        kod = s["urun_kod"]
-        has = img_status.get(kod, False)
-        if not has:
-            missing_codes.append(kod)
-        rows_for_df.append({
-            "Resim": "✅" if has else "❌",
-            "Ürün Kodu": kod,
-            "Ürün Adı": s.get("urun_ad") or "—",
-            "Normal": s.get("max_normal"),
-            "İndirimli": s.get("min_indirimli"),
-        })
-    df_summary = pd.DataFrame(rows_for_df)
+    missing_codes: list[str] = [s["urun_kod"] for s in summary if not img_status.get(s["urun_kod"], False)]
 
     sc1, sc2, sc3 = st.columns(3)
     sc1.metric("Ürün", f"{len(summary):,}")
     sc2.metric("Resimli", f"{len(summary) - len(missing_codes):,}")
     sc3.metric("Resimsiz", f"{len(missing_codes):,}")
 
-    st.markdown("**Ürün Listesi**")
-    st.dataframe(df_summary, use_container_width=True, hide_index=True, height=320)
-
     # =========================================================================
-    # 3) RESİM YÜKLEME — TEK
+    # 3) ÜRÜN LİSTESİ — satır bazlı yükle/güncelle/sil
     # =========================================================================
-    with st.expander("🖼️ Tek Ürün Resmi Yükle", expanded=False):
-        if missing_codes:
-            st.caption(f"{len(missing_codes)} ürün resimsiz. Bunları üstte gösteriyoruz.")
-            default_options = missing_codes + [k for k in (s["urun_kod"] for s in summary) if k not in missing_codes]
-        else:
-            default_options = [s["urun_kod"] for s in summary]
+    st.markdown("**Ürün Listesi** — her satırın yanından resim yükle / güncelle / sil")
 
-        sel_kod = st.selectbox(
-            "Ürün",
-            default_options,
-            format_func=lambda k: f"{'❌' if k in missing_codes else '✅'} {k}",
-            key=f"hg_img_single_sel_{event_id}",
+    fc1, fc2, fc3 = st.columns([2, 1, 1])
+    with fc1:
+        search_q = st.text_input(
+            "🔍 Ara (kod veya ad)", key=f"hg_row_search_{event_id}",
+            placeholder="örn. 11001808 veya patates",
+        ).strip().lower()
+    with fc2:
+        only_missing = st.checkbox(
+            "Sadece resimsizler", value=bool(missing_codes),
+            key=f"hg_row_only_missing_{event_id}",
         )
-        img_file = st.file_uploader(
-            "Resim — JPG / PNG / WEBP / TIFF / BMP / GIF / PDF (PDF'in 1. sayfası alınır)",
-            type=_HG_PRODUCT_IMG_EXTS,
-            key=f"hg_img_single_file_{event_id}",
+    with fc3:
+        page_size = st.selectbox(
+            "Sayfa boyutu", [10, 20, 50, 100], index=1,
+            key=f"hg_row_page_size_{event_id}",
         )
-        if img_file is not None and sel_kod:
-            preview = img_file.getvalue()
-            try:
-                jpeg_preview = _hg_image_to_jpeg(preview, filename=img_file.name)
-                st.image(jpeg_preview, width=200, caption=f"Önizleme — {sel_kod}")
-                if st.button(
-                    "Yükle",
-                    type="primary",
-                    key=f"hg_img_single_save_{event_id}",
-                    use_container_width=True,
-                ):
-                    hgs.upload_event_product_image(sel_kod, jpeg_preview)
-                    st.success(f"{sel_kod} için resim yüklendi.")
+
+    # Sort: missing first, then by code
+    ordered = sorted(
+        summary,
+        key=lambda s: (img_status.get(s["urun_kod"], False), s["urun_kod"]),
+    )
+
+    if only_missing:
+        ordered = [s for s in ordered if not img_status.get(s["urun_kod"], False)]
+    if search_q:
+        ordered = [
+            s for s in ordered
+            if search_q in s["urun_kod"].lower() or search_q in (s.get("urun_ad") or "").lower()
+        ]
+
+    total_filtered = len(ordered)
+    if total_filtered == 0:
+        st.info("Filtreyle eşleşen ürün yok.")
+    else:
+        page_key = f"hg_row_page_{event_id}"
+        if page_key not in st.session_state:
+            st.session_state[page_key] = 1
+        total_pages = max(1, (total_filtered + page_size - 1) // page_size)
+        # clamp page after filter changes
+        st.session_state[page_key] = max(1, min(st.session_state[page_key], total_pages))
+
+        page = st.session_state[page_key]
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_items = ordered[start:end]
+
+        st.caption(f"Sayfa {page} / {total_pages} · Toplam {total_filtered} ürün")
+
+        for s in page_items:
+            kod = s["urun_kod"]
+            ad = s.get("urun_ad") or "—"
+            has = img_status.get(kod, False)
+
+            with st.container(border=True):
+                cols = st.columns([0.6, 3, 2.4, 0.8])
+
+                with cols[0]:
+                    if has:
+                        st.image(hgs.get_event_product_image_url(kod), width=64)
+                    else:
+                        st.markdown("❌")
+
+                with cols[1]:
+                    icon = "✅" if has else "❌"
+                    st.markdown(f"**{icon} {kod}**")
+                    st.caption(ad)
+                    if s.get("min_indirimli") is not None:
+                        st.caption(
+                            f"Normal: {s.get('max_normal') or '—'} · "
+                            f"İndirimli: {s.get('min_indirimli')}"
+                        )
+
+                with cols[2]:
+                    f = st.file_uploader(
+                        "Yükle/Güncelle",
+                        type=_HG_PRODUCT_IMG_EXTS,
+                        key=f"hg_row_up_{event_id}_{kod}",
+                        label_visibility="collapsed",
+                    )
+                    if f is not None:
+                        try:
+                            jpeg = _hg_image_to_jpeg(f.getvalue(), filename=f.name)
+                            hgs.upload_event_product_image(kod, jpeg)
+                            st.success(f"{kod} resmi {'güncellendi' if has else 'yüklendi'}.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"{kod}: {e}")
+
+                with cols[3]:
+                    if has:
+                        confirm_key = f"hg_row_del_confirm_{event_id}_{kod}"
+                        if st.session_state.get(confirm_key):
+                            if st.button("✓ Onayla", key=f"hg_row_del_yes_{event_id}_{kod}",
+                                         type="primary", use_container_width=True):
+                                hgs.delete_event_product_image(kod)
+                                st.session_state.pop(confirm_key, None)
+                                st.success(f"{kod} resmi silindi.")
+                                st.rerun()
+                            if st.button("İptal", key=f"hg_row_del_no_{event_id}_{kod}",
+                                         use_container_width=True):
+                                st.session_state.pop(confirm_key, None)
+                                st.rerun()
+                        else:
+                            if st.button("🗑️ Sil", key=f"hg_row_del_{event_id}_{kod}",
+                                         use_container_width=True,
+                                         help="Bu ürünün resmini bucket'tan kaldır"):
+                                st.session_state[confirm_key] = True
+                                st.rerun()
+
+        # Pagination controls
+        if total_pages > 1:
+            nav1, nav2, nav3 = st.columns([1, 2, 1])
+            with nav1:
+                if st.button("◀ Önceki", disabled=(page <= 1),
+                             key=f"hg_row_prev_{event_id}", use_container_width=True):
+                    st.session_state[page_key] -= 1
                     st.rerun()
-            except Exception as e:
-                st.error(f"Dosya işlenemedi: {e}")
+            with nav2:
+                st.markdown(
+                    f"<div style='text-align:center;padding-top:6px'>{page} / {total_pages}</div>",
+                    unsafe_allow_html=True,
+                )
+            with nav3:
+                if st.button("Sonraki ▶", disabled=(page >= total_pages),
+                             key=f"hg_row_next_{event_id}", use_container_width=True):
+                    st.session_state[page_key] += 1
+                    st.rerun()
 
     # =========================================================================
     # 4) RESİM YÜKLEME — TOPLU

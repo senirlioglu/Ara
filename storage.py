@@ -909,6 +909,21 @@ def get_product_image_url(urun_kodu: str) -> str:
     return sb.storage.from_(PRODUCT_IMG_BUCKET).get_public_url(f"{safe_code}.jpg")
 
 
+def delete_product_image(urun_kodu: str) -> bool:
+    """Remove product-images/{urun_kodu}.jpg from the bucket. Returns True on success."""
+    sb = _get_client()
+    if not sb:
+        return False
+    safe_code = urun_kodu.replace("/", "_").replace(" ", "_")
+    path = f"{safe_code}.jpg"
+    try:
+        sb.storage.from_(PRODUCT_IMG_BUCKET).remove([path])
+        return True
+    except Exception as e:
+        log.warning("Product image delete failed for %s: %s", urun_kodu, e)
+        return False
+
+
 def crop_and_upload_product_image(
     page_png_bytes: bytes, urun_kodu: str,
     x0: float, y0: float, x1: float, y1: float,
