@@ -3663,23 +3663,26 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
             key=f"hg_img_single_sel_{event_id}",
         )
         img_file = st.file_uploader(
-            "Resim (.jpg / .jpeg / .png)",
-            type=["jpg", "jpeg", "png"],
+            "Resim — JPG / PNG / WEBP / TIFF / BMP / GIF / PDF (PDF'in 1. sayfası alınır)",
+            type=_HG_PRODUCT_IMG_EXTS,
             key=f"hg_img_single_file_{event_id}",
         )
         if img_file is not None and sel_kod:
             preview = img_file.getvalue()
-            st.image(preview, width=200, caption=f"Önizleme — {sel_kod}")
-            if st.button(
-                "Yükle",
-                type="primary",
-                key=f"hg_img_single_save_{event_id}",
-                use_container_width=True,
-            ):
-                jpeg_bytes = _hg_image_to_jpeg(preview)
-                hgs.upload_event_product_image(sel_kod, jpeg_bytes)
-                st.success(f"{sel_kod} için resim yüklendi.")
-                st.rerun()
+            try:
+                jpeg_preview = _hg_image_to_jpeg(preview, filename=img_file.name)
+                st.image(jpeg_preview, width=200, caption=f"Önizleme — {sel_kod}")
+                if st.button(
+                    "Yükle",
+                    type="primary",
+                    key=f"hg_img_single_save_{event_id}",
+                    use_container_width=True,
+                ):
+                    hgs.upload_event_product_image(sel_kod, jpeg_preview)
+                    st.success(f"{sel_kod} için resim yüklendi.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Dosya işlenemedi: {e}")
 
     # =========================================================================
     # 4) RESİM YÜKLEME — TOPLU
@@ -3690,16 +3693,19 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
             "Listede olmayan kodlar atlanır."
         )
         bulk = st.file_uploader(
-            "Birden çok resim seçin",
-            type=["jpg", "jpeg", "png"],
+            "Birden çok dosya seçin (JPG/PNG/WEBP/TIFF/BMP/GIF/PDF)",
+            type=_HG_PRODUCT_IMG_EXTS,
             accept_multiple_files=True,
             key=f"hg_img_bulk_{event_id}",
         )
         if bulk:
             valid_codes = {s["urun_kod"] for s in summary}
+            ext_strip = re.compile(
+                r"\.(" + "|".join(_HG_PRODUCT_IMG_EXTS) + r")$", re.I,
+            )
             preview_rows = []
             for f in bulk:
-                stem = re.sub(r"\.(jpg|jpeg|png)$", "", f.name, flags=re.I).strip()
+                stem = ext_strip.sub("", f.name).strip()
                 in_list = stem in valid_codes
                 already = img_status.get(stem, False)
                 preview_rows.append({
@@ -3719,12 +3725,12 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                 done, skipped, errors = 0, 0, 0
                 progress = st.progress(0)
                 for i, f in enumerate(bulk):
-                    stem = re.sub(r"\.(jpg|jpeg|png)$", "", f.name, flags=re.I).strip()
+                    stem = ext_strip.sub("", f.name).strip()
                     if stem not in valid_codes:
                         skipped += 1
                     else:
                         try:
-                            jpeg_bytes = _hg_image_to_jpeg(f.getvalue())
+                            jpeg_bytes = _hg_image_to_jpeg(f.getvalue(), filename=f.name)
                             hgs.upload_event_product_image(stem, jpeg_bytes)
                             done += 1
                         except Exception as e:
@@ -3735,11 +3741,30 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                 st.rerun()
 
 
-def _hg_image_to_jpeg(raw_bytes: bytes, quality: int = 88) -> bytes:
-    """Convert any uploaded image (PNG/JPEG) to JPEG bytes for the product bucket."""
+_HG_PRODUCT_IMG_EXTS = ["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif", "pdf"]
+
+
+def _hg_image_to_jpeg(raw_bytes: bytes, quality: int = 88,
+                      filename: str | None = None) -> bytes:
+    """Convert an uploaded file (image or PDF) to JPEG bytes for the product bucket.
+
+    Accepted: jpg/jpeg/png/webp/tif(f)/bmp/gif (via Pillow) and pdf (PyMuPDF, first page).
+    """
     from io import BytesIO
     from PIL import Image
-    img = Image.open(BytesIO(raw_bytes))
+
+    # PDF detection: magic bytes first, filename suffix as fallback.
+    is_pdf = raw_bytes[:4] == b"%PDF" or (filename or "").lower().endswith(".pdf")
+    if is_pdf:
+        from pdf_render import render_pdf_bytes_to_pages
+        pages = render_pdf_bytes_to_pages(raw_bytes, zoom=2.0, jpeg_quality=quality)
+        if not pages:
+            raise ValueError("PDF render edilemedi (sayfa yok).")
+        # First page becomes the product image
+        img = Image.open(BytesIO(pages[0]["png_bytes"]))
+    else:
+        img = Image.open(BytesIO(raw_bytes))
+
     if img.mode in ("RGBA", "P", "LA"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
         if img.mode == "P":
