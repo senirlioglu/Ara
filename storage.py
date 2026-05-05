@@ -45,7 +45,12 @@ def _get_client():
         from supabase import create_client
         import streamlit as st
         url = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
+        key = (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_KEY")
+            or st.secrets.get("SUPABASE_KEY")
+        )
         if not url or not key:
             log.error("SUPABASE_URL or SUPABASE_KEY not set")
             return None
