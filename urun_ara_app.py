@@ -3038,9 +3038,14 @@ def _hg_render_supabase_error(exc: Exception, title: str) -> None:
 
 
 def _hgmt_flush_to_supabase(event_id: str, page_lookup: dict) -> None:
-    """Bulk-flush all pending changes for this event to Supabase + crop product images."""
+    """Bulk-flush mapping changes (bbox coordinates only) to Supabase.
+
+    Halk Günü ürün görselleri Liste Modu'ndan elle yükleniyor — bbox
+    kırpmasını otomatik upload etmiyoruz, çünkü bu Liste Modu'nda
+    yüklenen temiz görsellerin üzerine yazıyor. Bbox koordinatları
+    kayıtlı kalıyor (halkgunu.net tıklama haritası için).
+    """
     import halkgunu_storage as hgs
-    from storage import crop_and_upload_product_image
 
     keys = _hgmt_session_keys(event_id)
     pending = st.session_state[keys["pending_mappings"]]
@@ -3054,19 +3059,6 @@ def _hgmt_flush_to_supabase(event_id: str, page_lookup: dict) -> None:
         insert_rows.append(row)
     if insert_rows:
         hgs.save_mappings_bulk(insert_rows)
-
-    # Crop + upload product images for each new mapping
-    for m in pending:
-        kod = m.get("urun_kodu")
-        if not kod:
-            continue
-        png = page_lookup.get((m["flyer_filename"], m["page_no"]))
-        if not png:
-            continue
-        try:
-            crop_and_upload_product_image(png, kod, m["x0"], m["y0"], m["x1"], m["y1"])
-        except Exception:
-            pass
 
     if deletes:
         hgs.delete_mappings_bulk(deletes, event_id=event_id)
