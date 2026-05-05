@@ -3287,7 +3287,7 @@ def _admin_halkgunu_mapping_phase(event_id: str, event_label: str) -> None:
                     use_container_width=True,
                 ):
                     _hgmt_save_local(event_id, page, bbox, active_prod["urun_kod"],
-                                     active_prod.get("urun_ad"), "excel")
+                                     active_prod.get("urun_ad"), "manual")
 
                 ac1, ac2 = st.columns(2)
                 with ac1:
@@ -3333,7 +3333,7 @@ def _admin_halkgunu_mapping_phase(event_id: str, event_label: str) -> None:
                         use_container_width=True,
                     ):
                         _hgmt_save_local(event_id, page, bbox, sel_r["urun_kod"],
-                                         sel_r.get("urun_ad"), "excel")
+                                         sel_r.get("urun_ad"), "manual")
                 else:
                     st.caption("Sonuç bulunamadı")
 
