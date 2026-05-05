@@ -3518,10 +3518,24 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                     st.markdown("**Önizleme** (ilk 20 satır)")
                     st.dataframe(parsed.head(20), use_container_width=True, hide_index=True)
 
-                    pc1, pc2, pc3 = st.columns(3)
+                    unique_codes = sorted({c for c in parsed["urun_kod"].dropna().astype(str) if c.strip()})
+                    img_check = hgs.check_product_images_for_codes(unique_codes)
+                    have_count = sum(1 for v in img_check.values() if v)
+                    missing_count = len(unique_codes) - have_count
+
+                    pc1, pc2, pc3, pc4 = st.columns(4)
                     pc1.metric("Toplam satır", f"{len(parsed):,}")
                     pc2.metric("Benzersiz ürün", f"{parsed['urun_kod'].nunique():,}")
                     pc3.metric("Benzersiz mağaza", f"{parsed['magaza_kod'].nunique():,}")
+                    pc4.metric("Görseli hazır", f"{have_count:,} / {len(unique_codes):,}")
+
+                    if missing_count > 0:
+                        st.info(
+                            f"ℹ️ {have_count} ürünün görseli `product-images` bucket'ında zaten yüklü. "
+                            f"Kalan {missing_count} ürün için afiş kırpma veya tek tek/toplu yükleme gerekir."
+                        )
+                    elif unique_codes:
+                        st.success("🎉 Tüm ürünlerin görseli `product-images` bucket'ında hazır.")
 
                     if st.button(
                         "✅ Yükle (mevcut listeyi değiştirir)",
@@ -3532,8 +3546,72 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                         rows = parsed.to_dict("records")
                         with st.spinner("Veritabanına yazılıyor…"):
                             inserted = hgs.save_event_products(event_id, rows)
-                        st.success(f"{inserted} satır yüklendi.")
+                        st.success(
+                            f"{inserted} satır yüklendi. "
+                            f"{have_count}/{len(unique_codes)} ürünün görseli hazır."
+                        )
                         st.rerun()
+
+    # =========================================================================
+    # 1.5) TEK ÜRÜN EKLE (manuel, listeyi sıfırlamadan)
+    # =========================================================================
+    with st.expander("➕ Ürün Ekle (manuel — listeyi sıfırlamaz)", expanded=False):
+        magazalar_list = hgs.list_magazalar()
+        magaza_options = [m["magaza_kod"] for m in magazalar_list]
+        magaza_label = {
+            m["magaza_kod"]: f"{m['magaza_kod']} — {m.get('magaza_adi') or m['magaza_kod']}"
+            for m in magazalar_list
+        }
+
+        with st.form(key=f"hg_add_product_form_{event_id}", clear_on_submit=True):
+            ac1, ac2 = st.columns([1, 2])
+            with ac1:
+                add_urun_kod = st.text_input("Ürün Kodu *", key=f"hg_add_kod_{event_id}")
+            with ac2:
+                add_urun_ad = st.text_input("Ürün Adı", key=f"hg_add_ad_{event_id}")
+
+            add_magazalar = st.multiselect(
+                "Mağaza(lar) *",
+                magaza_options,
+                format_func=lambda k: magaza_label.get(k, k),
+                key=f"hg_add_magazalar_{event_id}",
+                help="Birden fazla mağaza seçersen her mağaza için ayrı satır eklenir.",
+            )
+
+            ac3, ac4 = st.columns(2)
+            with ac3:
+                add_normal = st.text_input(
+                    "Normal Fiyat", key=f"hg_add_normal_{event_id}", placeholder="örn. 125",
+                )
+            with ac4:
+                add_indirimli = st.text_input(
+                    "İndirimli Fiyat", key=f"hg_add_indirimli_{event_id}", placeholder="örn. 95",
+                )
+
+            submitted = st.form_submit_button("✅ Ekle", type="primary", use_container_width=True)
+            if submitted:
+                kod = (add_urun_kod or "").strip()
+                if not kod:
+                    st.error("Ürün kodu zorunlu.")
+                elif not add_magazalar:
+                    st.error("En az bir mağaza seçmelisin.")
+                else:
+                    new_rows = [
+                        {
+                            "urun_kod": kod,
+                            "urun_ad": add_urun_ad,
+                            "magaza_kod": m,
+                            "normal_fiyat": add_normal,
+                            "indirimli_fiyat": add_indirimli,
+                        }
+                        for m in add_magazalar
+                    ]
+                    res = hgs.add_event_products(event_id, new_rows)
+                    msg = f"{res['inserted']} satır eklendi"
+                    if res["skipped"]:
+                        msg += f" · {res['skipped']} satır zaten mevcuttu (atlandı)"
+                    st.success(msg)
+                    st.rerun()
 
     # =========================================================================
     # 2) ÜRÜN ÖZET TABLOSU
