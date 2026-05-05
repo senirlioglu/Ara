@@ -3830,19 +3830,34 @@ def _hg_image_to_jpeg(raw_bytes: bytes, quality: int = 88,
     Accepted: jpg/jpeg/png/webp/tif(f)/bmp/gif (via Pillow) and pdf (PyMuPDF, first page).
     """
     from io import BytesIO
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
 
-    # PDF detection: magic bytes first, filename suffix as fallback.
-    is_pdf = raw_bytes[:4] == b"%PDF" or (filename or "").lower().endswith(".pdf")
+    if not raw_bytes:
+        raise ValueError("Boş dosya")
+
+    # PDF detection: magic bytes can sit a few bytes deep (BOM/whitespace).
+    # pdf_render uses the same lenient scan over the first 1 KB.
+    head = raw_bytes[:1024]
+    is_pdf = b"%PDF" in head or (filename or "").lower().endswith(".pdf")
     if is_pdf:
         from pdf_render import render_pdf_bytes_to_pages
         pages = render_pdf_bytes_to_pages(raw_bytes, zoom=2.0, jpeg_quality=quality)
         if not pages:
             raise ValueError("PDF render edilemedi (sayfa yok).")
-        # First page becomes the product image
         img = Image.open(BytesIO(pages[0]["png_bytes"]))
     else:
-        img = Image.open(BytesIO(raw_bytes))
+        try:
+            img = Image.open(BytesIO(raw_bytes))
+            img.load()  # force decode now so we surface format errors here, not later
+        except UnidentifiedImageError:
+            # Friendlier hint: HEIC/AVIF/SVG vs Pillow defaults
+            sig = head[:12].hex()
+            ext = (filename or "").rsplit(".", 1)[-1].lower() if filename else "?"
+            raise ValueError(
+                f"Dosya formatı tanınamadı (uzantı: .{ext}, ilk byte: {sig}). "
+                "Desteklenen: JPG/PNG/WEBP/TIFF/BMP/GIF/PDF. "
+                "HEIC/HEIF/AVIF/SVG ise lütfen JPG/PNG'ye çevirip tekrar yükleyin."
+            ) from None
 
     if img.mode in ("RGBA", "P", "LA"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
