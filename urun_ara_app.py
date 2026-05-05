@@ -3016,6 +3016,27 @@ def _hgmt_save_local(event_id: str, page: dict, bbox: dict,
     st.rerun()
 
 
+def _hg_render_supabase_error(exc: Exception, title: str) -> None:
+    """Surface a PostgREST APIError with code/details/hint instead of letting
+    Streamlit redact it. Code 42501 = RLS violation."""
+    code = getattr(exc, "code", "") or ""
+    msg = getattr(exc, "message", "") or str(exc)
+    details = getattr(exc, "details", "") or ""
+    hint = getattr(exc, "hint", "") or ""
+    parts = [f"**{title}**", f"`code={code or '?'}` · {msg}"]
+    if details:
+        parts.append(f"_details:_ {details}")
+    if hint:
+        parts.append(f"_hint:_ {hint}")
+    if str(code) == "42501":
+        parts.append(
+            "→ Bu bir RLS (Row Level Security) reddi. "
+            "Streamlit secrets'a `SUPABASE_SERVICE_ROLE_KEY` ekleyip Reboot etmiş olman gerek; "
+            "veya Supabase'de bu tabloya INSERT/UPDATE policy ekle."
+        )
+    st.error("\n\n".join(parts))
+
+
 def _hgmt_flush_to_supabase(event_id: str, page_lookup: dict) -> None:
     """Bulk-flush all pending changes for this event to Supabase + crop product images."""
     import halkgunu_storage as hgs
@@ -3072,6 +3093,16 @@ def _admin_halkgunu_mapping_phase(event_id: str, event_label: str) -> None:
     keys = _hgmt_session_keys(event_id)
 
     st.markdown(f"#### 🎯 Bbox Eşleştirme — {event_label}")
+
+    # Connection mode badge — RLS sorunlarını teşhis için
+    from storage import _get_client, get_client_key_source
+    _get_client()  # ensure singleton initialised so the source flag is set
+    key_src = get_client_key_source()
+    if key_src == "service_role":
+        st.caption("🔓 Bağlantı: **service_role** (RLS bypass)")
+    elif key_src == "anon":
+        st.caption("⚠️ Bağlantı: **anon** — yazma için RLS policy'leri aktif olmalı. "
+                   "Secrets'a `SUPABASE_SERVICE_ROLE_KEY` ekleyip Reboot tavsiye edilir.")
 
     # ---- Sayfaları DB'den çek (görseller dahil — canvas için png gerek) ----
     cache_key = f"_hgmt_pages_cache_{event_id}"
@@ -3350,12 +3381,15 @@ def _admin_halkgunu_mapping_phase(event_id: str, event_label: str) -> None:
                 use_container_width=True,
             ):
                 page_lookup = {(p["flyer_filename"], p["page_no"]): p["png_data"] for p in pages}
-                with st.spinner("Supabase'e yazılıyor…"):
-                    _hgmt_flush_to_supabase(event_id, page_lookup)
-                # Refresh pages cache
-                st.session_state.pop(cache_key, None)
-                st.success("Tüm değişiklikler kaydedildi!")
-                st.rerun()
+                try:
+                    with st.spinner("Supabase'e yazılıyor…"):
+                        _hgmt_flush_to_supabase(event_id, page_lookup)
+                except Exception as e:
+                    _hg_render_supabase_error(e, "Eşleştirmeler kaydedilemedi")
+                else:
+                    st.session_state.pop(cache_key, None)
+                    st.success("Tüm değişiklikler kaydedildi!")
+                    st.rerun()
         with sc2:
             st.caption("Kaydedilmemiş değişiklikleriniz var")
 

@@ -34,31 +34,38 @@ def _safe_path_segment(value: str, fallback: str = "file") -> str:
 # ---------------------------------------------------------------------------
 
 _client = None
+_client_key_source: str | None = None  # "service_role" | "anon" | None — for diagnostics
 
 
 def _get_client():
     """Return cached Supabase client."""
-    global _client
+    global _client, _client_key_source
     if _client is not None:
         return _client
     try:
         from supabase import create_client
         import streamlit as st
         url = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
-        key = (
+        service_key = (
             os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
             or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
-            or os.environ.get("SUPABASE_KEY")
-            or st.secrets.get("SUPABASE_KEY")
         )
+        anon_key = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
+        key = service_key or anon_key
         if not url or not key:
             log.error("SUPABASE_URL or SUPABASE_KEY not set")
             return None
         _client = create_client(url, key)
+        _client_key_source = "service_role" if service_key else "anon"
         return _client
     except Exception as e:
         log.error("Supabase client error: %s", e)
         return None
+
+
+def get_client_key_source() -> str | None:
+    """Returns 'service_role', 'anon', or None (no client yet). For admin diagnostics."""
+    return _client_key_source
 
 
 BUCKET = "poster-images"
