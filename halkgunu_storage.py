@@ -754,13 +754,23 @@ def get_event_product_image_url(urun_kod: str) -> str:
 
 def list_event_product_image_status(event_id: str) -> dict[str, bool]:
     """Returns {urun_kod: has_image_in_bucket}. Useful for "missing image" admin view."""
-    sb = _get_client()
-    if not sb:
-        return {}
     codes = sorted(get_event_product_codes(event_id))
     if not codes:
         return {}
-    # List bucket once and intersect
+    return check_product_images_for_codes(codes)
+
+
+def check_product_images_for_codes(codes) -> dict[str, bool]:
+    """Like list_event_product_image_status but takes codes directly.
+
+    Used during Excel preview/upload — caller hasn't persisted products yet.
+    """
+    codes = list(codes or [])
+    if not codes:
+        return {}
+    sb = _get_client()
+    if not sb:
+        return {kod: False for kod in codes}
     have: set[str] = set()
     try:
         listed = sb.storage.from_(PRODUCT_IMG_BUCKET).list("", {"limit": 10000})

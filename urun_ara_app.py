@@ -3518,10 +3518,25 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                     st.markdown("**Önizleme** (ilk 20 satır)")
                     st.dataframe(parsed.head(20), use_container_width=True, hide_index=True)
 
-                    pc1, pc2, pc3 = st.columns(3)
+                    unique_codes = sorted({c for c in parsed["urun_kod"].dropna().astype(str) if c.strip()})
+                    img_check = hgs.check_product_images_for_codes(unique_codes)
+                    have_count = sum(1 for v in img_check.values() if v)
+                    missing_count = len(unique_codes) - have_count
+
+                    pc1, pc2, pc3, pc4 = st.columns(4)
                     pc1.metric("Toplam satır", f"{len(parsed):,}")
                     pc2.metric("Benzersiz ürün", f"{parsed['urun_kod'].nunique():,}")
                     pc3.metric("Benzersiz mağaza", f"{parsed['magaza_kod'].nunique():,}")
+                    pc4.metric("Görseli hazır", f"{have_count:,} / {len(unique_codes):,}")
+
+                    if missing_count > 0:
+                        st.info(
+                            f"ℹ️ {have_count} ürünün görseli `product-images` bucket'ında zaten mevcut "
+                            f"(Ara'dan paylaşılıyor, otomatik gelecek). Kalan {missing_count} ürün için "
+                            "afiş modunda kırpma veya tek tek yükleme gerekecek."
+                        )
+                    elif unique_codes:
+                        st.success("🎉 Tüm ürünlerin görseli `product-images` bucket'ında hazır.")
 
                     if st.button(
                         "✅ Yükle (mevcut listeyi değiştirir)",
@@ -3532,7 +3547,10 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                         rows = parsed.to_dict("records")
                         with st.spinner("Veritabanına yazılıyor…"):
                             inserted = hgs.save_event_products(event_id, rows)
-                        st.success(f"{inserted} satır yüklendi.")
+                        st.success(
+                            f"{inserted} satır yüklendi. "
+                            f"{have_count}/{len(unique_codes)} ürünün görseli hazır."
+                        )
                         st.rerun()
 
     # =========================================================================
