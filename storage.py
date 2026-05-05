@@ -62,8 +62,7 @@ def _get_client():
 
 
 BUCKET = "poster-images"
-PRODUCT_IMG_BUCKET = "product-images"          # cropped-from-poster bbox images (.jpg)
-MASTER_PRODUCT_IMG_BUCKET = "urun-resimleri"   # e-commerce master product images (.webp)
+PRODUCT_IMG_BUCKET = "product-images"
 
 
 def _sb_execute_with_retry(query, retries=3, base_delay=0.5):

@@ -3531,12 +3531,11 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
 
                     if missing_count > 0:
                         st.info(
-                            f"ℹ️ {have_count} ürünün görseli mevcut "
-                            "(`urun-resimleri` master bucket veya `product-images` kırpma bucket'ında). "
-                            f"Kalan {missing_count} ürün için afiş modunda kırpma veya tek tek yükleme gerekir."
+                            f"ℹ️ {have_count} ürünün görseli `product-images` bucket'ında zaten yüklü. "
+                            f"Kalan {missing_count} ürün için afiş kırpma veya tek tek/toplu yükleme gerekir."
                         )
                     elif unique_codes:
-                        st.success("🎉 Tüm ürünlerin görseli hazır (`urun-resimleri` veya `product-images` bucket'ında).")
+                        st.success("🎉 Tüm ürünlerin görseli `product-images` bucket'ında hazır.")
 
                     if st.button(
                         "✅ Yükle (mevcut listeyi değiştirir)",

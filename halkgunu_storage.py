@@ -25,7 +25,6 @@ from datetime import datetime, timezone
 
 from storage import (
     BUCKET,
-    MASTER_PRODUCT_IMG_BUCKET,
     PRODUCT_IMG_BUCKET,
     _crop_and_encode,
     _get_client,
@@ -820,9 +819,10 @@ def list_event_product_image_status(event_id: str) -> dict[str, bool]:
 def check_product_images_for_codes(codes) -> dict[str, bool]:
     """Like list_event_product_image_status but takes codes directly.
 
-    Considers a product as having an image if EITHER bucket holds it:
-      - urun-resimleri/{kod}.webp  (master e-commerce images)
-      - product-images/{kod}.jpg   (cropped from poster bbox)
+    Only checks product-images/{kod}.jpg — the bucket we control. The
+    e-commerce master bucket (urun-resimleri) is intentionally ignored
+    because it contains mixed formats (webp, tif, …) and halkgunu.net
+    won't read from it.
     """
     codes = list(codes or [])
     if not codes:
@@ -830,23 +830,15 @@ def check_product_images_for_codes(codes) -> dict[str, bool]:
     sb = _get_client()
     if not sb:
         return {kod: False for kod in codes}
-
-    def _list_stems(bucket: str, exts: tuple[str, ...]) -> set[str]:
-        out: set[str] = set()
-        try:
-            listed = sb.storage.from_(bucket).list("", {"limit": 10000})
-            for obj in listed or []:
-                name = obj.get("name") or ""
-                for ext in exts:
-                    if name.endswith(ext):
-                        out.add(name[: -len(ext)])
-                        break
-        except Exception as e:
-            log.warning("%s list failed: %s", bucket, e)
-        return out
-
-    have = _list_stems(MASTER_PRODUCT_IMG_BUCKET, (".webp", ".jpg", ".jpeg", ".png"))
-    have |= _list_stems(PRODUCT_IMG_BUCKET, (".jpg",))
+    have: set[str] = set()
+    try:
+        listed = sb.storage.from_(PRODUCT_IMG_BUCKET).list("", {"limit": 10000})
+        for obj in listed or []:
+            name = obj.get("name") or ""
+            if name.endswith(".jpg"):
+                have.add(name[:-4])
+    except Exception as e:
+        log.warning("product-images list failed: %s", e)
     return {kod: ((kod.replace("/", "_").replace(" ", "_")) in have) for kod in codes}
 
 
