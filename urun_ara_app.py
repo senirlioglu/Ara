@@ -2469,7 +2469,7 @@ def _admin_tab_weeks():
 # ADMIN TAB: Halk Günü (etkinlik yönetimi + afiş/liste modları)
 # ---------------------------------------------------------------------------
 
-_HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Bizden Fotoğraflar", "Önizleme"]
+_HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Ürün Sırası", "Önizleme"]
 
 
 def _admin_halkgunu():
@@ -2524,8 +2524,8 @@ def _admin_halkgunu():
         _admin_halkgunu_poster_mode(event_id, event_meta)
     elif sub_active == "Liste Modu":
         _admin_halkgunu_list_mode(event_id, event_meta)
-    elif sub_active == "Bizden Fotoğraflar":
-        _admin_halkgunu_photos(event_id, event_meta)
+    elif sub_active == "Ürün Sırası":
+        _admin_halkgunu_product_order(event_id, event_meta)
     elif sub_active == "Önizleme":
         st.info("Önizleme yakında — frontend görünümünü buradan test edebileceksin.")
 
@@ -3844,6 +3844,136 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                     progress.progress((i + 1) / len(bulk))
                 st.success(f"{done} yüklendi · {skipped} atlandı · {errors} hata")
                 st.rerun()
+
+
+def _admin_halkgunu_product_order(event_id: str, event_meta: dict | None):
+    """Ürün sırası — admin manuel olarak event başına ürün sırasını belirler.
+    halkgunu_product_order tablosuna yazar; halkgunu.net frontend bunu okur.
+    """
+    import halkgunu_storage as hgs
+    sb = hgs._sb()  # service_role client
+    event_label = (event_meta or {}).get("event_name") or event_id
+    st.markdown(f"#### Ürün Sırası — {event_label}")
+    st.caption(
+        "Yukarıda göstermek istediğin ürünleri sıraya koy. ↑↓ ile kaydır, "
+        "sonra **Kaydet**. Sıralanmamış ürünler altta alfabetik kalır."
+    )
+    # Mevcut ürün listesi (distinct urun_kod, summary'den)
+    summary = hgs.get_event_product_summary(event_id) or []
+    if not summary:
+        st.info("Bu etkinlik için henüz ürün yok. Önce Liste Modu'ndan Excel yükle.")
+        return
+    # Mevcut sıralamayı çek
+    try:
+        cur_rows = (
+            sb.table("halkgunu_product_order")
+              .select("urun_kod, display_sort")
+              .eq("event_id", event_id)
+              .execute()
+              .data or []
+        )
+    except Exception as e:
+        st.error(f"Sıralama tablosu okunamadı: {e}")
+        st.info(
+            "halkgunu_product_order tablosu yoksa Supabase SQL Editor'da "
+            "şunu çalıştırman gerek:\n\n"
+            "```sql\nCREATE TABLE halkgunu_product_order ("
+            "event_id TEXT NOT NULL REFERENCES halkgunu_events(event_id) "
+            "ON DELETE CASCADE, urun_kod TEXT NOT NULL, "
+            "display_sort INTEGER NOT NULL DEFAULT 0, "
+            "updated_at TIMESTAMPTZ DEFAULT NOW(), "
+            "PRIMARY KEY (event_id, urun_kod));\n```"
+        )
+        return
+    cur_map = {r["urun_kod"]: int(r.get("display_sort") or 0) for r in cur_rows}
+    # Session state — geçici sıra (kaydet'e basana kadar değişiklikler burada)
+    sk = f"hg_order_draft_{event_id}"
+    if sk not in st.session_state:
+        # Başlangıç: sıralı olanlar (artan), sonra alfabetik kalanlar
+        ad_lookup = {s["urun_kod"]: (s.get("urun_ad") or "") for s in summary}
+        sorted_kods = sorted(
+            [k for k, v in cur_map.items() if v > 0 and k in ad_lookup],
+            key=lambda k: cur_map[k],
+        )
+        rest = sorted(
+            [s["urun_kod"] for s in summary if cur_map.get(s["urun_kod"], 0) == 0],
+            key=lambda k: ad_lookup.get(k, "").lower() or k,
+        )
+        st.session_state[sk] = sorted_kods + rest
+    order_list: list[str] = st.session_state[sk]
+    # Sadece bu event'teki güncel ürünleri tut (Excel re-upload sonrası
+    # kayıp/eklenen ürünleri sync et)
+    valid_kods = {s["urun_kod"] for s in summary}
+    order_list = [k for k in order_list if k in valid_kods]
+    new_kods = [s["urun_kod"] for s in summary if s["urun_kod"] not in order_list]
+    order_list = order_list + new_kods
+    st.session_state[sk] = order_list
+    # ad lookup
+    ad_by = {s["urun_kod"]: (s.get("urun_ad") or "—") for s in summary}
+    # Aksiyon butonları
+    bcol1, bcol2, bcol3 = st.columns([2, 1, 1])
+    sıra_limit = bcol1.number_input(
+        "Sıralı tutulacak ürün sayısı",
+        min_value=1, max_value=len(order_list), value=min(50, len(order_list)),
+        help="Üst N ürün manuel sıralı olarak kaydedilir; geri kalanlar "
+             "frontend'de alfabetik döner.",
+        key=f"hg_order_limit_{event_id}",
+    )
+    if bcol2.button("💾 Kaydet", type="primary", key=f"hg_order_save_{event_id}",
+                    use_container_width=True):
+        # İlk N ürün için 1..N display_sort ata, geri kalan rows'u sil
+        upserts = [
+            {"event_id": event_id, "urun_kod": k, "display_sort": i + 1}
+            for i, k in enumerate(order_list[:sıra_limit])
+        ]
+        try:
+            if upserts:
+                sb.table("halkgunu_product_order").upsert(
+                    upserts, on_conflict="event_id,urun_kod"
+                ).execute()
+            # Limit dışındaki kodları sil (display_sort=0'a düşürmek yerine
+            # tablodan kaldır)
+            tail = order_list[sıra_limit:]
+            if tail:
+                sb.table("halkgunu_product_order").delete().eq(
+                    "event_id", event_id
+                ).in_("urun_kod", tail).execute()
+            st.success(f"{len(upserts)} ürün sırası kaydedildi.")
+        except Exception as e:
+            st.error(f"Kayıt hatası: {e}")
+    if bcol3.button("🗑 Sırayı sıfırla", key=f"hg_order_clear_{event_id}",
+                    use_container_width=True):
+        try:
+            sb.table("halkgunu_product_order").delete().eq("event_id", event_id).execute()
+            st.session_state.pop(sk, None)
+            st.success("Sıralama temizlendi (frontend alfabetik dönecek).")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Sil hatası: {e}")
+    st.divider()
+    # Liste — ↑↓ butonlarla yukarı/aşağı
+    st.caption(f"Toplam {len(order_list)} ürün. İlk **{sıra_limit}** sıralı kaydedilecek.")
+    for i, kod in enumerate(order_list):
+        # yukarı / aşağı / kod / ad / pozisyon
+        c1, c2, c3, c4, c5 = st.columns([0.6, 0.6, 1.4, 4, 0.6])
+        with c1:
+            if st.button("▲", key=f"hg_up_{event_id}_{kod}",
+                         disabled=i == 0, use_container_width=True):
+                order_list[i], order_list[i - 1] = order_list[i - 1], order_list[i]
+                st.session_state[sk] = order_list
+                st.rerun()
+        with c2:
+            if st.button("▼", key=f"hg_dn_{event_id}_{kod}",
+                         disabled=i == len(order_list) - 1, use_container_width=True):
+                order_list[i], order_list[i + 1] = order_list[i + 1], order_list[i]
+                st.session_state[sk] = order_list
+                st.rerun()
+        c3.markdown(f"`{kod}`")
+        c4.markdown(ad_by.get(kod, "—"))
+        if i < sıra_limit:
+            c5.markdown(f"**{i + 1}**")
+        else:
+            c5.markdown(":gray[—]")
 
 
 _HG_PRODUCT_IMG_EXTS = ["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif", "pdf"]
