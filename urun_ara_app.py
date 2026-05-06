@@ -3851,7 +3851,7 @@ def _admin_halkgunu_product_order(event_id: str, event_meta: dict | None):
     halkgunu_product_order tablosuna yazar; halkgunu.net frontend bunu okur.
     """
     import halkgunu_storage as hgs
-    sb = hgs._sb()  # service_role client
+    sb = hgs._get_client()  # service_role client
     event_label = (event_meta or {}).get("event_name") or event_id
     st.markdown(f"#### Ürün Sırası — {event_label}")
     st.caption(
