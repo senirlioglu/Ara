@@ -130,6 +130,22 @@ def update_event_sort_order(event_id: str, sort_order: int) -> None:
     sb.table("halkgunu_events").update({"sort_order": sort_order}).eq("event_id", event_id).execute()
 
 
+def update_event_meta(event_id: str, event_name: str | None = None,
+                      event_date: str | None = None) -> None:
+    """Update event display fields (name and/or date). Pass None to skip a field."""
+    sb = _get_client()
+    if not sb:
+        return
+    payload: dict = {}
+    if event_name is not None:
+        payload["event_name"] = event_name
+    if event_date is not None:
+        payload["event_date"] = event_date or None
+    if not payload:
+        return
+    sb.table("halkgunu_events").update(payload).eq("event_id", event_id).execute()
+
+
 def delete_event(event_id: str) -> None:
     """Delete a Halk Günü event and all related data (pages, mappings, products, images)."""
     sb = _get_client()
