@@ -2070,7 +2070,7 @@ def _mt_process_uploads(mt_week, mt_week_name, mt_excel, mt_pdfs, _uuid,
                 kod = str(r.get("urun_kodu", "")).strip()
                 ad = str(r.get("urun_aciklamasi", "")).strip()
                 fiyat = str(r.get("afis_fiyat", "")).strip() if "afis_fiyat" in r.index else ""
-                prods.append({"urun_kod": kod, "urun_ad": ad})
+                prods.append({"urun_kod": kod, "urun_ad": ad, "afis_fiyat": fiyat})
                 labels.append(f"{kod} — {ad}" if ad else kod)
                 db_prods.append({"urun_kodu": kod, "urun_aciklamasi": ad, "afis_fiyat": fiyat})
             from mapping_ui.search import build_search_index
