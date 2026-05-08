@@ -1501,7 +1501,7 @@ def _mapping_tool_tab():
                 # Radio options keyed by product code for stable identity
                 radio_codes = [rp["urun_kod"] for _, rp in visible_slice]
                 radio_labels_map = {
-                    rp["urun_kod"]: f"`{rp['urun_kod']}` — {rp.get('urun_ad', '')}"
+                    rp["urun_kod"]: f"`{rp['urun_kod']}` — {rp.get('urun_ad', '')}" + (f" — **{rp.get('afis_fiyat')} TL**" if rp.get('afis_fiyat') else "")
                     for _, rp in visible_slice
                 }
                 radio_default_idx = radio_codes.index(sel_kod) if sel_kod in radio_codes else 0
@@ -1560,7 +1560,8 @@ def _mapping_tool_tab():
                     for r in results:
                         is_mapped = r["urun_kod"] in mapped_codes
                         status = " ✓" if is_mapped else ""
-                        sr_labels_map[r["urun_kod"]] = f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{status}"
+                        fiyat_str = f" — **{r.get('afis_fiyat')} TL**" if r.get('afis_fiyat') else ""
+                        sr_labels_map[r["urun_kod"]] = f"`{r['urun_kod']}` — {r.get('urun_ad', '')}{fiyat_str}{status}"
 
                     sel_sr_code = st.radio(
                         "Sonuç seç:", sr_codes,
