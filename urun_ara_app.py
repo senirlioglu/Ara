@@ -1338,7 +1338,7 @@ def _mapping_tool_tab():
                         "w": 0, "h": 0,
                     } for pg in db_pages]
                     raw_prods = [
-                        {"urun_kod": p["urun_kodu"], "urun_ad": p.get("urun_aciklamasi", "")}
+                        {"urun_kod": p["urun_kodu"], "urun_ad": p.get("urun_aciklamasi", ""), "afis_fiyat": p.get("afis_fiyat", "")}
                         for p in db_prods
                     ]
                     st.session_state["mt_products"] = build_search_index(raw_prods)
