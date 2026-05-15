@@ -2470,7 +2470,7 @@ def _admin_tab_weeks():
 # ADMIN TAB: Halk Günü (etkinlik yönetimi + afiş/liste modları)
 # ---------------------------------------------------------------------------
 
-_HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Ürün Sırası", "Önizleme"]
+_HG_SUBSECTIONS = ["Etkinlikler", "Afiş Modu", "Liste Modu", "Ürün Sırası", "Bizden Fotoğraflar", "Önizleme"]
 
 
 def _admin_halkgunu():
@@ -2527,6 +2527,8 @@ def _admin_halkgunu():
         _admin_halkgunu_list_mode(event_id, event_meta)
     elif sub_active == "Ürün Sırası":
         _admin_halkgunu_product_order(event_id, event_meta)
+    elif sub_active == "Bizden Fotoğraflar":
+        _admin_halkgunu_photos(event_id, event_meta)
     elif sub_active == "Önizleme":
         st.info("Önizleme yakında — frontend görünümünü buradan test edebileceksin.")
 
