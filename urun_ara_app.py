@@ -2677,7 +2677,7 @@ def _admin_halkgunu_events():
 # Kullanıcı "ürün kodu" / "URUN_KODU" / "Sku" yazsa da yakalanır.
 _HG_EXCEL_COLUMN_MAP = {
     "urun_kod": ["urun_kod", "urun_kodu", "kod", "sku", "stok_kodu", "barkod_kod"],
-    "urun_ad": ["urun_ad", "urun_adi", "urun_ismi", "urun_isim", "urun_aciklamasi", "aciklama", "urun", "ad", "isim"],
+    "urun_ad": ["urun_ad", "urun_adi", "urun_ismi", "urun_isim", "urun_aciklamasi", "aciklama", "urun", "ad", "isim", "malzeme_tanimi", "malzeme_tanim", "malzeme_adi", "malzeme_ad", "malzeme"],
     "magaza_kod": ["magaza_kod", "magaza_kodu", "magaza", "store", "store_id", "store_code", "subekod", "sube_kod"],
     "magaza_ad": ["magaza_ad", "magaza_adi", "magaza_isim", "store_name", "sube_adi"],
     "normal_fiyat": ["normal_fiyat", "birim_fiyat", "birim_fiyati", "liste_fiyati", "liste_fiyat", "orijinal_fiyat", "fiyat", "satis_fiyat", "etiket_fiyat"],
@@ -3577,6 +3577,88 @@ def _admin_halkgunu_list_mode(event_id: str, event_meta: dict | None):
                             f"{have_count}/{len(unique_codes)} ürünün görseli hazır."
                         )
                         st.rerun()
+
+    # =========================================================================
+    # 1.2) ÜRÜN ADINI STOKTAN DOLDUR (Excel'de kolon tanınmadıysa)
+    # =========================================================================
+    with st.expander("🔄 Ürün adını stoktan doldur (Excel'de ad yoksa)", expanded=False):
+        st.caption(
+            "Excel yüklerken `malzeme tanımı` gibi bir kolon tanınmadıysa "
+            "ürün adı boş veya ürün koduyla aynı kalır. Bu buton eksik adları "
+            "`stok_gunluk` tablosundan doldurur."
+        )
+        sb_cli = hgs._get_client()
+        rows_missing = []
+        if sb_cli:
+            try:
+                res = (
+                    sb_cli.table("halkgunu_products")
+                    .select("urun_kod, urun_ad")
+                    .eq("event_id", event_id)
+                    .execute()
+                )
+                for r in (res.data or []):
+                    kod = (r.get("urun_kod") or "").strip()
+                    ad = (r.get("urun_ad") or "").strip()
+                    if not kod:
+                        continue
+                    if not ad or ad == kod:
+                        rows_missing.append(kod)
+            except Exception as e:
+                st.error(f"halkgunu_products okunamadı: {e}")
+        missing_codes = sorted(set(rows_missing))
+        st.metric("Ad eksik benzersiz ürün", f"{len(missing_codes):,}")
+        if missing_codes and st.button(
+            "Eksik adları stoktan getir ve kaydet",
+            type="primary",
+            key=f"hg_backfill_name_{event_id}",
+            use_container_width=True,
+        ):
+            kod_to_ad: dict[str, str] = {}
+            try:
+                # Supabase .in_() limitini zorlamamak için 200'lük chunk
+                for start in range(0, len(missing_codes), 200):
+                    chunk = missing_codes[start:start + 200]
+                    s_res = (
+                        sb_cli.table("stok_gunluk")
+                        .select("urun_kod, urun_ad")
+                        .in_("urun_kod", chunk)
+                        .execute()
+                    )
+                    for s in (s_res.data or []):
+                        k = (s.get("urun_kod") or "").strip()
+                        a = (s.get("urun_ad") or "").strip()
+                        if k and a and k not in kod_to_ad:
+                            kod_to_ad[k] = a
+            except Exception as e:
+                st.error(f"stok_gunluk sorgusu hata: {e}")
+                kod_to_ad = {}
+            updated = 0
+            errors = 0
+            not_found = []
+            for kod in missing_codes:
+                ad = kod_to_ad.get(kod)
+                if not ad:
+                    not_found.append(kod)
+                    continue
+                try:
+                    sb_cli.table("halkgunu_products").update(
+                        {"urun_ad": ad}
+                    ).eq("event_id", event_id).eq("urun_kod", kod).execute()
+                    updated += 1
+                except Exception as e:
+                    errors += 1
+                    logging.warning("halkgunu_products update fail %s: %s", kod, e)
+            msg = f"{updated} ürün adı güncellendi."
+            if not_found:
+                msg += f" {len(not_found)} ürün `stok_gunluk`'te bulunamadı."
+            if errors:
+                msg += f" {errors} satır güncellenemedi."
+            (st.success if updated and not errors else st.warning)(msg)
+            if not_found:
+                with st.expander(f"Bulunamayan {len(not_found)} ürün kodu"):
+                    st.write(", ".join(not_found[:200]) + (" …" if len(not_found) > 200 else ""))
+            st.rerun()
 
     # =========================================================================
     # 1.5) TEK ÜRÜN EKLE (manuel, listeyi sıfırlamadan)
