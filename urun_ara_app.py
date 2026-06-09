@@ -59,15 +59,20 @@ def _latin1_safe(html_str: str) -> str:
             out.append(ch)
     return ''.join(out)
 
-# --- Günlük Pipeline (günde 1 kez, lazy tetikleme) ---
+# --- Günlük Pipeline (günde 1 kez, hata olursa 30 dk sonra tekrar dener) ---
+_pipeline_running = False
+_pipeline_last_attempt: float = 0
+_PIPELINE_RETRY_DELAY = 1800  # başarısız olursa 30 dk bekle
+
+
 def _pipeline_gunluk_guncelle():
-    """oneri_listesi.json bugün güncellenmemişse pipeline'ı arka planda çalıştırır."""
+    global _pipeline_running
     from datetime import date
     json_path = Path("data/oneri_listesi.json")
     if json_path.exists():
-        son_degisim = datetime.fromtimestamp(json_path.stat().st_mtime).date()
-        if son_degisim >= date.today():
-            return  # Bugün zaten güncellendi
+        if datetime.fromtimestamp(json_path.stat().st_mtime).date() >= date.today():
+            _pipeline_running = False
+            return
     try:
         subprocess.run(
             ["python", "urun_master_pipeline.py"],
@@ -80,17 +85,25 @@ def _pipeline_gunluk_guncelle():
         logging.warning("urun_master_pipeline timeout (600s)")
     except Exception as e:
         logging.warning("urun_master_pipeline failed: %s", e)
+    finally:
+        _pipeline_running = False
+
 
 def _pipeline_kontrol():
-    from datetime import date
-    now = datetime.now()
-    # Stok sabah 09:00'da yükleniyor, pipeline 10:30'dan sonra çalışsın
-    if now.hour < 10 or (now.hour == 10 and now.minute < 30):
+    global _pipeline_running, _pipeline_last_attempt
+    if _pipeline_running:
         return
-    bugun = str(date.today())
-    if getattr(st, '_pipeline_last_check', None) != bugun:
-        st._pipeline_last_check = bugun
-        threading.Thread(target=_pipeline_gunluk_guncelle, daemon=True).start()
+    from datetime import date
+    import time as _time
+    json_path = Path("data/oneri_listesi.json")
+    if json_path.exists():
+        if datetime.fromtimestamp(json_path.stat().st_mtime).date() >= date.today():
+            return  # Bugün zaten başarılı
+    if (_time.time() - _pipeline_last_attempt) < _PIPELINE_RETRY_DELAY:
+        return  # Son denemeden 30 dk geçmedi
+    _pipeline_last_attempt = _time.time()
+    _pipeline_running = True
+    threading.Thread(target=_pipeline_gunluk_guncelle, daemon=True).start()
 
 _pipeline_kontrol()
 
@@ -705,7 +718,7 @@ def _get_oneri_listesi_impl():
     debug_info.append('oneri_listesi.json bulunamadı veya geçersiz')
     return [], debug_info
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def get_oneri_listesi():
     """Cached wrapper — pipeline'ın ürettiği dosyadan okur."""
     liste, _ = _get_oneri_listesi_impl()
