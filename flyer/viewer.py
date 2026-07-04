@@ -6,6 +6,7 @@ Click region hotspot → show matched product info → run_search(urun_kodu).
 from __future__ import annotations
 
 import base64
+import html
 import json
 
 import streamlit as st
@@ -275,12 +276,12 @@ def _handle_pick(region_id: int):
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
     ">
         <div style="font-weight: 700; font-size: 1.1rem; color: #1e3a5f; margin-bottom: 0.5rem;">
-            {urun_aciklamasi}
+            {html.escape(str(urun_aciklamasi))}
         </div>
         <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-            {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Afis Fiyat: " + afis_fiyat + "</span>" if afis_fiyat else ""}
-            {"<span style='background: #ff7675; color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>OCR Fiyat: " + detected_price + "</span>" if detected_price else ""}
-            {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + urun_kodu + "</span>" if urun_kodu else ""}
+            {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Afis Fiyat: " + html.escape(str(afis_fiyat)) + "</span>" if afis_fiyat else ""}
+            {"<span style='background: #ff7675; color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>OCR Fiyat: " + html.escape(str(detected_price)) + "</span>" if detected_price else ""}
+            {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + html.escape(str(urun_kodu)) + "</span>" if urun_kodu else ""}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -337,11 +338,11 @@ def _handle_pick_legacy(cluster_id: int):
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
     ">
         <div style="font-weight: 700; font-size: 1.1rem; color: #1e3a5f; margin-bottom: 0.5rem;">
-            {urun_aciklamasi}
+            {html.escape(str(urun_aciklamasi))}
         </div>
         <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-            {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Fiyat: " + afis_fiyat + "</span>" if afis_fiyat else ""}
-            {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + urun_kodu + "</span>" if urun_kodu else ""}
+            {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Fiyat: " + html.escape(str(afis_fiyat)) + "</span>" if afis_fiyat else ""}
+            {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + html.escape(str(urun_kodu)) + "</span>" if urun_kodu else ""}
         </div>
     </div>
     """, unsafe_allow_html=True)

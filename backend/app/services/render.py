@@ -28,6 +28,10 @@ def render_pdf_to_disk(
     quality = quality or settings.JPEG_QUALITY
 
     out_dir = settings.weeks_dir / week_id / flyer_id
+    # Defense-in-depth: ensure the resolved path stays under weeks_dir.
+    base = settings.weeks_dir.resolve()
+    if not out_dir.resolve().is_relative_to(base):
+        raise ValueError(f"Unsafe output path: {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")

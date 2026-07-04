@@ -7,6 +7,7 @@ When a hotspot is clicked, it triggers the existing product search.
 from __future__ import annotations
 
 import base64
+import html
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -240,11 +241,11 @@ def _handle_pick(poster_item_id: int):
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
     ">
         <div style="font-weight: 700; font-size: 1.1rem; color: #1e3a5f; margin-bottom: 0.5rem;">
-            {urun_aciklamasi}
+            {html.escape(str(urun_aciklamasi))}
         </div>
         <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-            {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Afiş Fiyat: " + afis_fiyat + "</span>" if afis_fiyat else ""}
-            {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + urun_kodu + "</span>" if urun_kodu else ""}
+            {"<span style='background: linear-gradient(135deg,#00b894,#00cec9); color:white; padding:6px 16px; border-radius:20px; font-weight:700;'>Afiş Fiyat: " + html.escape(str(afis_fiyat)) + "</span>" if afis_fiyat else ""}
+            {"<span style='background: #f0f1f6; color:#555; padding:6px 16px; border-radius:20px; font-size:0.85rem;'>Kod: " + html.escape(str(urun_kodu)) + "</span>" if urun_kodu else ""}
         </div>
     </div>
     """, unsafe_allow_html=True)

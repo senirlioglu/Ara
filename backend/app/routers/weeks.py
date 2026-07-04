@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy import text
 
 from ..auth import verify_api_key
@@ -10,6 +12,8 @@ from ..db import get_db
 from ..models import IngestRequest, WeekStatus
 
 router = APIRouter()
+
+_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 @router.post("/{week_id}/ingest", dependencies=[Depends(verify_api_key)])
@@ -46,6 +50,10 @@ async def upload_pdf(
 ):
     """Upload a single PDF file for rendering."""
     from ..services.render import save_pdf_and_render
+
+    # Path-traversal guard: week_id/flyer_id become filesystem path segments.
+    if not _SAFE_SEGMENT_RE.match(week_id) or not _SAFE_SEGMENT_RE.match(flyer_id):
+        raise HTTPException(status_code=400, detail="Invalid week_id or flyer_id")
 
     pdf_bytes = await file.read()
     result = await save_pdf_and_render(week_id, flyer_id, file.filename, pdf_bytes)
